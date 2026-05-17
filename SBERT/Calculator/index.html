@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Calculadora SBERT</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div>
+          <p class="model-label">SBERT all-MiniLM-L6-v2</p>
+          <h1>Calculadora de similitud semántica</h1>
+        </div>
+        <div class="model-card" aria-label="Detalle del modelo">
+          <span>Modelo</span>
+          <strong>Xenova/all-MiniLM-L6-v2</strong>
+        </div>
+      </header>
+
+      <section class="calculator" aria-label="Calculadora de embeddings">
+        <form id="calculatorForm" class="input-grid">
+          <label class="text-field" for="textA">
+            <span>Texto A</span>
+            <textarea id="textA" name="textA" rows="10" autocomplete="off" spellcheck="true">El aprendizaje automático permite encontrar patrones en grandes volúmenes de datos.</textarea>
+          </label>
+
+          <label class="text-field" for="textB">
+            <span>Texto B</span>
+            <textarea id="textB" name="textB" rows="10" autocomplete="off" spellcheck="true">Los modelos de machine learning detectan relaciones útiles dentro de conjuntos de datos extensos.</textarea>
+          </label>
+
+          <div class="actions">
+            <button id="calculateButton" type="submit">Calcular</button>
+            <button id="clearButton" class="secondary" type="button">Limpiar</button>
+          </div>
+        </form>
+
+        <aside class="status-panel" aria-live="polite">
+          <span id="statusTone" class="status-dot" aria-hidden="true"></span>
+          <div>
+            <p id="statusTitle">Listo para calcular</p>
+            <p id="statusDetail">La primera ejecución descarga el modelo y puede tardar unos segundos.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="results" aria-label="Resultados">
+        <article class="metric">
+          <span>Similitud coseno</span>
+          <strong id="similarityValue">--</strong>
+        </article>
+        <article class="metric">
+          <span>Distancia coseno</span>
+          <strong id="distanceValue">--</strong>
+        </article>
+        <article class="metric">
+          <span>Dimensión del embedding</span>
+          <strong id="dimensionValue">--</strong>
+        </article>
+      </section>
+
+      <section class="embedding-grid" aria-label="Embeddings generados">
+        <article class="embedding-panel">
+          <div class="panel-heading">
+            <div>
+              <span>Embedding A</span>
+              <strong id="normAValue">Norma --</strong>
+            </div>
+            <button id="copyAButton" class="secondary compact" type="button" disabled>Copiar</button>
+          </div>
+          <pre id="previewA" tabindex="0">Ejecuta el cálculo para ver el vector.</pre>
+          <details>
+            <summary>Ver vector completo</summary>
+            <pre id="fullA" tabindex="0"></pre>
+          </details>
+        </article>
+
+        <article class="embedding-panel">
+          <div class="panel-heading">
+            <div>
+              <span>Embedding B</span>
+              <strong id="normBValue">Norma --</strong>
+            </div>
+            <button id="copyBButton" class="secondary compact" type="button" disabled>Copiar</button>
+          </div>
+          <pre id="previewB" tabindex="0">Ejecuta el cálculo para ver el vector.</pre>
+          <details>
+            <summary>Ver vector completo</summary>
+            <pre id="fullB" tabindex="0"></pre>
+          </details>
+        </article>
+      </section>
+
+      <section class="notes" aria-label="Notas técnicas">
+        <p>Los embeddings se calculan en el navegador con mean pooling y normalización L2. La distancia coseno se define como 1 menos la similitud coseno.</p>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
