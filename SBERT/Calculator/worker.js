@@ -1,26 +1,33 @@
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0";
 
-const MODEL_ID = "Xenova/all-MiniLM-L6-v2";
+const SUPPORTED_MODELS = new Set([
+  "Xenova/all-MiniLM-L6-v2",
+  "Xenova/gte-small",
+]);
 
-let extractorPromise;
+const extractorPromises = new Map();
 
-function getExtractor(requestId) {
-  if (!extractorPromise) {
-    extractorPromise = pipeline("feature-extraction", MODEL_ID, {
+function getExtractor(modelId, requestId) {
+  if (!SUPPORTED_MODELS.has(modelId)) {
+    throw new Error(`Modelo no soportado: ${modelId}`);
+  }
+
+  if (!extractorPromises.has(modelId)) {
+    extractorPromises.set(modelId, pipeline("feature-extraction", modelId, {
       progress_callback: (progress) => {
         self.postMessage({ type: "progress", id: requestId, progress });
       },
-    });
+    }));
   }
 
-  return extractorPromise;
+  return extractorPromises.get(modelId);
 }
 
 self.addEventListener("message", async (event) => {
-  const { id, texts } = event.data;
+  const { id, modelId, texts } = event.data;
 
   try {
-    const extractor = await getExtractor(id);
+    const extractor = await getExtractor(modelId, id);
     const output = await extractor(texts, { pooling: "mean", normalize: true });
     const embeddings = output.tolist();
 
@@ -31,7 +38,7 @@ self.addEventListener("message", async (event) => {
     self.postMessage({
       type: "result",
       id,
-      modelId: MODEL_ID,
+      modelId,
       embeddings,
     });
   } catch (error) {

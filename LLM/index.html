@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Portal de herramientas LLM</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="portal-shell">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <span>Herramientas</span>
+          <strong>Tesis LLM</strong>
+        </div>
+        <nav class="tool-nav" aria-label="Herramientas disponibles">
+          <button class="nav-item is-active" type="button" data-tool="templateChecker">Evaluador de plantillas</button>
+          <button class="nav-item" type="button" data-tool="embeddingCalculator">Calculadora SBERT</button>
+        </nav>
+        <div class="sidebar-note">
+          <span>Contexto</span>
+          <p>Pruebas para prompts estructurados por rol, tópico y acción dentro del flujo MOPSO-CD semántico.</p>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <section id="templateChecker" class="tool-panel is-active" aria-label="Evaluador de plantillas LLM">
+          <header class="tool-header">
+            <div>
+              <p class="eyebrow">LM Studio + embeddings locales</p>
+              <h1>Evaluador de plantillas LLM</h1>
+            </div>
+            <div class="header-status">
+              <span id="checkerConnectionDot" class="status-dot" aria-hidden="true"></span>
+              <span id="checkerConnectionText">Sin probar conexión</span>
+            </div>
+          </header>
+
+          <section class="grid two-columns">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Conexión y ejecución</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>API LM Studio</span>
+                  <select id="lmApiMode">
+                    <option value="native">REST v1 (/api/v1)</option>
+                    <option value="openai">OpenAI-compatible (/v1)</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Endpoint / proxy</span>
+                  <input id="lmEndpoint" type="text" value="/lmstudio/api/v1" autocomplete="off">
+                </label>
+                <label>
+                  <span>Modelo LLM</span>
+                  <select id="llmModelSelect">
+                    <option value="">Cargar modelos desde LM Studio</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Modelo manual</span>
+                  <input id="llmModelManual" type="text" value="meta-llama-3.1-8b-instruct" autocomplete="off">
+                </label>
+                <label>
+                  <span>Embedding de evaluación</span>
+                  <select id="checkerEmbeddingModel">
+                    <option value="Xenova/all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                    <option value="Xenova/gte-small">gte-small</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Ejecuciones independientes</span>
+                  <input id="runCount" type="number" min="1" max="200" value="20">
+                </label>
+                <label>
+                  <span>Candidatos por ejecución</span>
+                  <input id="candidateCount" type="number" min="1" max="20" value="4">
+                </label>
+                <label>
+                  <span>Temperatura</span>
+                  <input id="temperature" type="number" min="0" max="2" step="0.05" value="0.7">
+                </label>
+                <label>
+                  <span>Top p</span>
+                  <input id="topP" type="number" min="0" max="1" step="0.01" value="0.95">
+                </label>
+                <label>
+                  <span>Máx. tokens</span>
+                  <input id="maxTokens" type="number" min="8" max="2048" value="180">
+                </label>
+                <label>
+                  <span>Timeout por ejecución (s)</span>
+                  <input id="requestTimeout" type="number" min="5" max="600" value="120">
+                </label>
+                <label>
+                  <span>Mín. palabras</span>
+                  <input id="minWords" type="number" min="1" max="20" value="2">
+                </label>
+                <label>
+                  <span>Máx. palabras</span>
+                  <input id="maxWords" type="number" min="1" max="40" value="8">
+                </label>
+                <label>
+                  <span>Margen eta</span>
+                  <input id="semanticMargin" type="number" min="0" max="1" step="0.001" value="0">
+                </label>
+                <label>
+                  <span>Tau copia target</span>
+                  <input id="targetCopyThreshold" type="number" min="0" max="1" step="0.001" value="0.94">
+                </label>
+                <label>
+                  <span>Paralelismo</span>
+                  <input id="concurrency" type="number" min="1" max="8" value="1">
+                </label>
+              </div>
+              <div class="inline-actions">
+                <button id="loadModelsButton" class="secondary" type="button">Cargar modelos</button>
+                <button id="previewPromptButton" class="secondary" type="button">Previsualizar prompt</button>
+                <button id="runTemplateButton" type="button">Ejecutar evaluación</button>
+                <button id="stopTemplateButton" class="danger" type="button" disabled>Detener</button>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Componente semántico</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Tipo de componente</span>
+                  <select id="componentPreset">
+                    <option value="role">role</option>
+                    <option value="topic">topic</option>
+                    <option value="action">action</option>
+                    <option value="custom">custom</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Nombre</span>
+                  <input id="componentName" type="text" value="role">
+                </label>
+                <label class="span-2">
+                  <span>Definición</span>
+                  <input id="componentDefinition" type="text" value="speaker identity or perspective">
+                </label>
+                <label class="span-2">
+                  <span>Current</span>
+                  <input id="currentComponent" type="text" value="local resident affected by flooding">
+                </label>
+                <label class="span-2">
+                  <span>Target / pbest / gbest</span>
+                  <input id="targetComponent" type="text" value="community member reporting flood damage">
+                </label>
+                <label class="span-2">
+                  <span>Otros componentes</span>
+                  <textarea id="otherComponents" rows="3">topic = flooded housing; action = report urgent shelter needs</textarea>
+                </label>
+                <label class="span-2">
+                  <span>Texto de referencia fijo</span>
+                  <textarea id="referenceText" rows="3">streets are flooded and families are asking for shelter after heavy rain</textarea>
+                </label>
+              </div>
+            </article>
+          </section>
+
+          <section class="panel template-panel">
+            <div class="panel-title">
+              <h2>Plantilla del prompt</h2>
+              <span>Variables: {num_candidates}, {component_name}, {component_definition}, {current_component}, {target_component}, {other_components}, {reference_text}</span>
+            </div>
+            <textarea id="promptTemplate" class="code-textarea" rows="22">SEMANTIC_MOVE_N_PROMPT = """
+Generate exactly {num_candidates} candidate replacements for one prompt component.
+
+Component: {component_name}
+Definition: {component_definition}
+
+Current: {current_component}
+Target: {target_component}
+
+Other components:
+{other_components}
+
+Reference text:
+{reference_text}
+
+Goal:
+Generate alternatives that move the Current component semantically toward the Target component.
+Each candidate should be closer in meaning to the Target than the Current component is.
+
+Rules:
+- Return only new {component_name} candidates.
+- Each candidate must have 2-8 words.
+- Each candidate must fit the other components and the reference text.
+- Do not copy the Current component exactly.
+- Avoid copying the Target component exactly, but semantic closeness is more important than lexical novelty.
+- Candidates must be distinct from each other.
+- Do not explain.
+- Do not use quotes.
+- Do not add extra text.
+
+Output format:
+Return exactly {num_candidates} lines.
+Each line must follow this format:
+1) &lt;{component_name}&gt;
+2) &lt;{component_name}&gt;
+3) &lt;{component_name}&gt;
+...
+"""</textarea>
+          </section>
+
+          <section class="metrics-grid" aria-label="Resumen de evaluación">
+            <article class="metric">
+              <span>Similitud current-target</span>
+              <strong id="baselineSimilarity">--</strong>
+              <p>Baseline: cercanía inicial entre el componente actual y el objetivo.</p>
+            </article>
+            <article class="metric">
+              <span>Tasa de éxito válida</span>
+              <strong id="validSuccessRate">--</strong>
+              <p>Porcentaje de ejecuciones donde al menos un candidato válido mejora el baseline sin copiar el target.</p>
+            </article>
+            <article class="metric">
+              <span>Mejor similitud promedio</span>
+              <strong id="averageBestSimilarity">--</strong>
+              <p>Promedio de la mejor similitud válida encontrada en las ejecuciones exitosas.</p>
+            </article>
+            <article class="metric">
+              <span>Mejora promedio</span>
+              <strong id="averageImprovement">--</strong>
+              <p>Diferencia promedio entre el mejor candidato válido y la similitud current-target.</p>
+            </article>
+            <article class="metric">
+              <span>Ejecuciones completadas</span>
+              <strong id="completedRuns">--</strong>
+              <p>Solicitudes procesadas correctamente respecto del total configurado.</p>
+            </article>
+            <article class="metric">
+              <span>Candidatos válidos</span>
+              <strong id="validCandidates">--</strong>
+              <p>Cantidad de candidatos que cumplen formato, no copian y superan el progreso semántico exigido.</p>
+            </article>
+          </section>
+
+          <section class="status-panel" aria-live="polite">
+            <span id="checkerStatusTone" class="status-dot" aria-hidden="true"></span>
+            <div>
+              <p id="checkerStatusTitle">Listo</p>
+              <p id="checkerStatusDetail">Cada ejecución envía una solicitud independiente a LM Studio, sin historial compartido.</p>
+            </div>
+          </section>
+
+          <section class="grid two-columns results-layout">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Prompt renderizado</h2>
+              </div>
+              <pre id="renderedPromptPreview" class="output-box">Previsualiza o ejecuta para ver el prompt final.</pre>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Mejor candidato</h2>
+              </div>
+              <dl id="bestCandidateDetails" class="definition-grid"></dl>
+            </article>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Resultados por ejecución</h2>
+              <button id="clearCheckerResultsButton" class="secondary compact" type="button">Limpiar resultados</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Mejor candidato válido</th>
+                    <th>Similitud</th>
+                    <th>Mejora</th>
+                    <th>Válidos</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody id="runResultsBody">
+                  <tr><td colspan="6">Sin ejecuciones todavía.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Candidatos generados</h2>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Run</th>
+                    <th>Candidato</th>
+                    <th>Similitud con target</th>
+                    <th>Distancia</th>
+                    <th>Mejora</th>
+                    <th>Validación</th>
+                  </tr>
+                </thead>
+                <tbody id="candidateResultsBody">
+                  <tr><td colspan="6">Sin candidatos todavía.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section id="embeddingCalculator" class="tool-panel" aria-label="Calculadora de embeddings">
+          <header class="tool-header">
+            <div>
+              <p id="embeddingModelLabel" class="eyebrow">Sentence Transformers / SBERT</p>
+              <h1>Calculadora de similitud coseno</h1>
+            </div>
+            <label class="model-picker" for="embeddingModelSelect">
+              <span>Modelo</span>
+              <select id="embeddingModelSelect">
+                <option value="Xenova/all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                <option value="Xenova/gte-small">gte-small</option>
+              </select>
+            </label>
+          </header>
+
+          <section class="panel">
+            <div class="input-pair">
+              <label>
+                <span>Texto A</span>
+                <textarea id="embeddingTextA" rows="9">El aprendizaje automático permite encontrar patrones en grandes volúmenes de datos.</textarea>
+              </label>
+              <label>
+                <span>Texto B</span>
+                <textarea id="embeddingTextB" rows="9">Los modelos de machine learning detectan relaciones útiles dentro de conjuntos de datos extensos.</textarea>
+              </label>
+            </div>
+            <div class="inline-actions right">
+              <button id="calculateEmbeddingButton" type="button">Calcular</button>
+              <button id="clearEmbeddingButton" class="secondary" type="button">Limpiar</button>
+            </div>
+          </section>
+
+          <section class="metrics-grid">
+            <article class="metric">
+              <span>Similitud coseno</span>
+              <strong id="embeddingSimilarity">--</strong>
+            </article>
+            <article class="metric">
+              <span>Distancia coseno</span>
+              <strong id="embeddingDistance">--</strong>
+            </article>
+            <article class="metric">
+              <span>Dimensión del embedding</span>
+              <strong id="embeddingDimension">--</strong>
+            </article>
+          </section>
+
+          <section class="status-panel" aria-live="polite">
+            <span id="embeddingStatusTone" class="status-dot" aria-hidden="true"></span>
+            <div>
+              <p id="embeddingStatusTitle">Listo para calcular</p>
+              <p id="embeddingStatusDetail">La primera ejecución de cada modelo descarga pesos desde Hugging Face.</p>
+            </div>
+          </section>
+
+          <section class="grid two-columns">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Embedding A</h2>
+                <button id="copyEmbeddingAButton" class="secondary compact" type="button" disabled>Copiar</button>
+              </div>
+              <pre id="embeddingPreviewA" class="output-box">Ejecuta el cálculo para ver el vector.</pre>
+            </article>
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Embedding B</h2>
+                <button id="copyEmbeddingBButton" class="secondary compact" type="button" disabled>Copiar</button>
+              </div>
+              <pre id="embeddingPreviewB" class="output-box">Ejecuta el cálculo para ver el vector.</pre>
+            </article>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Fórmulas y modelo seleccionado</h2>
+            </div>
+            <div class="grid three-columns">
+              <dl class="definition-grid">
+                <div>
+                  <dt>Similitud coseno</dt>
+                  <dd>cos(A, B) = dot(A, B) / (norm(A) * norm(B))</dd>
+                </div>
+                <div>
+                  <dt>Distancia coseno</dt>
+                  <dd>d(A, B) = 1 - cos(A, B)</dd>
+                </div>
+              </dl>
+              <dl id="embeddingRuntimeDetails" class="definition-grid"></dl>
+              <dl id="embeddingModelDetails" class="definition-grid"></dl>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

@@ -30,6 +30,7 @@ body {
 }
 
 button,
+select,
 textarea {
   font: inherit;
 }
@@ -106,8 +107,8 @@ h1 {
 
 .model-card {
   display: grid;
-  gap: 4px;
-  min-width: 248px;
+  gap: 8px;
+  min-width: 286px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.72);
@@ -117,6 +118,18 @@ h1 {
 
 .model-card strong {
   font-size: 0.98rem;
+}
+
+select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fbfdff;
+  color: var(--text);
+  font-size: 0.98rem;
+  font-weight: 800;
+  padding: 0 12px;
 }
 
 .calculator,
@@ -164,6 +177,7 @@ textarea {
 }
 
 textarea:focus,
+select:focus,
 button:focus-visible,
 summary:focus-visible,
 pre:focus-visible {
@@ -302,8 +316,56 @@ details pre {
 }
 
 .notes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
   margin-top: 20px;
-  padding: 16px 18px;
+  padding: 18px;
+}
+
+.notes article {
+  min-width: 0;
+}
+
+.notes h2 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.formula-list,
+.info-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.formula-list div,
+.info-list div {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.formula-list dt,
+.info-list dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.formula-list dd,
+.info-list dd {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.formula-list dd {
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.86rem;
 }
 
 .notes p {
@@ -330,7 +392,8 @@ details pre {
   .app-header,
   .input-grid,
   .results,
-  .embedding-grid {
+  .embedding-grid,
+  .notes {
     grid-template-columns: 1fr;
   }
 

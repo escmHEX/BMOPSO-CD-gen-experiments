@@ -10,13 +10,16 @@
     <main class="app-shell">
       <header class="app-header">
         <div>
-          <p class="model-label">SBERT all-MiniLM-L6-v2</p>
+          <p id="modelLabel" class="model-label">Embeddings locales</p>
           <h1>Calculadora de similitud semántica</h1>
         </div>
-        <div class="model-card" aria-label="Detalle del modelo">
+        <label class="model-card" for="modelSelect">
           <span>Modelo</span>
-          <strong>Xenova/all-MiniLM-L6-v2</strong>
-        </div>
+          <select id="modelSelect" name="model">
+            <option value="Xenova/all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+            <option value="Xenova/gte-small">gte-small</option>
+          </select>
+        </label>
       </header>
 
       <section class="calculator" aria-label="Calculadora de embeddings">
@@ -94,7 +97,29 @@
       </section>
 
       <section class="notes" aria-label="Notas técnicas">
-        <p>Los embeddings se calculan en el navegador con mean pooling y normalización L2. La distancia coseno se define como 1 menos la similitud coseno.</p>
+        <article>
+          <h2>Fórmulas</h2>
+          <dl class="formula-list">
+            <div>
+              <dt>Similitud coseno</dt>
+              <dd>cos(A, B) = dot(A, B) / (norm(A) * norm(B))</dd>
+            </div>
+            <div>
+              <dt>Distancia coseno</dt>
+              <dd>d(A, B) = 1 - cos(A, B)</dd>
+            </div>
+          </dl>
+        </article>
+
+        <article>
+          <h2>Configuración usada</h2>
+          <dl id="runtimeConfig" class="info-list"></dl>
+        </article>
+
+        <article>
+          <h2>Características del modelo seleccionado</h2>
+          <dl id="modelDetails" class="info-list"></dl>
+        </article>
       </section>
     </main>
 
