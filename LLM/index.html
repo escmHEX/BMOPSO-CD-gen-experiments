@@ -133,9 +133,16 @@
                   <span class="switch-slider" aria-hidden="true"></span>
                   <strong>Simular iteración PSO</strong>
                 </label>
-                <p>En este modo, Current, Target y otros componentes se toman desde la BD JSON; el texto de referencia fijo se usa para todos los individuos.</p>
+                <p>En este modo, Current, otros componentes y, si corresponde, Target se toman desde la BD JSON; el texto de referencia fijo se usa para todos los individuos.</p>
               </div>
               <div id="psoControls" class="form-grid pso-controls" hidden>
+                <label>
+                  <span>Operador semántico</span>
+                  <select id="psoSemanticOperator">
+                    <option value="influence">Influencia pbest/gbest</option>
+                    <option value="turbulence">Turbulencia</option>
+                  </select>
+                </label>
                 <label>
                   <span>N individuos</span>
                   <input id="psoIndividualCount" type="number" min="1" max="200" value="20">
@@ -143,6 +150,14 @@
                 <label>
                   <span>Umbral sorteo cambio</span>
                   <input id="psoChangeThreshold" type="number" min="0" max="1" step="0.01" value="0.7">
+                </label>
+                <label data-turbulence-control hidden>
+                  <span>Sim. turbulencia mínima</span>
+                  <input id="turbulenceMinSimilarity" type="number" min="-1" max="1" step="0.01" value="0.55">
+                </label>
+                <label data-turbulence-control hidden>
+                  <span>Sim. turbulencia máxima</span>
+                  <input id="turbulenceMaxSimilarity" type="number" min="-1" max="1" step="0.01" value="0.9">
                 </label>
                 <div class="span-2 pso-db-note">
                   <span id="psoDbStatus">BD PSO: 200 individuos disponibles en LLM/data/pso-individuals.json</span>
@@ -308,12 +323,12 @@ Each line must follow this format:
             <article class="metric">
               <span>Candidatos válidos</span>
               <strong id="psoValidCandidates">--</strong>
-              <p>Candidatos aceptables que superaron baseline, eta y tau_target_copy.</p>
+              <p>En influencia: superan baseline, eta y tau_target_copy. En turbulencia: quedan dentro del rango configurado contra current.</p>
             </article>
             <article class="metric">
               <span>Fallos por candidato</span>
               <strong id="psoProgressFailures">--</strong>
-              <p>Movimientos sin candidatos válidos por falta de progreso, copia del target, formato inválido o duplicados.</p>
+              <p>Movimientos sin candidatos válidos por falta de progreso, fuera de rango de turbulencia, copias, formato inválido o duplicados.</p>
             </article>
             <article class="metric">
               <span>Errores ejecución</span>

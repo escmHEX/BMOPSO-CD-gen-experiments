@@ -75,6 +75,17 @@ const PSO_COMPONENTS = [
   },
 ];
 
+const PSO_OPERATORS = {
+  influence: {
+    label: "Influencia pbest/gbest",
+    statusLabel: "pbest/gbest",
+  },
+  turbulence: {
+    label: "Turbulencia",
+    statusLabel: "turbulencia",
+  },
+};
+
 const workerRequests = new Map();
 let nextWorkerRequestId = 1;
 let stopRequested = false;
@@ -107,8 +118,12 @@ const dom = {
   stopTemplateButton: document.querySelector("#stopTemplateButton"),
   simulatePsoSwitch: document.querySelector("#simulatePsoSwitch"),
   psoControls: document.querySelector("#psoControls"),
+  psoSemanticOperator: document.querySelector("#psoSemanticOperator"),
   psoIndividualCount: document.querySelector("#psoIndividualCount"),
   psoChangeThreshold: document.querySelector("#psoChangeThreshold"),
+  turbulenceMinSimilarity: document.querySelector("#turbulenceMinSimilarity"),
+  turbulenceMaxSimilarity: document.querySelector("#turbulenceMaxSimilarity"),
+  turbulenceControls: document.querySelectorAll("[data-turbulence-control]"),
   psoDbStatus: document.querySelector("#psoDbStatus"),
   componentPreset: document.querySelector("#componentPreset"),
   componentName: document.querySelector("#componentName"),
@@ -170,6 +185,43 @@ const dom = {
   copyEmbeddingBButton: document.querySelector("#copyEmbeddingBButton"),
   embeddingRuntimeDetails: document.querySelector("#embeddingRuntimeDetails"),
   embeddingModelDetails: document.querySelector("#embeddingModelDetails"),
+};
+
+const DEFAULT_PROMPT_TEMPLATES = {
+  influence: dom.promptTemplate.value,
+  turbulence: `TURBULENCE_N_PROMPT_QWEN = """
+Generate exactly {num_candidates} very close rewrites of one prompt component.
+
+Component type: {component_name}
+Component definition: {component_definition}
+
+Current component value: {current_component}
+
+Context:
+{other_components}
+
+Task:
+Rewrite Current with minimal wording changes.
+Keep the same meaning and same component type.
+Keep most words from Current in the same order.
+Replace only 1 word if possible, maximum 2 words.
+Do not use Context to add new information.
+
+Rules:
+- Return only {component_name} candidates.
+- Each candidate must have 2-8 words.
+- Do not copy Current exactly.
+- Do not change the main meaning.
+- Do not explain.
+- No quotes.
+- Exactly {num_candidates} numbered lines.
+
+Format:
+1) rewritten {component_name}
+2) rewritten {component_name}
+3) rewritten {component_name}
+...
+"""`,
 };
 
 function setStatus(toneElement, titleElement, detailElement, title, detail, state = "ready") {
@@ -361,9 +413,51 @@ function resetPsoMetrics() {
   dom.psoExecutionErrors.textContent = "--";
 }
 
+function selectedPsoOperator() {
+  return Object.hasOwn(PSO_OPERATORS, dom.psoSemanticOperator.value)
+    ? dom.psoSemanticOperator.value
+    : "influence";
+}
+
+function psoOperatorLabel(operator) {
+  return PSO_OPERATORS[operator]?.label || operator;
+}
+
+function movementOperatorLabel(movement) {
+  if (movement.operator === "turbulence") {
+    return PSO_OPERATORS.turbulence.statusLabel;
+  }
+  return movement.source === "pbest" ? "pbest" : "líder/gbest";
+}
+
+function updatePsoOperatorUi() {
+  const showTurbulenceControls = dom.simulatePsoSwitch.checked && selectedPsoOperator() === "turbulence";
+  dom.turbulenceControls.forEach((control) => {
+    control.hidden = !showTurbulenceControls;
+  });
+  dom.turbulenceMinSimilarity.disabled = !showTurbulenceControls;
+  dom.turbulenceMaxSimilarity.disabled = !showTurbulenceControls;
+  dom.semanticMargin.disabled = showTurbulenceControls;
+  dom.targetCopyThreshold.disabled = showTurbulenceControls;
+}
+
+function isDefaultPromptTemplate(template) {
+  return Object.values(DEFAULT_PROMPT_TEMPLATES).some((defaultTemplate) => defaultTemplate.trim() === template.trim());
+}
+
+function applyPsoOperatorTemplate() {
+  const operator = selectedPsoOperator();
+  if (isDefaultPromptTemplate(dom.promptTemplate.value)) {
+    dom.promptTemplate.value = DEFAULT_PROMPT_TEMPLATES[operator];
+  }
+  dom.renderedPromptPreview.textContent = renderPrompt();
+  updatePsoOperatorUi();
+}
+
 function updateSimulationModeUi() {
   const isPsoMode = dom.simulatePsoSwitch.checked;
   dom.psoControls.hidden = !isPsoMode;
+  updatePsoOperatorUi();
   dom.templateMetrics.classList.toggle("is-hidden", isPsoMode);
   dom.psoMetrics.classList.toggle("is-hidden", !isPsoMode);
   dom.runCount.disabled = isPsoMode;
@@ -401,6 +495,15 @@ function setCheckerRunning(isRunning) {
   dom.stopTemplateButton.disabled = !isRunning;
   dom.loadModelsButton.disabled = isRunning;
   dom.previewPromptButton.disabled = isRunning;
+  dom.psoSemanticOperator.disabled = isRunning;
+  dom.psoIndividualCount.disabled = isRunning;
+  dom.psoChangeThreshold.disabled = isRunning;
+  if (isRunning) {
+    dom.turbulenceMinSimilarity.disabled = true;
+    dom.turbulenceMaxSimilarity.disabled = true;
+  } else {
+    updatePsoOperatorUi();
+  }
 }
 
 function getTemplateBody(template) {
@@ -420,8 +523,8 @@ function checkerVariables() {
   };
 }
 
-function renderPromptWithVariables(variables) {
-  return getTemplateBody(dom.promptTemplate.value).replace(/\{([A-Za-z0-9_]+)\}/g, (match, key) => (
+function renderPromptWithVariables(variables, template = dom.promptTemplate.value) {
+  return getTemplateBody(template).replace(/\{([A-Za-z0-9_]+)\}/g, (match, key) => (
     Object.hasOwn(variables, key) ? variables[key] : match
   ));
 }
@@ -466,7 +569,7 @@ function parseCandidates(rawOutput, expectedCount) {
 function validationReason(candidate, runCandidates, config) {
   const lower = candidate.toLocaleLowerCase();
   const current = config.current.toLocaleLowerCase();
-  const target = config.target.toLocaleLowerCase();
+  const target = typeof config.target === "string" ? config.target.toLocaleLowerCase() : "";
   const words = wordCount(candidate);
 
   if (words < config.minWords || words > config.maxWords) {
@@ -475,7 +578,7 @@ function validationReason(candidate, runCandidates, config) {
   if (lower === current) {
     return "literal_copy_current";
   }
-  if (lower === target) {
+  if (target && lower === target) {
     return "literal_copy_target";
   }
   if (runCandidates.filter((item) => item.toLocaleLowerCase() === lower).length > 1) {
@@ -627,9 +730,13 @@ function readCheckerConfig() {
   const model = selectedLlmModel();
   const variables = checkerVariables();
   const simulatePso = dom.simulatePsoSwitch.checked;
+  const psoOperator = dom.psoSemanticOperator.value;
 
   if (!endpoint) throw new Error("Define el endpoint de LM Studio.");
   if (!model) throw new Error("Selecciona o escribe el modelo LLM.");
+  if (!Object.hasOwn(PSO_OPERATORS, psoOperator)) {
+    throw new Error("Selecciona un operador semántico PSO válido.");
+  }
   if (!simulatePso && (!variables.current_component || !variables.target_component)) {
     throw new Error("Current y Target son obligatorios.");
   }
@@ -654,16 +761,23 @@ function readCheckerConfig() {
     margin: readClampedNumber(dom.semanticMargin, "Margen eta", 0, 1),
     targetCopyThreshold: readClampedNumber(dom.targetCopyThreshold, "Tau copia target", 0, 1),
     concurrency: readClampedNumber(dom.concurrency, "Paralelismo", 1, 8),
+    psoOperator,
     psoIndividualCount: readClampedNumber(dom.psoIndividualCount, "N individuos", 1, 200),
     psoChangeThreshold: readClampedNumber(dom.psoChangeThreshold, "Umbral sorteo cambio", 0, 1),
+    turbulenceMinSimilarity: readClampedNumber(dom.turbulenceMinSimilarity, "Sim. turbulencia mínima", -1, 1),
+    turbulenceMaxSimilarity: readClampedNumber(dom.turbulenceMaxSimilarity, "Sim. turbulencia máxima", -1, 1),
     current: variables.current_component,
     target: variables.target_component,
     referenceText: variables.reference_text,
+    promptTemplate: dom.promptTemplate.value,
     prompt: renderPrompt(),
   };
 
   if (config.minWords > config.maxWords) {
     throw new Error("Mín. palabras no puede ser mayor que Máx. palabras.");
+  }
+  if (config.turbulenceMinSimilarity > config.turbulenceMaxSimilarity) {
+    throw new Error("La similitud mínima de turbulencia no puede ser mayor que la máxima.");
   }
 
   return config;
@@ -684,7 +798,7 @@ function setResultsTableMode(mode) {
         <th>#</th>
         <th>Individuo</th>
         <th>Componente</th>
-        <th>Hacia</th>
+        <th>Operador</th>
         <th>Movimiento aplicado</th>
         <th>Estado</th>
       </tr>
@@ -695,12 +809,12 @@ function setResultsTableMode(mode) {
         <th>Movimiento</th>
         <th>Individuo</th>
         <th>Componente</th>
-        <th>Hacia</th>
+        <th>Operador</th>
         <th>Current</th>
-        <th>Target</th>
+        <th>Referencia</th>
         <th>Candidato</th>
-        <th>Similitud con target</th>
-        <th>Mejora</th>
+        <th>Similitud</th>
+        <th>Delta / diversidad</th>
         <th>Validación</th>
         <th>Aplicado</th>
       </tr>
@@ -790,6 +904,10 @@ function renderRunRows(runResults) {
 function formatSigned(value) {
   const sign = value > 0 ? "+" : "";
   return `${sign}${formatNumber(value)}`;
+}
+
+function randomItem(items) {
+  return items[Math.floor(Math.random() * items.length)] || null;
 }
 
 function escapeHtml(value) {
@@ -915,10 +1033,10 @@ function buildPsoPrompt(movement, config) {
     component_name: movement.component.promptName,
     component_definition: movement.component.definition,
     current_component: movement.current,
-    target_component: movement.target,
+    target_component: movement.target || "",
     other_components: movement.otherComponents,
     reference_text: config.referenceText,
-  });
+  }, config.promptTemplate);
 }
 
 function isCompletePsoVector(vector) {
@@ -951,17 +1069,22 @@ function createPsoMovementGroups(individuals, config) {
         return;
       }
 
-      const targetSource = Math.random() < 0.5 ? "pbest" : "lider";
+      const operator = config.psoOperator;
+      let targetSource = "turbulence";
+      if (operator === "influence") {
+        targetSource = Math.random() < 0.5 ? "pbest" : "lider";
+      }
       movementCount += 1;
       plans.push({
         id: `mov-${String(movementCount).padStart(4, "0")}`,
         number: movementCount,
         individualId: individual.id,
+        operator,
         component,
         componentKey: component.key,
         source: targetSource,
         randomValue,
-        target: individual[targetSource][component.key],
+        target: operator === "influence" ? individual[targetSource][component.key] : null,
       });
     });
 
@@ -981,6 +1104,54 @@ function buildPsoMovementFromPlan(plan, position) {
   };
 }
 
+async function scoreTurbulencePsoMovement(movement, candidates, config) {
+  const embeddings = await requestEmbeddings(config.embeddingModel, [movement.current, ...candidates]);
+  const currentEmbedding = embeddings[0];
+  const validationConfig = {
+    ...config,
+    current: movement.current,
+    target: null,
+  };
+
+  const rows = candidates.map((candidate, index) => {
+    const similarity = cosineSimilarity(embeddings[index + 1], currentEmbedding);
+    const diversity = cosineDistance(similarity);
+    const baseReason = validationReason(candidate, candidates, validationConfig);
+    const reason = baseReason !== "valid"
+      ? baseReason
+      : similarity < config.turbulenceMinSimilarity ? "too_distant_from_current"
+      : similarity > config.turbulenceMaxSimilarity ? "too_close_to_current" : "valid";
+    return {
+      movementNumber: movement.number,
+      individualId: movement.individualId,
+      operator: movement.operator,
+      componentName: movement.component.promptName,
+      source: movement.source,
+      current: movement.current,
+      reference: movement.current,
+      candidate,
+      similarity,
+      improvement: null,
+      diversity,
+      reason,
+      isValidImprovement: reason === "valid",
+      applied: false,
+    };
+  });
+
+  const selectedCandidate = randomItem(rows.filter((row) => row.isValidImprovement));
+  if (selectedCandidate) {
+    selectedCandidate.applied = true;
+  }
+
+  return {
+    baseline: null,
+    rows,
+    selectedCandidate,
+    failureReason: selectedCandidate ? null : "sin candidato en rango de turbulencia",
+  };
+}
+
 async function scorePsoMovement(movement, rawOutput, config) {
   const candidates = parseCandidates(rawOutput, config.expectedCandidates);
   if (candidates.length === 0) {
@@ -990,6 +1161,10 @@ async function scorePsoMovement(movement, rawOutput, config) {
       selectedCandidate: null,
       failureReason: "sin candidatos parseables",
     };
+  }
+
+  if (movement.operator === "turbulence") {
+    return scoreTurbulencePsoMovement(movement, candidates, config);
   }
 
   const embeddings = await requestEmbeddings(config.embeddingModel, [movement.current, movement.target, ...candidates]);
@@ -1014,20 +1189,24 @@ async function scorePsoMovement(movement, rawOutput, config) {
     return {
       movementNumber: movement.number,
       individualId: movement.individualId,
+      operator: movement.operator,
       componentName: movement.component.promptName,
       source: movement.source,
       current: movement.current,
-      target: movement.target,
+      reference: movement.target,
       candidate,
       similarity,
       improvement,
+      diversity: null,
       reason,
       isValidImprovement: reason === "valid",
       applied: false,
     };
   });
 
-  const selectedCandidate = rows.find((row) => row.isValidImprovement) || null;
+  const selectedCandidate = rows
+    .filter((row) => row.isValidImprovement)
+    .sort((a, b) => b.similarity - a.similarity)[0] || null;
   if (selectedCandidate) {
     selectedCandidate.applied = true;
   }
@@ -1058,7 +1237,7 @@ function renderPsoMovementRows(movementResults) {
         <td>${movement.number}</td>
         <td>${escapeHtml(movement.individualId)}</td>
         <td>${escapeHtml(movement.component.promptName)}</td>
-        <td>${movement.source === "pbest" ? "pbest" : "líder"}</td>
+        <td>${escapeHtml(movementOperatorLabel(movement))}</td>
         <td>${selected ? escapeHtml(selected.candidate) : "--"}</td>
         <td>${status}</td>
       `;
@@ -1079,16 +1258,18 @@ function appendPsoCandidateRows(rows) {
   latestCheckerRows.push(...rows);
   rows.forEach((row) => {
     const tr = document.createElement("tr");
+    const reference = row.reference ?? row.target ?? "--";
+    const delta = row.operator === "turbulence" ? formatNumber(row.diversity) : formatSigned(row.improvement);
     tr.innerHTML = `
       <td>${row.movementNumber}</td>
       <td>${escapeHtml(row.individualId)}</td>
       <td>${escapeHtml(row.componentName)}</td>
-      <td>${row.source === "pbest" ? "pbest" : "líder"}</td>
+      <td>${escapeHtml(movementOperatorLabel(row))}</td>
       <td class="context-cell">${escapeHtml(row.current)}</td>
-      <td class="context-cell">${escapeHtml(row.target)}</td>
+      <td class="context-cell">${escapeHtml(reference)}</td>
       <td class="context-cell">${escapeHtml(row.candidate)}</td>
       <td>${formatNumber(row.similarity)}</td>
-      <td>${formatSigned(row.improvement)}</td>
+      <td>${delta}</td>
       <td><span class="${row.isValidImprovement ? "valid" : "invalid"}">${row.reason}</span></td>
       <td>${row.applied ? '<span class="valid">sí</span>' : "--"}</td>
     `;
@@ -1112,6 +1293,7 @@ function summarizePsoResults(movementResults, totalSelected = movementResults.le
   const timedCalls = movementResults.filter((result) => Number.isFinite(result.elapsedMs));
   const totalLlmElapsedMs = timedCalls.reduce((sum, result) => sum + result.elapsedMs, 0);
   const averageLlmElapsedMs = timedCalls.length ? totalLlmElapsedMs / timedCalls.length : NaN;
+  const operator = movementResults[0]?.movement.operator || selectedPsoOperator();
 
   dom.psoSelectedComponents.textContent = String(selectedCount);
   dom.psoFailedChanges.textContent = String(failed);
@@ -1126,6 +1308,7 @@ function summarizePsoResults(movementResults, totalSelected = movementResults.le
   dom.psoExecutionErrors.textContent = String(errored);
 
   renderDefinitionList(dom.bestCandidateDetails, [
+    ["Operador", psoOperatorLabel(operator)],
     ["Componentes sorteadas", String(selectedCount)],
     ["Cambios aplicados", String(applied)],
     ["No pudieron cambiar", String(failed)],
@@ -1171,7 +1354,7 @@ async function runPsoSimulation(config) {
           dom.checkerStatusTitle,
           dom.checkerStatusDetail,
           "Simulando iteración PSO",
-          `Movimiento ${movement.number} de ${movementCount}: ${movement.individualId}/${movement.component.promptName} hacia ${movement.source}.`,
+          `Movimiento ${movement.number} de ${movementCount}: ${movement.individualId}/${movement.component.promptName} con ${movementOperatorLabel(movement)}.`,
           "busy",
         );
 
@@ -1364,6 +1547,7 @@ dom.simulatePsoSwitch.addEventListener("change", () => {
     });
   }
 });
+dom.psoSemanticOperator.addEventListener("change", applyPsoOperatorTemplate);
 dom.componentPreset.addEventListener("change", applyComponentPreset);
 dom.llmModelSelect.addEventListener("change", () => {
   if (dom.llmModelSelect.value) {
