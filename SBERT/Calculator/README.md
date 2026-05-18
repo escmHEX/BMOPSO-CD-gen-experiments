@@ -11,6 +11,8 @@ La aplicación permite seleccionar:
 
 Ambos generan embeddings densos de 384 dimensiones. En la aplicación, el pipeline se ejecuta con `feature-extraction`, `pooling: "mean"` y `normalize: true`.
 
+Cada texto se embebe de forma individual. Esto mantiene la calculadora consistente con el evaluador de plantillas: si copias exactamente el mismo target y candidato desde una tabla del evaluador, la similitud coseno debe coincidir.
+
 ## Ejecución local
 
 Desde esta carpeta en Windows:

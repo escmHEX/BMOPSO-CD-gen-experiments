@@ -23,16 +23,29 @@ function getExtractor(modelId, requestId) {
   return extractorPromises.get(modelId);
 }
 
+function tensorToVector(values) {
+  return Array.isArray(values[0]) ? values[0] : values;
+}
+
+async function embedText(modelId, text, requestId) {
+  const extractor = await getExtractor(modelId, requestId);
+  const output = await extractor(text, { pooling: "mean", normalize: true });
+  const vector = tensorToVector(output.tolist());
+
+  if (typeof output.dispose === "function") {
+    output.dispose();
+  }
+
+  return vector;
+}
+
 self.addEventListener("message", async (event) => {
   const { id, modelId, texts } = event.data;
 
   try {
-    const extractor = await getExtractor(modelId, id);
-    const output = await extractor(texts, { pooling: "mean", normalize: true });
-    const embeddings = output.tolist();
-
-    if (typeof output.dispose === "function") {
-      output.dispose();
+    const embeddings = [];
+    for (const text of texts) {
+      embeddings.push(await embedText(modelId, text, id));
     }
 
     self.postMessage({

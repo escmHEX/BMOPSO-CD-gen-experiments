@@ -34,46 +34,39 @@ function getExtractor(modelId, requestId) {
   return extractorPromises.get(modelId);
 }
 
-async function embedTexts(modelId, texts, requestId) {
+function tensorToVector(values) {
+  return Array.isArray(values[0]) ? values[0] : values;
+}
+
+async function embedSingleText(modelId, text, requestId) {
+  const key = cacheKey(modelId, text);
+  if (embeddingCache.has(key)) {
+    return embeddingCache.get(key);
+  }
+
   const config = getModelConfig(modelId);
-  const vectors = new Array(texts.length);
-  const missingTexts = [];
-  const missingIndexes = [];
-  const seenMissing = new Map();
+  const extractor = await getExtractor(modelId, requestId);
+  const output = await extractor(text, config);
+  const vector = tensorToVector(output.tolist());
 
-  texts.forEach((text, index) => {
-    const key = cacheKey(modelId, text);
-    if (embeddingCache.has(key)) {
-      vectors[index] = embeddingCache.get(key);
-      return;
+  if (typeof output.dispose === "function") {
+    output.dispose();
+  }
+
+  embeddingCache.set(key, vector);
+  return vector;
+}
+
+async function embedTexts(modelId, texts, requestId) {
+  getModelConfig(modelId);
+  const requestCache = new Map();
+  const vectors = [];
+
+  for (const text of texts) {
+    if (!requestCache.has(text)) {
+      requestCache.set(text, await embedSingleText(modelId, text, requestId));
     }
-
-    if (seenMissing.has(text)) {
-      missingIndexes.push({ originalIndex: index, missingIndex: seenMissing.get(text) });
-      return;
-    }
-
-    seenMissing.set(text, missingTexts.length);
-    missingIndexes.push({ originalIndex: index, missingIndex: missingTexts.length });
-    missingTexts.push(text);
-  });
-
-  if (missingTexts.length > 0) {
-    const extractor = await getExtractor(modelId, requestId);
-    const output = await extractor(missingTexts, config);
-    const computed = output.tolist();
-
-    if (typeof output.dispose === "function") {
-      output.dispose();
-    }
-
-    missingTexts.forEach((text, index) => {
-      embeddingCache.set(cacheKey(modelId, text), computed[index]);
-    });
-
-    missingIndexes.forEach(({ originalIndex, missingIndex }) => {
-      vectors[originalIndex] = computed[missingIndex];
-    });
+    vectors.push(requestCache.get(text));
   }
 
   return vectors;

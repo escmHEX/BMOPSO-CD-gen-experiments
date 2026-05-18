@@ -29,6 +29,7 @@ const PIPELINE_CONFIG = {
   task: "feature-extraction",
   pooling: "mean",
   normalize: "true",
+  batching: "Embedding canónico por texto individual",
   execution: "Web Worker en navegador",
 };
 
@@ -131,6 +132,8 @@ const dom = {
   psoAppliedChanges: document.querySelector("#psoAppliedChanges"),
   psoAffectedIndividuals: document.querySelector("#psoAffectedIndividuals"),
   psoLlmCalls: document.querySelector("#psoLlmCalls"),
+  psoAverageLlmTime: document.querySelector("#psoAverageLlmTime"),
+  psoTotalLlmTime: document.querySelector("#psoTotalLlmTime"),
   psoValidCandidates: document.querySelector("#psoValidCandidates"),
   psoProgressFailures: document.querySelector("#psoProgressFailures"),
   psoExecutionErrors: document.querySelector("#psoExecutionErrors"),
@@ -183,8 +186,26 @@ function formatNumber(value, digits = 6) {
   }).format(value);
 }
 
-function clampNumber(value, min, max) {
-  return Math.min(max, Math.max(min, Number(value)));
+function formatDuration(milliseconds) {
+  if (!Number.isFinite(milliseconds)) {
+    return "--";
+  }
+  if (milliseconds < 1000) {
+    return `${formatNumber(milliseconds, 0)} ms`;
+  }
+  return `${formatNumber(milliseconds / 1000, 2)} s`;
+}
+
+function readClampedNumber(input, label, min, max) {
+  const rawValue = input.value.trim();
+  const number = Number(rawValue);
+  if (!rawValue) {
+    throw new Error(`${label} debe ser un número válido.`);
+  }
+  if (!Number.isFinite(number)) {
+    throw new Error(`${label} debe ser un número válido.`);
+  }
+  return Math.min(max, Math.max(min, number));
 }
 
 function dotProduct(vectorA, vectorB) {
@@ -244,6 +265,7 @@ function renderEmbeddingModelDetails() {
     ["Pipeline", PIPELINE_CONFIG.task],
     ["Pooling", PIPELINE_CONFIG.pooling],
     ["Normalización", PIPELINE_CONFIG.normalize],
+    ["Cálculo", PIPELINE_CONFIG.batching],
     ["Ejecución", PIPELINE_CONFIG.execution],
   ]);
   renderDefinitionList(dom.embeddingModelDetails, [
@@ -332,6 +354,8 @@ function resetPsoMetrics() {
   dom.psoAppliedChanges.textContent = "--";
   dom.psoAffectedIndividuals.textContent = "--";
   dom.psoLlmCalls.textContent = "--";
+  dom.psoAverageLlmTime.textContent = "--";
+  dom.psoTotalLlmTime.textContent = "--";
   dom.psoValidCandidates.textContent = "--";
   dom.psoProgressFailures.textContent = "--";
   dom.psoExecutionErrors.textContent = "--";
@@ -427,14 +451,11 @@ function parseCandidates(rawOutput, expectedCount) {
     .replace(/```[A-Za-z]*\n?/g, "")
     .replace(/```/g, "")
     .trim();
-  const seen = new Set();
   const candidates = [];
 
   cleaned.split(/\r?\n/).forEach((line) => {
     const candidate = normalizeCandidate(line);
-    const key = candidate.toLocaleLowerCase();
-    if (candidate && !seen.has(key)) {
-      seen.add(key);
+    if (candidate) {
       candidates.push(candidate);
     }
   });
@@ -513,16 +534,34 @@ async function callLmStudio(prompt, runNumber, config) {
 }
 
 function extractLmStudioText(payload, apiMode) {
+  const contentToText = (content) => {
+    if (typeof content === "string") {
+      return content;
+    }
+    if (Array.isArray(content)) {
+      return content
+        .map((item) => (typeof item === "string" ? item : item?.text || item?.content || ""))
+        .filter(Boolean)
+        .join("\n");
+    }
+    return "";
+  };
+
   if (apiMode === "native") {
+    if (typeof payload.output_text === "string") {
+      return payload.output_text.trim();
+    }
+
     const output = Array.isArray(payload.output) ? payload.output : [];
     return output
-      .filter((item) => item?.type === "message" && typeof item.content === "string")
-      .map((item) => item.content)
+      .filter((item) => item?.type === "message")
+      .map((item) => contentToText(item.content))
+      .filter(Boolean)
       .join("\n")
       .trim();
   }
 
-  return payload.choices?.[0]?.message?.content || "";
+  return contentToText(payload.choices?.[0]?.message?.content).trim();
 }
 
 async function fetchLmStudioModels() {
@@ -598,30 +637,36 @@ function readCheckerConfig() {
     throw new Error("El texto de referencia fijo es obligatorio en modo PSO.");
   }
 
-  return {
+  const config = {
     endpoint,
     apiMode: dom.lmApiMode.value,
     model,
     simulatePso,
     embeddingModel: dom.checkerEmbeddingModel.value,
-    runs: clampNumber(dom.runCount.value, 1, 200),
-    expectedCandidates: clampNumber(dom.candidateCount.value, 1, 20),
-    temperature: clampNumber(dom.temperature.value, 0, 2),
-    topP: clampNumber(dom.topP.value, 0, 1),
-    maxTokens: clampNumber(dom.maxTokens.value, 8, 2048),
-    timeoutMs: clampNumber(dom.requestTimeout.value, 5, 600) * 1000,
-    minWords: clampNumber(dom.minWords.value, 1, 20),
-    maxWords: clampNumber(dom.maxWords.value, 1, 40),
-    margin: clampNumber(dom.semanticMargin.value, 0, 1),
-    targetCopyThreshold: clampNumber(dom.targetCopyThreshold.value, 0, 1),
-    concurrency: clampNumber(dom.concurrency.value, 1, 8),
-    psoIndividualCount: clampNumber(dom.psoIndividualCount.value, 1, 200),
-    psoChangeThreshold: clampNumber(dom.psoChangeThreshold.value, 0, 1),
+    runs: readClampedNumber(dom.runCount, "Ejecuciones independientes", 1, 200),
+    expectedCandidates: readClampedNumber(dom.candidateCount, "Candidatos por ejecución", 1, 20),
+    temperature: readClampedNumber(dom.temperature, "Temperatura", 0, 2),
+    topP: readClampedNumber(dom.topP, "Top p", 0, 1),
+    maxTokens: readClampedNumber(dom.maxTokens, "Máx. tokens", 8, 2048),
+    timeoutMs: readClampedNumber(dom.requestTimeout, "Timeout por ejecución", 5, 600) * 1000,
+    minWords: readClampedNumber(dom.minWords, "Mín. palabras", 1, 20),
+    maxWords: readClampedNumber(dom.maxWords, "Máx. palabras", 1, 40),
+    margin: readClampedNumber(dom.semanticMargin, "Margen eta", 0, 1),
+    targetCopyThreshold: readClampedNumber(dom.targetCopyThreshold, "Tau copia target", 0, 1),
+    concurrency: readClampedNumber(dom.concurrency, "Paralelismo", 1, 8),
+    psoIndividualCount: readClampedNumber(dom.psoIndividualCount, "N individuos", 1, 200),
+    psoChangeThreshold: readClampedNumber(dom.psoChangeThreshold, "Umbral sorteo cambio", 0, 1),
     current: variables.current_component,
     target: variables.target_component,
     referenceText: variables.reference_text,
     prompt: renderPrompt(),
   };
+
+  if (config.minWords > config.maxWords) {
+    throw new Error("Mín. palabras no puede ser mayor que Máx. palabras.");
+  }
+
+  return config;
 }
 
 function clearCheckerTables() {
@@ -693,6 +738,10 @@ function setResultsTableMode(mode) {
 }
 
 function appendCandidateRows(rows) {
+  if (rows.length === 0) {
+    return;
+  }
+
   if (latestCheckerRows.length === 0) {
     dom.candidateResultsBody.replaceChildren();
   }
@@ -722,13 +771,16 @@ function renderRunRows(runResults) {
     ...runResults.map((run) => {
       const tr = document.createElement("tr");
       const best = run.bestValidCandidate;
+      const status = run.error
+        ? `<span class="invalid">${escapeHtml(run.error)}</span>`
+        : run.status ? `<span class="invalid">${escapeHtml(run.status)}</span>` : '<span class="valid">ok</span>';
       tr.innerHTML = `
         <td>${run.runNumber}</td>
         <td>${best ? escapeHtml(best.candidate) : "--"}</td>
         <td>${best ? formatNumber(best.similarity) : "--"}</td>
         <td>${best ? formatSigned(best.improvement) : "--"}</td>
         <td>${run.validImprovementCount}/${run.candidateCount}</td>
-        <td>${run.error ? `<span class="invalid">${escapeHtml(run.error)}</span>` : '<span class="valid">ok</span>'}</td>
+        <td>${status}</td>
       `;
       return tr;
     }),
@@ -788,7 +840,8 @@ async function scoreRunCandidates(runNumber, rawOutput, baseline, config) {
         candidateCount: 0,
         validImprovementCount: 0,
         bestValidCandidate: null,
-        error: "sin candidatos parseables",
+        status: "sin candidatos parseables",
+        error: null,
       },
       rows: [],
     };
@@ -800,7 +853,7 @@ async function scoreRunCandidates(runNumber, rawOutput, baseline, config) {
     const similarity = cosineSimilarity(embeddings[index + 1], targetEmbedding);
     const improvement = similarity - baseline;
     const baseReason = validationReason(candidate, candidates, config);
-    const hasSemanticProgress = improvement >= config.margin;
+    const hasSemanticProgress = improvement > config.margin;
     const reason = baseReason !== "valid"
       ? baseReason
       : similarity >= config.targetCopyThreshold ? "semantic_copy_target"
@@ -819,6 +872,7 @@ async function scoreRunCandidates(runNumber, rawOutput, baseline, config) {
       candidateCount: rows.length,
       validImprovementCount: rows.filter((row) => row.isValidImprovement).length,
       bestValidCandidate,
+      status: null,
       error: null,
     },
     rows,
@@ -879,9 +933,9 @@ function isValidPsoIndividual(individual) {
     && isCompletePsoVector(individual.lider);
 }
 
-function createPsoMovements(individuals, config) {
-  const movements = [];
-  const simulatedPositions = new Map();
+function createPsoMovementGroups(individuals, config) {
+  const groups = [];
+  let movementCount = 0;
 
   individuals.forEach((individual) => {
     const position = {
@@ -889,7 +943,7 @@ function createPsoMovements(individuals, config) {
       topico: individual.topico,
       accion: individual.accion,
     };
-    simulatedPositions.set(individual.id, position);
+    const plans = [];
 
     PSO_COMPONENTS.forEach((component) => {
       const randomValue = Math.random();
@@ -898,22 +952,33 @@ function createPsoMovements(individuals, config) {
       }
 
       const targetSource = Math.random() < 0.5 ? "pbest" : "lider";
-      movements.push({
-        id: `mov-${String(movements.length + 1).padStart(4, "0")}`,
-        number: movements.length + 1,
+      movementCount += 1;
+      plans.push({
+        id: `mov-${String(movementCount).padStart(4, "0")}`,
+        number: movementCount,
         individualId: individual.id,
         component,
         componentKey: component.key,
         source: targetSource,
         randomValue,
-        current: position[component.key],
         target: individual[targetSource][component.key],
-        otherComponents: psoOtherComponents(position, component.key),
       });
     });
+
+    if (plans.length > 0) {
+      groups.push({ individualId: individual.id, position, plans });
+    }
   });
 
-  return { movements, simulatedPositions };
+  return { groups, movementCount };
+}
+
+function buildPsoMovementFromPlan(plan, position) {
+  return {
+    ...plan,
+    current: position[plan.componentKey],
+    otherComponents: psoOtherComponents(position, plan.componentKey),
+  };
 }
 
 async function scorePsoMovement(movement, rawOutput, config) {
@@ -941,7 +1006,7 @@ async function scorePsoMovement(movement, rawOutput, config) {
     const similarity = cosineSimilarity(embeddings[index + 2], targetEmbedding);
     const improvement = similarity - baseline;
     const baseReason = validationReason(candidate, candidates, validationConfig);
-    const hasSemanticProgress = improvement >= config.margin;
+    const hasSemanticProgress = improvement > config.margin;
     const reason = baseReason !== "valid"
       ? baseReason
       : similarity >= config.targetCopyThreshold ? "semantic_copy_target"
@@ -1003,6 +1068,10 @@ function renderPsoMovementRows(movementResults) {
 }
 
 function appendPsoCandidateRows(rows) {
+  if (rows.length === 0) {
+    return;
+  }
+
   if (latestCheckerRows.length === 0) {
     dom.candidateResultsBody.replaceChildren();
   }
@@ -1033,13 +1102,16 @@ function summarizePsoResults(movementResults, totalSelected = movementResults.le
   const applied = movementResults.filter((result) => result.selectedCandidate).length;
   const errored = movementResults.filter((result) => result.error).length;
   const failed = processedCount - applied;
-  const progressFailures = movementResults.filter((result) => result.failureReason === "sin candidato con progreso semántico").length;
+  const candidateFailures = movementResults.filter((result) => !result.error && !result.selectedCandidate).length;
   const affectedIndividuals = new Set(
     movementResults
       .filter((result) => result.selectedCandidate)
       .map((result) => result.movement.individualId),
   ).size;
   const validCandidates = latestCheckerRows.filter((row) => row.reason === "valid").length;
+  const timedCalls = movementResults.filter((result) => Number.isFinite(result.elapsedMs));
+  const totalLlmElapsedMs = timedCalls.reduce((sum, result) => sum + result.elapsedMs, 0);
+  const averageLlmElapsedMs = timedCalls.length ? totalLlmElapsedMs / timedCalls.length : NaN;
 
   dom.psoSelectedComponents.textContent = String(selectedCount);
   dom.psoFailedChanges.textContent = String(failed);
@@ -1047,91 +1119,105 @@ function summarizePsoResults(movementResults, totalSelected = movementResults.le
   dom.psoAppliedChanges.textContent = String(applied);
   dom.psoAffectedIndividuals.textContent = String(affectedIndividuals);
   dom.psoLlmCalls.textContent = String(processedCount);
+  dom.psoAverageLlmTime.textContent = formatDuration(averageLlmElapsedMs);
+  dom.psoTotalLlmTime.textContent = timedCalls.length ? formatDuration(totalLlmElapsedMs) : "--";
   dom.psoValidCandidates.textContent = String(validCandidates);
-  dom.psoProgressFailures.textContent = String(progressFailures);
+  dom.psoProgressFailures.textContent = String(candidateFailures);
   dom.psoExecutionErrors.textContent = String(errored);
 
   renderDefinitionList(dom.bestCandidateDetails, [
     ["Componentes sorteadas", String(selectedCount)],
     ["Cambios aplicados", String(applied)],
     ["No pudieron cambiar", String(failed)],
-    ["Causa principal", progressFailures > 0 ? "Sin candidato con progreso semántico suficiente." : "Sin fallos de progreso registrados."],
+    ["Tiempo LLM total", timedCalls.length ? formatDuration(totalLlmElapsedMs) : "--"],
+    ["Tiempo promedio / llamada", formatDuration(averageLlmElapsedMs)],
+    ["Causa principal", candidateFailures > 0 ? "Sin candidato aceptable para uno o más movimientos." : "Sin fallos de candidato registrados."],
   ]);
 }
 
 async function runPsoSimulation(config) {
   const database = await loadPsoDatabase();
   const individuals = database.individuals.slice(0, config.psoIndividualCount);
-  const { movements, simulatedPositions } = createPsoMovements(individuals, config);
+  const { groups, movementCount } = createPsoMovementGroups(individuals, config);
   const movementResults = [];
-  let nextMovementIndex = 0;
+  let nextGroupIndex = 0;
 
   resetPsoMetrics();
   setResultsTableMode("pso");
-  dom.renderedPromptPreview.textContent = movements[0]
-    ? buildPsoPrompt(movements[0], config)
+  dom.renderedPromptPreview.textContent = groups[0]?.plans[0]
+    ? buildPsoPrompt(buildPsoMovementFromPlan(groups[0].plans[0], groups[0].position), config)
     : "Ninguna componente fue sorteada para cambiar con el umbral actual.";
-  dom.psoSelectedComponents.textContent = String(movements.length);
+  dom.psoSelectedComponents.textContent = String(movementCount);
 
-  if (movements.length === 0) {
+  if (movementCount === 0) {
     summarizePsoResults([], 0);
     setStatus(dom.checkerStatusTone, dom.checkerStatusTitle, dom.checkerStatusDetail, "Simulación sin movimientos", "Ninguna componente superó el umbral de sorteo.");
     return;
   }
 
-  async function movementWorker() {
-    while (!stopRequested && nextMovementIndex < movements.length) {
-      const movement = movements[nextMovementIndex];
-      nextMovementIndex += 1;
-      setStatus(
-        dom.checkerStatusTone,
-        dom.checkerStatusTitle,
-        dom.checkerStatusDetail,
-        "Simulando iteración PSO",
-        `Movimiento ${movement.number} de ${movements.length}: ${movement.individualId}/${movement.component.promptName} hacia ${movement.source}.`,
-        "busy",
-      );
+  async function groupWorker() {
+    while (!stopRequested && nextGroupIndex < groups.length) {
+      const group = groups[nextGroupIndex];
+      nextGroupIndex += 1;
 
-      try {
-        const prompt = buildPsoPrompt(movement, config);
-        const response = await callLmStudio(prompt, movement.number, config);
-        const scored = await scorePsoMovement(movement, response.raw, config);
-        const position = simulatedPositions.get(movement.individualId);
-        if (scored.selectedCandidate) {
-          position[movement.componentKey] = scored.selectedCandidate.candidate;
+      for (const plan of group.plans) {
+        if (stopRequested) {
+          break;
         }
 
-        movementResults.push({
-          movement,
-          baseline: scored.baseline,
-          selectedCandidate: scored.selectedCandidate,
-          failureReason: scored.failureReason,
-          error: null,
-        });
-        appendPsoCandidateRows(scored.rows);
-      } catch (error) {
-        movementResults.push({
-          movement,
-          baseline: null,
-          selectedCandidate: null,
-          failureReason: "error de ejecución",
-          error: error.name === "AbortError" ? "timeout" : error.message,
-        });
-      }
+        const movement = buildPsoMovementFromPlan(plan, group.position);
+        setStatus(
+          dom.checkerStatusTone,
+          dom.checkerStatusTitle,
+          dom.checkerStatusDetail,
+          "Simulando iteración PSO",
+          `Movimiento ${movement.number} de ${movementCount}: ${movement.individualId}/${movement.component.promptName} hacia ${movement.source}.`,
+          "busy",
+        );
 
-      movementResults.sort((a, b) => a.movement.number - b.movement.number);
-      renderPsoMovementRows(movementResults);
-      summarizePsoResults(movementResults, movements.length);
+        const requestStarted = performance.now();
+        try {
+          const prompt = buildPsoPrompt(movement, config);
+          const response = await callLmStudio(prompt, movement.number, config);
+          const scored = await scorePsoMovement(movement, response.raw, config);
+          if (scored.selectedCandidate) {
+            group.position[movement.componentKey] = scored.selectedCandidate.candidate;
+          }
+
+          movementResults.push({
+            movement,
+            baseline: scored.baseline,
+            selectedCandidate: scored.selectedCandidate,
+            failureReason: scored.failureReason,
+            error: null,
+            elapsedMs: response.elapsedMs,
+          });
+          appendPsoCandidateRows(scored.rows);
+        } catch (error) {
+          movementResults.push({
+            movement,
+            baseline: null,
+            selectedCandidate: null,
+            failureReason: "error de ejecución",
+            error: error.name === "AbortError" ? "timeout" : error.message,
+            elapsedMs: performance.now() - requestStarted,
+          });
+        }
+
+        movementResults.sort((a, b) => a.movement.number - b.movement.number);
+        renderPsoMovementRows(movementResults);
+        summarizePsoResults(movementResults, movementCount);
+      }
     }
   }
 
-  await Promise.all(Array.from({ length: config.concurrency }, () => movementWorker()));
+  await Promise.all(Array.from({ length: Math.min(config.concurrency, groups.length) }, () => groupWorker()));
   setStatus(
     dom.checkerStatusTone,
     dom.checkerStatusTitle,
     dom.checkerStatusDetail,
     stopRequested ? "Simulación detenida" : "Simulación PSO completada",
-    `${movementResults.length} movimiento(s) procesado(s) de ${movements.length} sorteado(s).`,
+    `${movementResults.length} movimiento(s) procesado(s) de ${movementCount} sorteado(s).`,
   );
 }
 

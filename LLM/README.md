@@ -50,9 +50,11 @@ Para cada ejecución:
 5. Calcula similitud coseno y distancia coseno.
 6. Marca éxito válido si el candidato supera `cos(current, target) + eta`, respeta el largo configurado, no copia exactamente `current` ni `target`, y no supera `tau_target_copy`.
 
-La herramienta reporta tasa de éxito válida, mejor similitud promedio, mejora promedio, candidatos válidos y resultados por ejecución.
+La herramienta reporta tasa de éxito válida, mejor similitud promedio, mejora promedio, candidatos válidos y resultados por ejecución. Una ejecución sin candidatos parseables cuenta como ejecución completada sin éxito, no se excluye del denominador.
 
 El umbral `tau_target_copy` queda en `0.94` por defecto. Si `cos(candidate, target) >= tau_target_copy`, el candidato se etiqueta como `semantic_copy_target` y no cuenta como éxito.
+
+Las líneas duplicadas no se descartan silenciosamente: se conservan en la tabla y se marcan como `duplicate_output`.
 
 ## Simulación de iteración PSO
 
@@ -69,9 +71,11 @@ Cuando está activo:
 7. Solicita `num_candidates` candidatos al LLM.
 8. Aplica el primer candidato válido que mejora semanticamente hacia el objetivo y no copia el target.
 
+Los componentes de un mismo individuo se procesan en orden. Si `role` cambia, los prompts posteriores de `topic` y `action` usan ese `role` actualizado dentro de `Otros componentes`.
+
 El peor caso realiza `3 * N` llamadas al LLM. Con `N = 200`, eso puede llegar a 600 llamadas.
 
-Las métricas específicas del modo PSO reportan componentes sorteadas, componentes que no pudieron cambiar, tasa de no cambio, cambios aplicados, individuos modificados, llamadas LLM, candidatos válidos, fallos por candidatos no aceptables y errores técnicos de ejecución.
+Las métricas específicas del modo PSO reportan componentes sorteadas, componentes que no pudieron cambiar, tasa de no cambio, cambios aplicados, individuos modificados, llamadas LLM, tiempo promedio por llamada, tiempo total LLM, candidatos válidos, fallos por candidatos no aceptables y errores técnicos de ejecución. Los tiempos son wall-clock por request; el tiempo total LLM es la suma de llamadas y puede ser mayor que la duración real de la corrida si hay paralelismo.
 
 ## Embeddings
 
@@ -80,6 +84,8 @@ Los embeddings se calculan en el navegador mediante Transformers.js con:
 - `feature-extraction`
 - `pooling: "mean"`
 - `normalize: true`
+
+Para que la calculadora y el evaluador reporten el mismo valor al copiar exactamente los mismos textos, cada string se embebe de forma individual y se cachea por `modelo + texto exacto`. Esto evita que el resultado dependa del lote de textos evaluados en una corrida.
 
 Modelos incluidos:
 

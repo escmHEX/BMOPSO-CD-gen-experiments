@@ -296,6 +296,16 @@ Each line must follow this format:
               <p>Solicitudes realizadas al LLM para componentes sorteadas.</p>
             </article>
             <article class="metric">
+              <span>Tiempo prom. / llamada</span>
+              <strong id="psoAverageLlmTime">--</strong>
+              <p>Wall-clock promedio de cada request a LM Studio.</p>
+            </article>
+            <article class="metric">
+              <span>Tiempo total LLM</span>
+              <strong id="psoTotalLlmTime">--</strong>
+              <p>Suma del wall-clock de las llamadas; con paralelismo puede superar la duración real de la corrida.</p>
+            </article>
+            <article class="metric">
               <span>Candidatos válidos</span>
               <strong id="psoValidCandidates">--</strong>
               <p>Candidatos aceptables que superaron baseline, eta y tau_target_copy.</p>

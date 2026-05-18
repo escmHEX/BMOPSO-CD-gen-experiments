@@ -56,6 +56,7 @@ const PIPELINE_CONFIG = {
   task: "feature-extraction",
   pooling: "mean",
   normalize: "true",
+  batching: "Embedding canónico por texto individual",
   dtype: "default de Transformers.js para navegador",
   execution: "Web Worker en el navegador",
 };
@@ -94,6 +95,7 @@ function renderModelInfo() {
     ["Pipeline", PIPELINE_CONFIG.task],
     ["Pooling", PIPELINE_CONFIG.pooling],
     ["Normalización", PIPELINE_CONFIG.normalize],
+    ["Cálculo", PIPELINE_CONFIG.batching],
     ["Precisión", PIPELINE_CONFIG.dtype],
     ["Ejecución", PIPELINE_CONFIG.execution],
   ]);
