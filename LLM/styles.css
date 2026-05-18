@@ -298,6 +298,91 @@ label span {
   grid-column: 1 / -1;
 }
 
+.switch-row {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+  margin-bottom: 16px;
+  padding: 12px;
+}
+
+.switch-row p {
+  color: var(--muted);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.switch-control {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  position: relative;
+  cursor: pointer;
+}
+
+.switch-control input {
+  position: absolute;
+  z-index: 1;
+  width: 44px;
+  height: 24px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch-control strong {
+  font-size: 0.95rem;
+}
+
+.switch-slider {
+  position: relative;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: #c8d4df;
+  transition: background-color 160ms ease;
+}
+
+.switch-slider::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(19, 32, 44, 0.2);
+  content: "";
+  transition: transform 160ms ease;
+}
+
+.switch-control input:checked + .switch-slider {
+  background: var(--accent);
+}
+
+.switch-control input:focus-visible + .switch-slider {
+  box-shadow: 0 0 0 3px rgba(36, 123, 160, 0.22);
+}
+
+.switch-control input:checked + .switch-slider::after {
+  transform: translateX(20px);
+}
+
+.pso-controls {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  padding: 12px;
+}
+
+.pso-db-note {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .inline-actions {
   display: flex;
   flex-wrap: wrap;
@@ -324,6 +409,10 @@ label span {
   border-radius: var(--radius);
   background: var(--border);
   box-shadow: var(--shadow);
+}
+
+.is-hidden {
+  display: none !important;
 }
 
 .metric {
@@ -433,6 +522,10 @@ table {
   min-width: 780px;
 }
 
+table.wide-table {
+  min-width: 1320px;
+}
+
 th,
 td {
   border-top: 1px solid var(--border);
@@ -449,6 +542,10 @@ th {
 
 td {
   line-height: 1.4;
+}
+
+.context-cell {
+  min-width: 190px;
 }
 
 .valid {

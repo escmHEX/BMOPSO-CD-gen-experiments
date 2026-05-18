@@ -127,6 +127,27 @@
               <div class="panel-title">
                 <h2>Componente semántico</h2>
               </div>
+              <div class="switch-row">
+                <label class="switch-control" for="simulatePsoSwitch">
+                  <input id="simulatePsoSwitch" type="checkbox">
+                  <span class="switch-slider" aria-hidden="true"></span>
+                  <strong>Simular iteración PSO</strong>
+                </label>
+                <p>En este modo, Current, Target y otros componentes se toman desde la BD JSON; el texto de referencia fijo se usa para todos los individuos.</p>
+              </div>
+              <div id="psoControls" class="form-grid pso-controls" hidden>
+                <label>
+                  <span>N individuos</span>
+                  <input id="psoIndividualCount" type="number" min="1" max="200" value="20">
+                </label>
+                <label>
+                  <span>Umbral sorteo cambio</span>
+                  <input id="psoChangeThreshold" type="number" min="0" max="1" step="0.01" value="0.7">
+                </label>
+                <div class="span-2 pso-db-note">
+                  <span id="psoDbStatus">BD PSO: 200 individuos disponibles en LLM/data/pso-individuals.json</span>
+                </div>
+              </div>
               <div class="form-grid">
                 <label>
                   <span>Tipo de componente</span>
@@ -243,6 +264,54 @@ Each line must follow this format:
             </article>
           </section>
 
+          <section id="psoMetrics" class="metrics-grid is-hidden" aria-label="Resumen de simulación PSO">
+            <article class="metric">
+              <span>Componentes sorteadas</span>
+              <strong id="psoSelectedComponents">--</strong>
+              <p>Componentes donde el aleatorio superó el umbral de cambio configurado.</p>
+            </article>
+            <article class="metric">
+              <span>No pudieron cambiar</span>
+              <strong id="psoFailedChanges">--</strong>
+              <p>Componentes sorteadas que terminaron sin movimiento aplicado.</p>
+            </article>
+            <article class="metric">
+              <span>Tasa de no cambio</span>
+              <strong id="psoFailureRate">--</strong>
+              <p>Porcentaje de componentes sorteadas que no pudieron actualizarse.</p>
+            </article>
+            <article class="metric">
+              <span>Cambios aplicados</span>
+              <strong id="psoAppliedChanges">--</strong>
+              <p>Movimientos aceptados y aplicados a la copia simulada del individuo.</p>
+            </article>
+            <article class="metric">
+              <span>Individuos modificados</span>
+              <strong id="psoAffectedIndividuals">--</strong>
+              <p>Individuos con al menos un componente actualizado.</p>
+            </article>
+            <article class="metric">
+              <span>Llamadas LLM</span>
+              <strong id="psoLlmCalls">--</strong>
+              <p>Solicitudes realizadas al LLM para componentes sorteadas.</p>
+            </article>
+            <article class="metric">
+              <span>Candidatos válidos</span>
+              <strong id="psoValidCandidates">--</strong>
+              <p>Candidatos aceptables que superaron baseline, eta y tau_target_copy.</p>
+            </article>
+            <article class="metric">
+              <span>Fallos por candidato</span>
+              <strong id="psoProgressFailures">--</strong>
+              <p>Movimientos sin candidatos válidos por falta de progreso, copia del target, formato inválido o duplicados.</p>
+            </article>
+            <article class="metric">
+              <span>Errores ejecución</span>
+              <strong id="psoExecutionErrors">--</strong>
+              <p>Fallos técnicos de LM Studio, timeout o embeddings; no implican por sí solos que el prompt sea malo.</p>
+            </article>
+          </section>
+
           <section class="status-panel" aria-live="polite">
             <span id="checkerStatusTone" class="status-dot" aria-hidden="true"></span>
             <div>
@@ -269,12 +338,12 @@ Each line must follow this format:
 
           <section class="panel">
             <div class="panel-title">
-              <h2>Resultados por ejecución</h2>
+              <h2 id="runResultsTitle">Resultados por ejecución</h2>
               <button id="clearCheckerResultsButton" class="secondary compact" type="button">Limpiar resultados</button>
             </div>
             <div class="table-wrap">
               <table>
-                <thead>
+                <thead id="runResultsHead">
                   <tr>
                     <th>#</th>
                     <th>Mejor candidato válido</th>
@@ -293,11 +362,11 @@ Each line must follow this format:
 
           <section class="panel">
             <div class="panel-title">
-              <h2>Candidatos generados</h2>
+              <h2 id="candidateResultsTitle">Candidatos generados</h2>
             </div>
             <div class="table-wrap">
               <table>
-                <thead>
+                <thead id="candidateResultsHead">
                   <tr>
                     <th>Run</th>
                     <th>Candidato</th>

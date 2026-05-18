@@ -54,6 +54,25 @@ La herramienta reporta tasa de éxito válida, mejor similitud promedio, mejora 
 
 El umbral `tau_target_copy` queda en `0.94` por defecto. Si `cos(candidate, target) >= tau_target_copy`, el candidato se etiqueta como `semantic_copy_target` y no cuenta como éxito.
 
+## Simulación de iteración PSO
+
+La sección `Componente semántico` incluye el switch `Simular iteración PSO`.
+
+Cuando está activo:
+
+1. Carga `LLM/data/pso-individuals.json`, con 200 individuos.
+2. Toma los primeros `N individuos` configurados.
+3. Recorre `role`, `topic` y `action` de cada individuo.
+4. Sortea cada componente y la selecciona para cambio si `random > umbral sorteo cambio`.
+5. Si la componente fue sorteada, el objetivo se elige al azar entre `pbest` y `lider`.
+6. Renderiza la plantilla usando el componente actual, el objetivo elegido, los otros componentes del individuo y el texto de referencia fijo.
+7. Solicita `num_candidates` candidatos al LLM.
+8. Aplica el primer candidato válido que mejora semanticamente hacia el objetivo y no copia el target.
+
+El peor caso realiza `3 * N` llamadas al LLM. Con `N = 200`, eso puede llegar a 600 llamadas.
+
+Las métricas específicas del modo PSO reportan componentes sorteadas, componentes que no pudieron cambiar, tasa de no cambio, cambios aplicados, individuos modificados, llamadas LLM, candidatos válidos, fallos por candidatos no aceptables y errores técnicos de ejecución.
+
 ## Embeddings
 
 Los embeddings se calculan en el navegador mediante Transformers.js con:

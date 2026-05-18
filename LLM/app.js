@@ -56,11 +56,30 @@ const COMPONENT_PRESETS = {
   },
 };
 
+const PSO_COMPONENTS = [
+  {
+    key: "rol",
+    promptName: "role",
+    definition: "speaker identity or perspective",
+  },
+  {
+    key: "topico",
+    promptName: "topic",
+    definition: "subject or event focus",
+  },
+  {
+    key: "accion",
+    promptName: "action",
+    definition: "communicative intent or requested operation",
+  },
+];
+
 const workerRequests = new Map();
 let nextWorkerRequestId = 1;
 let stopRequested = false;
 let latestEmbeddingVectors = null;
 let latestCheckerRows = [];
+let psoDatabase = null;
 
 const dom = {
   navItems: document.querySelectorAll(".nav-item"),
@@ -85,6 +104,11 @@ const dom = {
   previewPromptButton: document.querySelector("#previewPromptButton"),
   runTemplateButton: document.querySelector("#runTemplateButton"),
   stopTemplateButton: document.querySelector("#stopTemplateButton"),
+  simulatePsoSwitch: document.querySelector("#simulatePsoSwitch"),
+  psoControls: document.querySelector("#psoControls"),
+  psoIndividualCount: document.querySelector("#psoIndividualCount"),
+  psoChangeThreshold: document.querySelector("#psoChangeThreshold"),
+  psoDbStatus: document.querySelector("#psoDbStatus"),
   componentPreset: document.querySelector("#componentPreset"),
   componentName: document.querySelector("#componentName"),
   componentDefinition: document.querySelector("#componentDefinition"),
@@ -94,11 +118,22 @@ const dom = {
   referenceText: document.querySelector("#referenceText"),
   promptTemplate: document.querySelector("#promptTemplate"),
   baselineSimilarity: document.querySelector("#baselineSimilarity"),
+  templateMetrics: document.querySelector(".metrics-grid[aria-label='Resumen de evaluación']"),
   validSuccessRate: document.querySelector("#validSuccessRate"),
   averageBestSimilarity: document.querySelector("#averageBestSimilarity"),
   averageImprovement: document.querySelector("#averageImprovement"),
   completedRuns: document.querySelector("#completedRuns"),
   validCandidates: document.querySelector("#validCandidates"),
+  psoMetrics: document.querySelector("#psoMetrics"),
+  psoSelectedComponents: document.querySelector("#psoSelectedComponents"),
+  psoFailedChanges: document.querySelector("#psoFailedChanges"),
+  psoFailureRate: document.querySelector("#psoFailureRate"),
+  psoAppliedChanges: document.querySelector("#psoAppliedChanges"),
+  psoAffectedIndividuals: document.querySelector("#psoAffectedIndividuals"),
+  psoLlmCalls: document.querySelector("#psoLlmCalls"),
+  psoValidCandidates: document.querySelector("#psoValidCandidates"),
+  psoProgressFailures: document.querySelector("#psoProgressFailures"),
+  psoExecutionErrors: document.querySelector("#psoExecutionErrors"),
   checkerStatusTone: document.querySelector("#checkerStatusTone"),
   checkerStatusTitle: document.querySelector("#checkerStatusTitle"),
   checkerStatusDetail: document.querySelector("#checkerStatusDetail"),
@@ -106,8 +141,13 @@ const dom = {
   checkerConnectionText: document.querySelector("#checkerConnectionText"),
   renderedPromptPreview: document.querySelector("#renderedPromptPreview"),
   bestCandidateDetails: document.querySelector("#bestCandidateDetails"),
+  runResultsTitle: document.querySelector("#runResultsTitle"),
+  runResultsHead: document.querySelector("#runResultsHead"),
   runResultsBody: document.querySelector("#runResultsBody"),
+  candidateResultsTitle: document.querySelector("#candidateResultsTitle"),
+  candidateResultsHead: document.querySelector("#candidateResultsHead"),
   candidateResultsBody: document.querySelector("#candidateResultsBody"),
+  candidateResultsTable: document.querySelector("#candidateResultsHead").closest("table"),
   clearCheckerResultsButton: document.querySelector("#clearCheckerResultsButton"),
   embeddingModelLabel: document.querySelector("#embeddingModelLabel"),
   embeddingModelSelect: document.querySelector("#embeddingModelSelect"),
@@ -285,6 +325,53 @@ function resetCheckerMetrics() {
   dom.bestCandidateDetails.replaceChildren();
 }
 
+function resetPsoMetrics() {
+  dom.psoSelectedComponents.textContent = "--";
+  dom.psoFailedChanges.textContent = "--";
+  dom.psoFailureRate.textContent = "--";
+  dom.psoAppliedChanges.textContent = "--";
+  dom.psoAffectedIndividuals.textContent = "--";
+  dom.psoLlmCalls.textContent = "--";
+  dom.psoValidCandidates.textContent = "--";
+  dom.psoProgressFailures.textContent = "--";
+  dom.psoExecutionErrors.textContent = "--";
+}
+
+function updateSimulationModeUi() {
+  const isPsoMode = dom.simulatePsoSwitch.checked;
+  dom.psoControls.hidden = !isPsoMode;
+  dom.templateMetrics.classList.toggle("is-hidden", isPsoMode);
+  dom.psoMetrics.classList.toggle("is-hidden", !isPsoMode);
+  dom.runCount.disabled = isPsoMode;
+  [
+    dom.componentPreset,
+    dom.componentName,
+    dom.componentDefinition,
+    dom.currentComponent,
+    dom.targetComponent,
+    dom.otherComponents,
+  ].forEach((field) => {
+    field.disabled = isPsoMode;
+  });
+
+  if (isPsoMode && dom.candidateCount.value === "4") {
+    dom.candidateCount.value = "5";
+  }
+
+  resetCheckerMetrics();
+  resetPsoMetrics();
+  setResultsTableMode(isPsoMode ? "pso" : "standard");
+  setStatus(
+    dom.checkerStatusTone,
+    dom.checkerStatusTitle,
+    dom.checkerStatusDetail,
+    isPsoMode ? "Modo PSO activo" : "Modo plantilla individual",
+    isPsoMode
+      ? "Se recorrerán individuos del JSON y se evaluarán movimientos por componente sorteada."
+      : "Cada ejecución envía una solicitud independiente a LM Studio, sin historial compartido.",
+  );
+}
+
 function setCheckerRunning(isRunning) {
   dom.runTemplateButton.disabled = isRunning;
   dom.stopTemplateButton.disabled = !isRunning;
@@ -309,11 +396,14 @@ function checkerVariables() {
   };
 }
 
-function renderPrompt() {
-  const variables = checkerVariables();
+function renderPromptWithVariables(variables) {
   return getTemplateBody(dom.promptTemplate.value).replace(/\{([A-Za-z0-9_]+)\}/g, (match, key) => (
     Object.hasOwn(variables, key) ? variables[key] : match
   ));
+}
+
+function renderPrompt() {
+  return renderPromptWithVariables(checkerVariables());
 }
 
 function wordCount(text) {
@@ -497,17 +587,22 @@ function readCheckerConfig() {
   const endpoint = normalizeEndpoint(dom.lmEndpoint.value);
   const model = selectedLlmModel();
   const variables = checkerVariables();
+  const simulatePso = dom.simulatePsoSwitch.checked;
 
   if (!endpoint) throw new Error("Define el endpoint de LM Studio.");
   if (!model) throw new Error("Selecciona o escribe el modelo LLM.");
-  if (!variables.current_component || !variables.target_component) {
+  if (!simulatePso && (!variables.current_component || !variables.target_component)) {
     throw new Error("Current y Target son obligatorios.");
+  }
+  if (simulatePso && !variables.reference_text) {
+    throw new Error("El texto de referencia fijo es obligatorio en modo PSO.");
   }
 
   return {
     endpoint,
     apiMode: dom.lmApiMode.value,
     model,
+    simulatePso,
     embeddingModel: dom.checkerEmbeddingModel.value,
     runs: clampNumber(dom.runCount.value, 1, 200),
     expectedCandidates: clampNumber(dom.candidateCount.value, 1, 20),
@@ -520,14 +615,79 @@ function readCheckerConfig() {
     margin: clampNumber(dom.semanticMargin.value, 0, 1),
     targetCopyThreshold: clampNumber(dom.targetCopyThreshold.value, 0, 1),
     concurrency: clampNumber(dom.concurrency.value, 1, 8),
+    psoIndividualCount: clampNumber(dom.psoIndividualCount.value, 1, 200),
+    psoChangeThreshold: clampNumber(dom.psoChangeThreshold.value, 0, 1),
     current: variables.current_component,
     target: variables.target_component,
+    referenceText: variables.reference_text,
     prompt: renderPrompt(),
   };
 }
 
 function clearCheckerTables() {
   latestCheckerRows = [];
+  dom.runResultsBody.innerHTML = '<tr><td colspan="6">Sin ejecuciones todavía.</td></tr>';
+  dom.candidateResultsBody.innerHTML = '<tr><td colspan="6">Sin candidatos todavía.</td></tr>';
+}
+
+function setResultsTableMode(mode) {
+  if (mode === "pso") {
+    dom.runResultsTitle.textContent = "Movimientos PSO";
+    dom.candidateResultsTable.classList.add("wide-table");
+    dom.runResultsHead.innerHTML = `
+      <tr>
+        <th>#</th>
+        <th>Individuo</th>
+        <th>Componente</th>
+        <th>Hacia</th>
+        <th>Movimiento aplicado</th>
+        <th>Estado</th>
+      </tr>
+    `;
+    dom.candidateResultsTitle.textContent = "Candidatos por movimiento PSO";
+    dom.candidateResultsHead.innerHTML = `
+      <tr>
+        <th>Movimiento</th>
+        <th>Individuo</th>
+        <th>Componente</th>
+        <th>Hacia</th>
+        <th>Current</th>
+        <th>Target</th>
+        <th>Candidato</th>
+        <th>Similitud con target</th>
+        <th>Mejora</th>
+        <th>Validación</th>
+        <th>Aplicado</th>
+      </tr>
+    `;
+    dom.runResultsBody.innerHTML = '<tr><td colspan="6">Sin movimientos PSO todavía.</td></tr>';
+    dom.candidateResultsBody.innerHTML = '<tr><td colspan="11">Sin candidatos PSO todavía.</td></tr>';
+    return;
+  }
+
+  dom.runResultsTitle.textContent = "Resultados por ejecución";
+  dom.candidateResultsTable.classList.remove("wide-table");
+  dom.runResultsHead.innerHTML = `
+    <tr>
+      <th>#</th>
+      <th>Mejor candidato válido</th>
+      <th>Similitud</th>
+      <th>Mejora</th>
+      <th>Válidos</th>
+      <th>Estado</th>
+    </tr>
+  `;
+  dom.candidateResultsTitle.textContent = "Candidatos generados";
+  dom.candidateResultsHead.innerHTML = `
+    <tr>
+      <th>Run</th>
+      <th>Candidato</th>
+      <th>Similitud con target</th>
+      <th>Distancia</th>
+      <th>Mejora</th>
+      <th>Validación</th>
+    </tr>
+  `;
   dom.runResultsBody.innerHTML = '<tr><td colspan="6">Sin ejecuciones todavía.</td></tr>';
   dom.candidateResultsBody.innerHTML = '<tr><td colspan="6">Sin candidatos todavía.</td></tr>';
 }
@@ -665,6 +825,316 @@ async function scoreRunCandidates(runNumber, rawOutput, baseline, config) {
   };
 }
 
+async function loadPsoDatabase() {
+  if (psoDatabase) {
+    return psoDatabase;
+  }
+
+  const response = await fetch("./data/pso-individuals.json");
+  if (!response.ok) {
+    throw new Error(`No se pudo cargar la BD PSO: HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  if (!Array.isArray(payload.individuals) || payload.individuals.length < 1) {
+    throw new Error("La BD PSO no contiene individuos.");
+  }
+  const invalidIndex = payload.individuals.findIndex((individual) => !isValidPsoIndividual(individual));
+  if (invalidIndex >= 0) {
+    throw new Error(`La BD PSO tiene un individuo incompleto en la posición ${invalidIndex + 1}.`);
+  }
+
+  psoDatabase = payload;
+  dom.psoDbStatus.textContent = `BD PSO: ${payload.individuals.length} individuos cargados desde LLM/data/pso-individuals.json`;
+  return psoDatabase;
+}
+
+function psoOtherComponents(position, componentKey) {
+  return PSO_COMPONENTS
+    .filter((component) => component.key !== componentKey)
+    .map((component) => `${component.promptName} = ${position[component.key]}`)
+    .join("; ");
+}
+
+function buildPsoPrompt(movement, config) {
+  return renderPromptWithVariables({
+    num_candidates: String(config.expectedCandidates),
+    component_name: movement.component.promptName,
+    component_definition: movement.component.definition,
+    current_component: movement.current,
+    target_component: movement.target,
+    other_components: movement.otherComponents,
+    reference_text: config.referenceText,
+  });
+}
+
+function isCompletePsoVector(vector) {
+  return PSO_COMPONENTS.every((component) => typeof vector?.[component.key] === "string" && vector[component.key].trim());
+}
+
+function isValidPsoIndividual(individual) {
+  return typeof individual?.id === "string"
+    && individual.id.trim()
+    && isCompletePsoVector(individual)
+    && isCompletePsoVector(individual.pbest)
+    && isCompletePsoVector(individual.lider);
+}
+
+function createPsoMovements(individuals, config) {
+  const movements = [];
+  const simulatedPositions = new Map();
+
+  individuals.forEach((individual) => {
+    const position = {
+      rol: individual.rol,
+      topico: individual.topico,
+      accion: individual.accion,
+    };
+    simulatedPositions.set(individual.id, position);
+
+    PSO_COMPONENTS.forEach((component) => {
+      const randomValue = Math.random();
+      if (randomValue <= config.psoChangeThreshold) {
+        return;
+      }
+
+      const targetSource = Math.random() < 0.5 ? "pbest" : "lider";
+      movements.push({
+        id: `mov-${String(movements.length + 1).padStart(4, "0")}`,
+        number: movements.length + 1,
+        individualId: individual.id,
+        component,
+        componentKey: component.key,
+        source: targetSource,
+        randomValue,
+        current: position[component.key],
+        target: individual[targetSource][component.key],
+        otherComponents: psoOtherComponents(position, component.key),
+      });
+    });
+  });
+
+  return { movements, simulatedPositions };
+}
+
+async function scorePsoMovement(movement, rawOutput, config) {
+  const candidates = parseCandidates(rawOutput, config.expectedCandidates);
+  if (candidates.length === 0) {
+    return {
+      baseline: null,
+      rows: [],
+      selectedCandidate: null,
+      failureReason: "sin candidatos parseables",
+    };
+  }
+
+  const embeddings = await requestEmbeddings(config.embeddingModel, [movement.current, movement.target, ...candidates]);
+  const currentEmbedding = embeddings[0];
+  const targetEmbedding = embeddings[1];
+  const baseline = cosineSimilarity(currentEmbedding, targetEmbedding);
+  const validationConfig = {
+    ...config,
+    current: movement.current,
+    target: movement.target,
+  };
+
+  const rows = candidates.map((candidate, index) => {
+    const similarity = cosineSimilarity(embeddings[index + 2], targetEmbedding);
+    const improvement = similarity - baseline;
+    const baseReason = validationReason(candidate, candidates, validationConfig);
+    const hasSemanticProgress = improvement >= config.margin;
+    const reason = baseReason !== "valid"
+      ? baseReason
+      : similarity >= config.targetCopyThreshold ? "semantic_copy_target"
+      : hasSemanticProgress ? "valid" : "insufficient_semantic_progress";
+    return {
+      movementNumber: movement.number,
+      individualId: movement.individualId,
+      componentName: movement.component.promptName,
+      source: movement.source,
+      current: movement.current,
+      target: movement.target,
+      candidate,
+      similarity,
+      improvement,
+      reason,
+      isValidImprovement: reason === "valid",
+      applied: false,
+    };
+  });
+
+  const selectedCandidate = rows.find((row) => row.isValidImprovement) || null;
+  if (selectedCandidate) {
+    selectedCandidate.applied = true;
+  }
+
+  return {
+    baseline,
+    rows,
+    selectedCandidate,
+    failureReason: selectedCandidate ? null : "sin candidato con progreso semántico",
+  };
+}
+
+function renderPsoMovementRows(movementResults) {
+  if (movementResults.length === 0) {
+    dom.runResultsBody.innerHTML = '<tr><td colspan="6">Sin movimientos PSO todavía.</td></tr>';
+    return;
+  }
+
+  dom.runResultsBody.replaceChildren(
+    ...movementResults.map((result) => {
+      const tr = document.createElement("tr");
+      const movement = result.movement;
+      const selected = result.selectedCandidate;
+      const status = result.error
+        ? `<span class="invalid">${escapeHtml(result.error)}</span>`
+        : selected ? '<span class="valid">aplicado</span>' : `<span class="invalid">${escapeHtml(result.failureReason)}</span>`;
+      tr.innerHTML = `
+        <td>${movement.number}</td>
+        <td>${escapeHtml(movement.individualId)}</td>
+        <td>${escapeHtml(movement.component.promptName)}</td>
+        <td>${movement.source === "pbest" ? "pbest" : "líder"}</td>
+        <td>${selected ? escapeHtml(selected.candidate) : "--"}</td>
+        <td>${status}</td>
+      `;
+      return tr;
+    }),
+  );
+}
+
+function appendPsoCandidateRows(rows) {
+  if (latestCheckerRows.length === 0) {
+    dom.candidateResultsBody.replaceChildren();
+  }
+
+  latestCheckerRows.push(...rows);
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${row.movementNumber}</td>
+      <td>${escapeHtml(row.individualId)}</td>
+      <td>${escapeHtml(row.componentName)}</td>
+      <td>${row.source === "pbest" ? "pbest" : "líder"}</td>
+      <td class="context-cell">${escapeHtml(row.current)}</td>
+      <td class="context-cell">${escapeHtml(row.target)}</td>
+      <td class="context-cell">${escapeHtml(row.candidate)}</td>
+      <td>${formatNumber(row.similarity)}</td>
+      <td>${formatSigned(row.improvement)}</td>
+      <td><span class="${row.isValidImprovement ? "valid" : "invalid"}">${row.reason}</span></td>
+      <td>${row.applied ? '<span class="valid">sí</span>' : "--"}</td>
+    `;
+    dom.candidateResultsBody.append(tr);
+  });
+}
+
+function summarizePsoResults(movementResults, totalSelected = movementResults.length) {
+  const selectedCount = totalSelected;
+  const processedCount = movementResults.length;
+  const applied = movementResults.filter((result) => result.selectedCandidate).length;
+  const errored = movementResults.filter((result) => result.error).length;
+  const failed = processedCount - applied;
+  const progressFailures = movementResults.filter((result) => result.failureReason === "sin candidato con progreso semántico").length;
+  const affectedIndividuals = new Set(
+    movementResults
+      .filter((result) => result.selectedCandidate)
+      .map((result) => result.movement.individualId),
+  ).size;
+  const validCandidates = latestCheckerRows.filter((row) => row.reason === "valid").length;
+
+  dom.psoSelectedComponents.textContent = String(selectedCount);
+  dom.psoFailedChanges.textContent = String(failed);
+  dom.psoFailureRate.textContent = processedCount ? `${formatNumber((failed / processedCount) * 100, 2)}%` : "--";
+  dom.psoAppliedChanges.textContent = String(applied);
+  dom.psoAffectedIndividuals.textContent = String(affectedIndividuals);
+  dom.psoLlmCalls.textContent = String(processedCount);
+  dom.psoValidCandidates.textContent = String(validCandidates);
+  dom.psoProgressFailures.textContent = String(progressFailures);
+  dom.psoExecutionErrors.textContent = String(errored);
+
+  renderDefinitionList(dom.bestCandidateDetails, [
+    ["Componentes sorteadas", String(selectedCount)],
+    ["Cambios aplicados", String(applied)],
+    ["No pudieron cambiar", String(failed)],
+    ["Causa principal", progressFailures > 0 ? "Sin candidato con progreso semántico suficiente." : "Sin fallos de progreso registrados."],
+  ]);
+}
+
+async function runPsoSimulation(config) {
+  const database = await loadPsoDatabase();
+  const individuals = database.individuals.slice(0, config.psoIndividualCount);
+  const { movements, simulatedPositions } = createPsoMovements(individuals, config);
+  const movementResults = [];
+  let nextMovementIndex = 0;
+
+  resetPsoMetrics();
+  setResultsTableMode("pso");
+  dom.renderedPromptPreview.textContent = movements[0]
+    ? buildPsoPrompt(movements[0], config)
+    : "Ninguna componente fue sorteada para cambiar con el umbral actual.";
+  dom.psoSelectedComponents.textContent = String(movements.length);
+
+  if (movements.length === 0) {
+    summarizePsoResults([], 0);
+    setStatus(dom.checkerStatusTone, dom.checkerStatusTitle, dom.checkerStatusDetail, "Simulación sin movimientos", "Ninguna componente superó el umbral de sorteo.");
+    return;
+  }
+
+  async function movementWorker() {
+    while (!stopRequested && nextMovementIndex < movements.length) {
+      const movement = movements[nextMovementIndex];
+      nextMovementIndex += 1;
+      setStatus(
+        dom.checkerStatusTone,
+        dom.checkerStatusTitle,
+        dom.checkerStatusDetail,
+        "Simulando iteración PSO",
+        `Movimiento ${movement.number} de ${movements.length}: ${movement.individualId}/${movement.component.promptName} hacia ${movement.source}.`,
+        "busy",
+      );
+
+      try {
+        const prompt = buildPsoPrompt(movement, config);
+        const response = await callLmStudio(prompt, movement.number, config);
+        const scored = await scorePsoMovement(movement, response.raw, config);
+        const position = simulatedPositions.get(movement.individualId);
+        if (scored.selectedCandidate) {
+          position[movement.componentKey] = scored.selectedCandidate.candidate;
+        }
+
+        movementResults.push({
+          movement,
+          baseline: scored.baseline,
+          selectedCandidate: scored.selectedCandidate,
+          failureReason: scored.failureReason,
+          error: null,
+        });
+        appendPsoCandidateRows(scored.rows);
+      } catch (error) {
+        movementResults.push({
+          movement,
+          baseline: null,
+          selectedCandidate: null,
+          failureReason: "error de ejecución",
+          error: error.name === "AbortError" ? "timeout" : error.message,
+        });
+      }
+
+      movementResults.sort((a, b) => a.movement.number - b.movement.number);
+      renderPsoMovementRows(movementResults);
+      summarizePsoResults(movementResults, movements.length);
+    }
+  }
+
+  await Promise.all(Array.from({ length: config.concurrency }, () => movementWorker()));
+  setStatus(
+    dom.checkerStatusTone,
+    dom.checkerStatusTitle,
+    dom.checkerStatusDetail,
+    stopRequested ? "Simulación detenida" : "Simulación PSO completada",
+    `${movementResults.length} movimiento(s) procesado(s) de ${movements.length} sorteado(s).`,
+  );
+}
+
 async function runTemplateEvaluation() {
   let config;
   try {
@@ -677,14 +1147,28 @@ async function runTemplateEvaluation() {
   stopRequested = false;
   clearCheckerTables();
   resetCheckerMetrics();
+  resetPsoMetrics();
   dom.renderedPromptPreview.textContent = config.prompt;
   setCheckerRunning(true);
-  setStatus(dom.checkerStatusTone, dom.checkerStatusTitle, dom.checkerStatusDetail, "Calculando baseline", "Generando embeddings de Current y Target.", "busy");
+  setResultsTableMode(config.simulatePso ? "pso" : "standard");
+  setStatus(
+    dom.checkerStatusTone,
+    dom.checkerStatusTitle,
+    dom.checkerStatusDetail,
+    config.simulatePso ? "Preparando simulación PSO" : "Calculando baseline",
+    config.simulatePso ? "Cargando la BD de individuos y sorteando componentes." : "Generando embeddings de Current y Target.",
+    "busy",
+  );
 
   const runResults = [];
   let nextRun = 1;
 
   try {
+    if (config.simulatePso) {
+      await runPsoSimulation(config);
+      return;
+    }
+
     const [currentEmbedding, targetEmbedding] = await requestEmbeddings(config.embeddingModel, [config.current, config.target]);
     const baseline = cosineSimilarity(currentEmbedding, targetEmbedding);
     dom.baselineSimilarity.textContent = formatNumber(baseline);
@@ -782,6 +1266,17 @@ dom.stopTemplateButton.addEventListener("click", () => {
 dom.clearCheckerResultsButton.addEventListener("click", () => {
   clearCheckerTables();
   resetCheckerMetrics();
+  resetPsoMetrics();
+  setResultsTableMode(dom.simulatePsoSwitch.checked ? "pso" : "standard");
+});
+dom.simulatePsoSwitch.addEventListener("change", () => {
+  updateSimulationModeUi();
+  if (dom.simulatePsoSwitch.checked) {
+    loadPsoDatabase().catch((error) => {
+      dom.psoDbStatus.textContent = `BD PSO: ${error.message}`;
+      setStatus(dom.checkerStatusTone, dom.checkerStatusTitle, dom.checkerStatusDetail, "Error al cargar BD PSO", error.message, "error");
+    });
+  }
 });
 dom.componentPreset.addEventListener("change", applyComponentPreset);
 dom.llmModelSelect.addEventListener("change", () => {
@@ -818,3 +1313,4 @@ dom.copyEmbeddingBButton.addEventListener("click", () => {
 
 renderEmbeddingModelDetails();
 dom.renderedPromptPreview.textContent = renderPrompt();
+updateSimulationModeUi();

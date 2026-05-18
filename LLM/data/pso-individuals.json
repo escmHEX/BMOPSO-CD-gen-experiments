@@ -1,0 +1,3211 @@
+{
+  "schema_version": 1,
+  "description": "Synthetic PSO iteration individuals for prompt component movement testing.",
+  "component_keys": [
+    "rol",
+    "topico",
+    "accion"
+  ],
+  "individuals": [
+    {
+      "id": "ind-001",
+      "rol": "local resident affected by flooding",
+      "topico": "flooded housing",
+      "accion": "report urgent shelter needs",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "emergency shelter shortage",
+        "accion": "share verified flood damage reports"
+      },
+      "lider": {
+        "rol": "clinic responder reporting flood impacts",
+        "topico": "family evacuation and displacement",
+        "accion": "document residential flood losses"
+      }
+    },
+    {
+      "id": "ind-002",
+      "rol": "neighborhood volunteer near evacuation zones",
+      "topico": "contaminated drinking water",
+      "accion": "request clean water delivery",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "settlement mudslide danger",
+        "accion": "report conditions inside school shelters"
+      },
+      "lider": {
+        "rol": "vendor reporting marketplace flood damage",
+        "topico": "overflowing emergency shelters",
+        "accion": "summarize evacuee family support needs"
+      }
+    },
+    {
+      "id": "ind-003",
+      "rol": "municipal worker monitoring flood damage",
+      "topico": "river overflow near homes",
+      "accion": "report school shelter conditions",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "evacuee transport safety",
+        "accion": "summarize displaced family assistance needs"
+      },
+      "lider": {
+        "rol": "driver reporting unsafe flooded roads",
+        "topico": "delayed flood warning communication",
+        "accion": "alert emergency teams about water rise"
+      }
+    },
+    {
+      "id": "ind-004",
+      "rol": "teacher coordinating family shelter updates",
+      "topico": "mudslide risk near settlements",
+      "accion": "request emergency housing assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "unsafe drinking water after floods",
+        "accion": "alert volunteers to vulnerable residents"
+      },
+      "lider": {
+        "rol": "local official relaying shelter requests",
+        "topico": "transport support for displaced families",
+        "accion": "share official flood impact updates"
+      }
+    },
+    {
+      "id": "ind-005",
+      "rol": "clinic nurse supporting displaced patients",
+      "topico": "road closures from debris",
+      "accion": "report medical access problems",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "household relief supply losses",
+        "accion": "request safe drinking water supplies"
+      },
+      "lider": {
+        "rol": "case worker documenting evacuee needs",
+        "topico": "public infrastructure flood damage",
+        "accion": "describe unsafe evacuation corridors"
+      }
+    },
+    {
+      "id": "ind-006",
+      "rol": "community radio reporter covering rainfall impacts",
+      "topico": "emergency food distribution",
+      "accion": "share community damage observations",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "shelter medical support needs",
+        "accion": "summarize immediate relief priorities"
+      },
+      "lider": {
+        "rol": "older adult reporting evacuation barriers",
+        "topico": "lost food and household supplies",
+        "accion": "request urgent shelter placement"
+      }
+    },
+    {
+      "id": "ind-007",
+      "rol": "rural farmer facing river overflow",
+      "topico": "rain damage to local businesses",
+      "accion": "describe blocked evacuation access",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "clinic access disruption",
+        "accion": "explain overcrowded shelter conditions"
+      },
+      "lider": {
+        "rol": "emergency volunteer documenting route damage",
+        "topico": "storm damaged school shelters",
+        "accion": "report verified housing flood damage"
+      }
+    },
+    {
+      "id": "ind-008",
+      "rol": "small business owner after storm damage",
+      "topico": "damaged evacuation routes",
+      "accion": "explain shelter overcrowding conditions",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "temporary shelter management",
+        "accion": "report emergency shelter shortages"
+      },
+      "lider": {
+        "rol": "tenant representative reporting flood losses",
+        "topico": "health service access barriers",
+        "accion": "report ongoing recovery assistance gaps"
+      }
+    },
+    {
+      "id": "ind-009",
+      "rol": "parent seeking safe housing for children",
+      "topico": "blocked access to clinics",
+      "accion": "alert volunteers about vulnerable families",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "business losses from rain damage",
+        "accion": "notify responders about isolated households"
+      },
+      "lider": {
+        "rol": "caregiver requesting safer housing",
+        "topico": "unsafe evacuation route closures",
+        "accion": "summarize critical disaster relief needs"
+      }
+    },
+    {
+      "id": "ind-010",
+      "rol": "elderly resident isolated by flood waters",
+      "topico": "storm damage in schools",
+      "accion": "share flood damage updates",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "rainfall driven family displacement",
+        "accion": "describe evacuation route blockages"
+      },
+      "lider": {
+        "rol": "affected resident reporting shelter needs",
+        "topico": "rainfall damage to small businesses",
+        "accion": "request cleanup of blocked drainage"
+      }
+    },
+    {
+      "id": "ind-011",
+      "rol": "bus driver observing blocked evacuation routes",
+      "topico": "loss of household supplies",
+      "accion": "ask for transport support",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "debris blocked road access",
+        "accion": "request emergency food and blankets"
+      },
+      "lider": {
+        "rol": "coastal community member reporting surge impacts",
+        "topico": "food aid distribution shortage",
+        "accion": "alert aid groups about at-risk families"
+      }
+    },
+    {
+      "id": "ind-012",
+      "rol": "school principal hosting emergency shelter",
+      "topico": "damaged community infrastructure",
+      "accion": "request drainage cleanup assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "missing neighborhood flood alerts",
+        "accion": "alert officials about rising water levels"
+      },
+      "lider": {
+        "rol": "shop owner reporting disaster losses",
+        "topico": "emergency road obstruction",
+        "accion": "share local flood damage evidence"
+      }
+    },
+    {
+      "id": "ind-013",
+      "rol": "local firefighter assessing damaged homes",
+      "topico": "safe transport for evacuees",
+      "accion": "alert authorities about rising water",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "river flooding near residences",
+        "accion": "share neighborhood flood impact observations"
+      },
+      "lider": {
+        "rol": "verified community flood damage reporter",
+        "topico": "mudslide threats after heavy rain",
+        "accion": "report school shelter resource gaps"
+      }
+    },
+    {
+      "id": "ind-014",
+      "rol": "community organizer collecting damage reports",
+      "topico": "neighborhood flood warning gaps",
+      "accion": "notify responders about isolated residents",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "damaged local public facilities",
+        "accion": "document homes damaged by floodwater"
+      },
+      "lider": {
+        "rol": "relief organizer reporting unmet needs",
+        "topico": "river overflow damage to homes",
+        "accion": "request food relief and warm blankets"
+      }
+    },
+    {
+      "id": "ind-015",
+      "rol": "coastal resident tracking storm surge",
+      "topico": "urgent shelter capacity",
+      "accion": "summarize urgent relief priorities",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "residential flood damage",
+        "accion": "request drainage and debris cleanup"
+      },
+      "lider": {
+        "rol": "riverside resident reporting overflow damage",
+        "topico": "post flood water contamination",
+        "accion": "describe road hazards blocking response"
+      }
+    },
+    {
+      "id": "ind-016",
+      "rol": "housing committee member reviewing flood claims",
+      "topico": "family displacement after rainfall",
+      "accion": "summarize family displacement needs",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "school facility storm damage",
+        "accion": "report disrupted access to medical care"
+      },
+      "lider": {
+        "rol": "community health aide reporting household risks",
+        "topico": "verified household flood losses",
+        "accion": "notify teams about stranded residents"
+      }
+    },
+    {
+      "id": "ind-017",
+      "rol": "social worker assisting evacuated families",
+      "topico": "power outages after flooding",
+      "accion": "describe road debris hazards",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "market area flood damage",
+        "accion": "report community recovery support needs"
+      },
+      "lider": {
+        "rol": "first responder documenting damaged housing",
+        "topico": "medical care gaps in shelters",
+        "accion": "ask responders for transport assistance"
+      }
+    },
+    {
+      "id": "ind-018",
+      "rol": "market vendor impacted by heavy rain",
+      "topico": "temporary shelter coordination",
+      "accion": "report neighborhood recovery needs",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "blocked evacuation corridors",
+        "accion": "ask for evacuation transport help"
+      },
+      "lider": {
+        "rol": "radio correspondent reporting storm damage",
+        "topico": "commercial street flood impacts",
+        "accion": "explain emergency shelter overcrowding"
+      }
+    },
+    {
+      "id": "ind-019",
+      "rol": "student documenting neighborhood flooding",
+      "topico": "flooded market streets",
+      "accion": "document damaged homes after rainfall",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "flood related power outage",
+        "accion": "request temporary housing support"
+      },
+      "lider": {
+        "rol": "youth volunteer reporting neighborhood damage",
+        "topico": "shelter registration and capacity",
+        "accion": "report barriers to urgent healthcare"
+      }
+    },
+    {
+      "id": "ind-020",
+      "rol": "health promoter checking vulnerable households",
+      "topico": "medical needs in shelters",
+      "accion": "request food and blankets",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "emergency food relief needs",
+        "accion": "describe debris blocking emergency roads"
+      },
+      "lider": {
+        "rol": "school administrator reporting shelter status",
+        "topico": "neighborhood blackout after flooding",
+        "accion": "request potable water assistance"
+      }
+    },
+    {
+      "id": "ind-021",
+      "rol": "local resident affected by flooding",
+      "topico": "flooded housing",
+      "accion": "report urgent shelter needs",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "emergency shelter shortage",
+        "accion": "share verified flood damage reports"
+      },
+      "lider": {
+        "rol": "clinic responder reporting flood impacts",
+        "topico": "family evacuation and displacement",
+        "accion": "document residential flood losses"
+      }
+    },
+    {
+      "id": "ind-022",
+      "rol": "neighborhood volunteer near evacuation zones",
+      "topico": "contaminated drinking water",
+      "accion": "request clean water delivery",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "settlement mudslide danger",
+        "accion": "report conditions inside school shelters"
+      },
+      "lider": {
+        "rol": "vendor reporting marketplace flood damage",
+        "topico": "overflowing emergency shelters",
+        "accion": "summarize evacuee family support needs"
+      }
+    },
+    {
+      "id": "ind-023",
+      "rol": "municipal worker monitoring flood damage",
+      "topico": "river overflow near homes",
+      "accion": "report school shelter conditions",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "evacuee transport safety",
+        "accion": "summarize displaced family assistance needs"
+      },
+      "lider": {
+        "rol": "driver reporting unsafe flooded roads",
+        "topico": "delayed flood warning communication",
+        "accion": "alert emergency teams about water rise"
+      }
+    },
+    {
+      "id": "ind-024",
+      "rol": "teacher coordinating family shelter updates",
+      "topico": "mudslide risk near settlements",
+      "accion": "request emergency housing assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "unsafe drinking water after floods",
+        "accion": "alert volunteers to vulnerable residents"
+      },
+      "lider": {
+        "rol": "local official relaying shelter requests",
+        "topico": "transport support for displaced families",
+        "accion": "share official flood impact updates"
+      }
+    },
+    {
+      "id": "ind-025",
+      "rol": "clinic nurse supporting displaced patients",
+      "topico": "road closures from debris",
+      "accion": "report medical access problems",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "household relief supply losses",
+        "accion": "request safe drinking water supplies"
+      },
+      "lider": {
+        "rol": "case worker documenting evacuee needs",
+        "topico": "public infrastructure flood damage",
+        "accion": "describe unsafe evacuation corridors"
+      }
+    },
+    {
+      "id": "ind-026",
+      "rol": "community radio reporter covering rainfall impacts",
+      "topico": "emergency food distribution",
+      "accion": "share community damage observations",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "shelter medical support needs",
+        "accion": "summarize immediate relief priorities"
+      },
+      "lider": {
+        "rol": "older adult reporting evacuation barriers",
+        "topico": "lost food and household supplies",
+        "accion": "request urgent shelter placement"
+      }
+    },
+    {
+      "id": "ind-027",
+      "rol": "rural farmer facing river overflow",
+      "topico": "rain damage to local businesses",
+      "accion": "describe blocked evacuation access",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "clinic access disruption",
+        "accion": "explain overcrowded shelter conditions"
+      },
+      "lider": {
+        "rol": "emergency volunteer documenting route damage",
+        "topico": "storm damaged school shelters",
+        "accion": "report verified housing flood damage"
+      }
+    },
+    {
+      "id": "ind-028",
+      "rol": "small business owner after storm damage",
+      "topico": "damaged evacuation routes",
+      "accion": "explain shelter overcrowding conditions",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "temporary shelter management",
+        "accion": "report emergency shelter shortages"
+      },
+      "lider": {
+        "rol": "tenant representative reporting flood losses",
+        "topico": "health service access barriers",
+        "accion": "report ongoing recovery assistance gaps"
+      }
+    },
+    {
+      "id": "ind-029",
+      "rol": "parent seeking safe housing for children",
+      "topico": "blocked access to clinics",
+      "accion": "alert volunteers about vulnerable families",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "business losses from rain damage",
+        "accion": "notify responders about isolated households"
+      },
+      "lider": {
+        "rol": "caregiver requesting safer housing",
+        "topico": "unsafe evacuation route closures",
+        "accion": "summarize critical disaster relief needs"
+      }
+    },
+    {
+      "id": "ind-030",
+      "rol": "elderly resident isolated by flood waters",
+      "topico": "storm damage in schools",
+      "accion": "share flood damage updates",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "rainfall driven family displacement",
+        "accion": "describe evacuation route blockages"
+      },
+      "lider": {
+        "rol": "affected resident reporting shelter needs",
+        "topico": "rainfall damage to small businesses",
+        "accion": "request cleanup of blocked drainage"
+      }
+    },
+    {
+      "id": "ind-031",
+      "rol": "bus driver observing blocked evacuation routes",
+      "topico": "loss of household supplies",
+      "accion": "ask for transport support",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "debris blocked road access",
+        "accion": "request emergency food and blankets"
+      },
+      "lider": {
+        "rol": "coastal community member reporting surge impacts",
+        "topico": "food aid distribution shortage",
+        "accion": "alert aid groups about at-risk families"
+      }
+    },
+    {
+      "id": "ind-032",
+      "rol": "school principal hosting emergency shelter",
+      "topico": "damaged community infrastructure",
+      "accion": "request drainage cleanup assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "missing neighborhood flood alerts",
+        "accion": "alert officials about rising water levels"
+      },
+      "lider": {
+        "rol": "shop owner reporting disaster losses",
+        "topico": "emergency road obstruction",
+        "accion": "share local flood damage evidence"
+      }
+    },
+    {
+      "id": "ind-033",
+      "rol": "local firefighter assessing damaged homes",
+      "topico": "safe transport for evacuees",
+      "accion": "alert authorities about rising water",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "river flooding near residences",
+        "accion": "share neighborhood flood impact observations"
+      },
+      "lider": {
+        "rol": "verified community flood damage reporter",
+        "topico": "mudslide threats after heavy rain",
+        "accion": "report school shelter resource gaps"
+      }
+    },
+    {
+      "id": "ind-034",
+      "rol": "community organizer collecting damage reports",
+      "topico": "neighborhood flood warning gaps",
+      "accion": "notify responders about isolated residents",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "damaged local public facilities",
+        "accion": "document homes damaged by floodwater"
+      },
+      "lider": {
+        "rol": "relief organizer reporting unmet needs",
+        "topico": "river overflow damage to homes",
+        "accion": "request food relief and warm blankets"
+      }
+    },
+    {
+      "id": "ind-035",
+      "rol": "coastal resident tracking storm surge",
+      "topico": "urgent shelter capacity",
+      "accion": "summarize urgent relief priorities",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "residential flood damage",
+        "accion": "request drainage and debris cleanup"
+      },
+      "lider": {
+        "rol": "riverside resident reporting overflow damage",
+        "topico": "post flood water contamination",
+        "accion": "describe road hazards blocking response"
+      }
+    },
+    {
+      "id": "ind-036",
+      "rol": "housing committee member reviewing flood claims",
+      "topico": "family displacement after rainfall",
+      "accion": "summarize family displacement needs",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "school facility storm damage",
+        "accion": "report disrupted access to medical care"
+      },
+      "lider": {
+        "rol": "community health aide reporting household risks",
+        "topico": "verified household flood losses",
+        "accion": "notify teams about stranded residents"
+      }
+    },
+    {
+      "id": "ind-037",
+      "rol": "social worker assisting evacuated families",
+      "topico": "power outages after flooding",
+      "accion": "describe road debris hazards",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "market area flood damage",
+        "accion": "report community recovery support needs"
+      },
+      "lider": {
+        "rol": "first responder documenting damaged housing",
+        "topico": "medical care gaps in shelters",
+        "accion": "ask responders for transport assistance"
+      }
+    },
+    {
+      "id": "ind-038",
+      "rol": "market vendor impacted by heavy rain",
+      "topico": "temporary shelter coordination",
+      "accion": "report neighborhood recovery needs",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "blocked evacuation corridors",
+        "accion": "ask for evacuation transport help"
+      },
+      "lider": {
+        "rol": "radio correspondent reporting storm damage",
+        "topico": "commercial street flood impacts",
+        "accion": "explain emergency shelter overcrowding"
+      }
+    },
+    {
+      "id": "ind-039",
+      "rol": "student documenting neighborhood flooding",
+      "topico": "flooded market streets",
+      "accion": "document damaged homes after rainfall",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "flood related power outage",
+        "accion": "request temporary housing support"
+      },
+      "lider": {
+        "rol": "youth volunteer reporting neighborhood damage",
+        "topico": "shelter registration and capacity",
+        "accion": "report barriers to urgent healthcare"
+      }
+    },
+    {
+      "id": "ind-040",
+      "rol": "health promoter checking vulnerable households",
+      "topico": "medical needs in shelters",
+      "accion": "request food and blankets",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "emergency food relief needs",
+        "accion": "describe debris blocking emergency roads"
+      },
+      "lider": {
+        "rol": "school administrator reporting shelter status",
+        "topico": "neighborhood blackout after flooding",
+        "accion": "request potable water assistance"
+      }
+    },
+    {
+      "id": "ind-041",
+      "rol": "local resident affected by flooding",
+      "topico": "flooded housing",
+      "accion": "report urgent shelter needs",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "emergency shelter shortage",
+        "accion": "share verified flood damage reports"
+      },
+      "lider": {
+        "rol": "clinic responder reporting flood impacts",
+        "topico": "family evacuation and displacement",
+        "accion": "document residential flood losses"
+      }
+    },
+    {
+      "id": "ind-042",
+      "rol": "neighborhood volunteer near evacuation zones",
+      "topico": "contaminated drinking water",
+      "accion": "request clean water delivery",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "settlement mudslide danger",
+        "accion": "report conditions inside school shelters"
+      },
+      "lider": {
+        "rol": "vendor reporting marketplace flood damage",
+        "topico": "overflowing emergency shelters",
+        "accion": "summarize evacuee family support needs"
+      }
+    },
+    {
+      "id": "ind-043",
+      "rol": "municipal worker monitoring flood damage",
+      "topico": "river overflow near homes",
+      "accion": "report school shelter conditions",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "evacuee transport safety",
+        "accion": "summarize displaced family assistance needs"
+      },
+      "lider": {
+        "rol": "driver reporting unsafe flooded roads",
+        "topico": "delayed flood warning communication",
+        "accion": "alert emergency teams about water rise"
+      }
+    },
+    {
+      "id": "ind-044",
+      "rol": "teacher coordinating family shelter updates",
+      "topico": "mudslide risk near settlements",
+      "accion": "request emergency housing assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "unsafe drinking water after floods",
+        "accion": "alert volunteers to vulnerable residents"
+      },
+      "lider": {
+        "rol": "local official relaying shelter requests",
+        "topico": "transport support for displaced families",
+        "accion": "share official flood impact updates"
+      }
+    },
+    {
+      "id": "ind-045",
+      "rol": "clinic nurse supporting displaced patients",
+      "topico": "road closures from debris",
+      "accion": "report medical access problems",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "household relief supply losses",
+        "accion": "request safe drinking water supplies"
+      },
+      "lider": {
+        "rol": "case worker documenting evacuee needs",
+        "topico": "public infrastructure flood damage",
+        "accion": "describe unsafe evacuation corridors"
+      }
+    },
+    {
+      "id": "ind-046",
+      "rol": "community radio reporter covering rainfall impacts",
+      "topico": "emergency food distribution",
+      "accion": "share community damage observations",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "shelter medical support needs",
+        "accion": "summarize immediate relief priorities"
+      },
+      "lider": {
+        "rol": "older adult reporting evacuation barriers",
+        "topico": "lost food and household supplies",
+        "accion": "request urgent shelter placement"
+      }
+    },
+    {
+      "id": "ind-047",
+      "rol": "rural farmer facing river overflow",
+      "topico": "rain damage to local businesses",
+      "accion": "describe blocked evacuation access",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "clinic access disruption",
+        "accion": "explain overcrowded shelter conditions"
+      },
+      "lider": {
+        "rol": "emergency volunteer documenting route damage",
+        "topico": "storm damaged school shelters",
+        "accion": "report verified housing flood damage"
+      }
+    },
+    {
+      "id": "ind-048",
+      "rol": "small business owner after storm damage",
+      "topico": "damaged evacuation routes",
+      "accion": "explain shelter overcrowding conditions",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "temporary shelter management",
+        "accion": "report emergency shelter shortages"
+      },
+      "lider": {
+        "rol": "tenant representative reporting flood losses",
+        "topico": "health service access barriers",
+        "accion": "report ongoing recovery assistance gaps"
+      }
+    },
+    {
+      "id": "ind-049",
+      "rol": "parent seeking safe housing for children",
+      "topico": "blocked access to clinics",
+      "accion": "alert volunteers about vulnerable families",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "business losses from rain damage",
+        "accion": "notify responders about isolated households"
+      },
+      "lider": {
+        "rol": "caregiver requesting safer housing",
+        "topico": "unsafe evacuation route closures",
+        "accion": "summarize critical disaster relief needs"
+      }
+    },
+    {
+      "id": "ind-050",
+      "rol": "elderly resident isolated by flood waters",
+      "topico": "storm damage in schools",
+      "accion": "share flood damage updates",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "rainfall driven family displacement",
+        "accion": "describe evacuation route blockages"
+      },
+      "lider": {
+        "rol": "affected resident reporting shelter needs",
+        "topico": "rainfall damage to small businesses",
+        "accion": "request cleanup of blocked drainage"
+      }
+    },
+    {
+      "id": "ind-051",
+      "rol": "bus driver observing blocked evacuation routes",
+      "topico": "loss of household supplies",
+      "accion": "ask for transport support",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "debris blocked road access",
+        "accion": "request emergency food and blankets"
+      },
+      "lider": {
+        "rol": "coastal community member reporting surge impacts",
+        "topico": "food aid distribution shortage",
+        "accion": "alert aid groups about at-risk families"
+      }
+    },
+    {
+      "id": "ind-052",
+      "rol": "school principal hosting emergency shelter",
+      "topico": "damaged community infrastructure",
+      "accion": "request drainage cleanup assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "missing neighborhood flood alerts",
+        "accion": "alert officials about rising water levels"
+      },
+      "lider": {
+        "rol": "shop owner reporting disaster losses",
+        "topico": "emergency road obstruction",
+        "accion": "share local flood damage evidence"
+      }
+    },
+    {
+      "id": "ind-053",
+      "rol": "local firefighter assessing damaged homes",
+      "topico": "safe transport for evacuees",
+      "accion": "alert authorities about rising water",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "river flooding near residences",
+        "accion": "share neighborhood flood impact observations"
+      },
+      "lider": {
+        "rol": "verified community flood damage reporter",
+        "topico": "mudslide threats after heavy rain",
+        "accion": "report school shelter resource gaps"
+      }
+    },
+    {
+      "id": "ind-054",
+      "rol": "community organizer collecting damage reports",
+      "topico": "neighborhood flood warning gaps",
+      "accion": "notify responders about isolated residents",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "damaged local public facilities",
+        "accion": "document homes damaged by floodwater"
+      },
+      "lider": {
+        "rol": "relief organizer reporting unmet needs",
+        "topico": "river overflow damage to homes",
+        "accion": "request food relief and warm blankets"
+      }
+    },
+    {
+      "id": "ind-055",
+      "rol": "coastal resident tracking storm surge",
+      "topico": "urgent shelter capacity",
+      "accion": "summarize urgent relief priorities",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "residential flood damage",
+        "accion": "request drainage and debris cleanup"
+      },
+      "lider": {
+        "rol": "riverside resident reporting overflow damage",
+        "topico": "post flood water contamination",
+        "accion": "describe road hazards blocking response"
+      }
+    },
+    {
+      "id": "ind-056",
+      "rol": "housing committee member reviewing flood claims",
+      "topico": "family displacement after rainfall",
+      "accion": "summarize family displacement needs",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "school facility storm damage",
+        "accion": "report disrupted access to medical care"
+      },
+      "lider": {
+        "rol": "community health aide reporting household risks",
+        "topico": "verified household flood losses",
+        "accion": "notify teams about stranded residents"
+      }
+    },
+    {
+      "id": "ind-057",
+      "rol": "social worker assisting evacuated families",
+      "topico": "power outages after flooding",
+      "accion": "describe road debris hazards",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "market area flood damage",
+        "accion": "report community recovery support needs"
+      },
+      "lider": {
+        "rol": "first responder documenting damaged housing",
+        "topico": "medical care gaps in shelters",
+        "accion": "ask responders for transport assistance"
+      }
+    },
+    {
+      "id": "ind-058",
+      "rol": "market vendor impacted by heavy rain",
+      "topico": "temporary shelter coordination",
+      "accion": "report neighborhood recovery needs",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "blocked evacuation corridors",
+        "accion": "ask for evacuation transport help"
+      },
+      "lider": {
+        "rol": "radio correspondent reporting storm damage",
+        "topico": "commercial street flood impacts",
+        "accion": "explain emergency shelter overcrowding"
+      }
+    },
+    {
+      "id": "ind-059",
+      "rol": "student documenting neighborhood flooding",
+      "topico": "flooded market streets",
+      "accion": "document damaged homes after rainfall",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "flood related power outage",
+        "accion": "request temporary housing support"
+      },
+      "lider": {
+        "rol": "youth volunteer reporting neighborhood damage",
+        "topico": "shelter registration and capacity",
+        "accion": "report barriers to urgent healthcare"
+      }
+    },
+    {
+      "id": "ind-060",
+      "rol": "health promoter checking vulnerable households",
+      "topico": "medical needs in shelters",
+      "accion": "request food and blankets",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "emergency food relief needs",
+        "accion": "describe debris blocking emergency roads"
+      },
+      "lider": {
+        "rol": "school administrator reporting shelter status",
+        "topico": "neighborhood blackout after flooding",
+        "accion": "request potable water assistance"
+      }
+    },
+    {
+      "id": "ind-061",
+      "rol": "local resident affected by flooding",
+      "topico": "flooded housing",
+      "accion": "report urgent shelter needs",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "emergency shelter shortage",
+        "accion": "share verified flood damage reports"
+      },
+      "lider": {
+        "rol": "clinic responder reporting flood impacts",
+        "topico": "family evacuation and displacement",
+        "accion": "document residential flood losses"
+      }
+    },
+    {
+      "id": "ind-062",
+      "rol": "neighborhood volunteer near evacuation zones",
+      "topico": "contaminated drinking water",
+      "accion": "request clean water delivery",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "settlement mudslide danger",
+        "accion": "report conditions inside school shelters"
+      },
+      "lider": {
+        "rol": "vendor reporting marketplace flood damage",
+        "topico": "overflowing emergency shelters",
+        "accion": "summarize evacuee family support needs"
+      }
+    },
+    {
+      "id": "ind-063",
+      "rol": "municipal worker monitoring flood damage",
+      "topico": "river overflow near homes",
+      "accion": "report school shelter conditions",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "evacuee transport safety",
+        "accion": "summarize displaced family assistance needs"
+      },
+      "lider": {
+        "rol": "driver reporting unsafe flooded roads",
+        "topico": "delayed flood warning communication",
+        "accion": "alert emergency teams about water rise"
+      }
+    },
+    {
+      "id": "ind-064",
+      "rol": "teacher coordinating family shelter updates",
+      "topico": "mudslide risk near settlements",
+      "accion": "request emergency housing assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "unsafe drinking water after floods",
+        "accion": "alert volunteers to vulnerable residents"
+      },
+      "lider": {
+        "rol": "local official relaying shelter requests",
+        "topico": "transport support for displaced families",
+        "accion": "share official flood impact updates"
+      }
+    },
+    {
+      "id": "ind-065",
+      "rol": "clinic nurse supporting displaced patients",
+      "topico": "road closures from debris",
+      "accion": "report medical access problems",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "household relief supply losses",
+        "accion": "request safe drinking water supplies"
+      },
+      "lider": {
+        "rol": "case worker documenting evacuee needs",
+        "topico": "public infrastructure flood damage",
+        "accion": "describe unsafe evacuation corridors"
+      }
+    },
+    {
+      "id": "ind-066",
+      "rol": "community radio reporter covering rainfall impacts",
+      "topico": "emergency food distribution",
+      "accion": "share community damage observations",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "shelter medical support needs",
+        "accion": "summarize immediate relief priorities"
+      },
+      "lider": {
+        "rol": "older adult reporting evacuation barriers",
+        "topico": "lost food and household supplies",
+        "accion": "request urgent shelter placement"
+      }
+    },
+    {
+      "id": "ind-067",
+      "rol": "rural farmer facing river overflow",
+      "topico": "rain damage to local businesses",
+      "accion": "describe blocked evacuation access",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "clinic access disruption",
+        "accion": "explain overcrowded shelter conditions"
+      },
+      "lider": {
+        "rol": "emergency volunteer documenting route damage",
+        "topico": "storm damaged school shelters",
+        "accion": "report verified housing flood damage"
+      }
+    },
+    {
+      "id": "ind-068",
+      "rol": "small business owner after storm damage",
+      "topico": "damaged evacuation routes",
+      "accion": "explain shelter overcrowding conditions",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "temporary shelter management",
+        "accion": "report emergency shelter shortages"
+      },
+      "lider": {
+        "rol": "tenant representative reporting flood losses",
+        "topico": "health service access barriers",
+        "accion": "report ongoing recovery assistance gaps"
+      }
+    },
+    {
+      "id": "ind-069",
+      "rol": "parent seeking safe housing for children",
+      "topico": "blocked access to clinics",
+      "accion": "alert volunteers about vulnerable families",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "business losses from rain damage",
+        "accion": "notify responders about isolated households"
+      },
+      "lider": {
+        "rol": "caregiver requesting safer housing",
+        "topico": "unsafe evacuation route closures",
+        "accion": "summarize critical disaster relief needs"
+      }
+    },
+    {
+      "id": "ind-070",
+      "rol": "elderly resident isolated by flood waters",
+      "topico": "storm damage in schools",
+      "accion": "share flood damage updates",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "rainfall driven family displacement",
+        "accion": "describe evacuation route blockages"
+      },
+      "lider": {
+        "rol": "affected resident reporting shelter needs",
+        "topico": "rainfall damage to small businesses",
+        "accion": "request cleanup of blocked drainage"
+      }
+    },
+    {
+      "id": "ind-071",
+      "rol": "bus driver observing blocked evacuation routes",
+      "topico": "loss of household supplies",
+      "accion": "ask for transport support",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "debris blocked road access",
+        "accion": "request emergency food and blankets"
+      },
+      "lider": {
+        "rol": "coastal community member reporting surge impacts",
+        "topico": "food aid distribution shortage",
+        "accion": "alert aid groups about at-risk families"
+      }
+    },
+    {
+      "id": "ind-072",
+      "rol": "school principal hosting emergency shelter",
+      "topico": "damaged community infrastructure",
+      "accion": "request drainage cleanup assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "missing neighborhood flood alerts",
+        "accion": "alert officials about rising water levels"
+      },
+      "lider": {
+        "rol": "shop owner reporting disaster losses",
+        "topico": "emergency road obstruction",
+        "accion": "share local flood damage evidence"
+      }
+    },
+    {
+      "id": "ind-073",
+      "rol": "local firefighter assessing damaged homes",
+      "topico": "safe transport for evacuees",
+      "accion": "alert authorities about rising water",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "river flooding near residences",
+        "accion": "share neighborhood flood impact observations"
+      },
+      "lider": {
+        "rol": "verified community flood damage reporter",
+        "topico": "mudslide threats after heavy rain",
+        "accion": "report school shelter resource gaps"
+      }
+    },
+    {
+      "id": "ind-074",
+      "rol": "community organizer collecting damage reports",
+      "topico": "neighborhood flood warning gaps",
+      "accion": "notify responders about isolated residents",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "damaged local public facilities",
+        "accion": "document homes damaged by floodwater"
+      },
+      "lider": {
+        "rol": "relief organizer reporting unmet needs",
+        "topico": "river overflow damage to homes",
+        "accion": "request food relief and warm blankets"
+      }
+    },
+    {
+      "id": "ind-075",
+      "rol": "coastal resident tracking storm surge",
+      "topico": "urgent shelter capacity",
+      "accion": "summarize urgent relief priorities",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "residential flood damage",
+        "accion": "request drainage and debris cleanup"
+      },
+      "lider": {
+        "rol": "riverside resident reporting overflow damage",
+        "topico": "post flood water contamination",
+        "accion": "describe road hazards blocking response"
+      }
+    },
+    {
+      "id": "ind-076",
+      "rol": "housing committee member reviewing flood claims",
+      "topico": "family displacement after rainfall",
+      "accion": "summarize family displacement needs",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "school facility storm damage",
+        "accion": "report disrupted access to medical care"
+      },
+      "lider": {
+        "rol": "community health aide reporting household risks",
+        "topico": "verified household flood losses",
+        "accion": "notify teams about stranded residents"
+      }
+    },
+    {
+      "id": "ind-077",
+      "rol": "social worker assisting evacuated families",
+      "topico": "power outages after flooding",
+      "accion": "describe road debris hazards",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "market area flood damage",
+        "accion": "report community recovery support needs"
+      },
+      "lider": {
+        "rol": "first responder documenting damaged housing",
+        "topico": "medical care gaps in shelters",
+        "accion": "ask responders for transport assistance"
+      }
+    },
+    {
+      "id": "ind-078",
+      "rol": "market vendor impacted by heavy rain",
+      "topico": "temporary shelter coordination",
+      "accion": "report neighborhood recovery needs",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "blocked evacuation corridors",
+        "accion": "ask for evacuation transport help"
+      },
+      "lider": {
+        "rol": "radio correspondent reporting storm damage",
+        "topico": "commercial street flood impacts",
+        "accion": "explain emergency shelter overcrowding"
+      }
+    },
+    {
+      "id": "ind-079",
+      "rol": "student documenting neighborhood flooding",
+      "topico": "flooded market streets",
+      "accion": "document damaged homes after rainfall",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "flood related power outage",
+        "accion": "request temporary housing support"
+      },
+      "lider": {
+        "rol": "youth volunteer reporting neighborhood damage",
+        "topico": "shelter registration and capacity",
+        "accion": "report barriers to urgent healthcare"
+      }
+    },
+    {
+      "id": "ind-080",
+      "rol": "health promoter checking vulnerable households",
+      "topico": "medical needs in shelters",
+      "accion": "request food and blankets",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "emergency food relief needs",
+        "accion": "describe debris blocking emergency roads"
+      },
+      "lider": {
+        "rol": "school administrator reporting shelter status",
+        "topico": "neighborhood blackout after flooding",
+        "accion": "request potable water assistance"
+      }
+    },
+    {
+      "id": "ind-081",
+      "rol": "local resident affected by flooding",
+      "topico": "flooded housing",
+      "accion": "report urgent shelter needs",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "emergency shelter shortage",
+        "accion": "share verified flood damage reports"
+      },
+      "lider": {
+        "rol": "clinic responder reporting flood impacts",
+        "topico": "family evacuation and displacement",
+        "accion": "document residential flood losses"
+      }
+    },
+    {
+      "id": "ind-082",
+      "rol": "neighborhood volunteer near evacuation zones",
+      "topico": "contaminated drinking water",
+      "accion": "request clean water delivery",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "settlement mudslide danger",
+        "accion": "report conditions inside school shelters"
+      },
+      "lider": {
+        "rol": "vendor reporting marketplace flood damage",
+        "topico": "overflowing emergency shelters",
+        "accion": "summarize evacuee family support needs"
+      }
+    },
+    {
+      "id": "ind-083",
+      "rol": "municipal worker monitoring flood damage",
+      "topico": "river overflow near homes",
+      "accion": "report school shelter conditions",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "evacuee transport safety",
+        "accion": "summarize displaced family assistance needs"
+      },
+      "lider": {
+        "rol": "driver reporting unsafe flooded roads",
+        "topico": "delayed flood warning communication",
+        "accion": "alert emergency teams about water rise"
+      }
+    },
+    {
+      "id": "ind-084",
+      "rol": "teacher coordinating family shelter updates",
+      "topico": "mudslide risk near settlements",
+      "accion": "request emergency housing assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "unsafe drinking water after floods",
+        "accion": "alert volunteers to vulnerable residents"
+      },
+      "lider": {
+        "rol": "local official relaying shelter requests",
+        "topico": "transport support for displaced families",
+        "accion": "share official flood impact updates"
+      }
+    },
+    {
+      "id": "ind-085",
+      "rol": "clinic nurse supporting displaced patients",
+      "topico": "road closures from debris",
+      "accion": "report medical access problems",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "household relief supply losses",
+        "accion": "request safe drinking water supplies"
+      },
+      "lider": {
+        "rol": "case worker documenting evacuee needs",
+        "topico": "public infrastructure flood damage",
+        "accion": "describe unsafe evacuation corridors"
+      }
+    },
+    {
+      "id": "ind-086",
+      "rol": "community radio reporter covering rainfall impacts",
+      "topico": "emergency food distribution",
+      "accion": "share community damage observations",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "shelter medical support needs",
+        "accion": "summarize immediate relief priorities"
+      },
+      "lider": {
+        "rol": "older adult reporting evacuation barriers",
+        "topico": "lost food and household supplies",
+        "accion": "request urgent shelter placement"
+      }
+    },
+    {
+      "id": "ind-087",
+      "rol": "rural farmer facing river overflow",
+      "topico": "rain damage to local businesses",
+      "accion": "describe blocked evacuation access",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "clinic access disruption",
+        "accion": "explain overcrowded shelter conditions"
+      },
+      "lider": {
+        "rol": "emergency volunteer documenting route damage",
+        "topico": "storm damaged school shelters",
+        "accion": "report verified housing flood damage"
+      }
+    },
+    {
+      "id": "ind-088",
+      "rol": "small business owner after storm damage",
+      "topico": "damaged evacuation routes",
+      "accion": "explain shelter overcrowding conditions",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "temporary shelter management",
+        "accion": "report emergency shelter shortages"
+      },
+      "lider": {
+        "rol": "tenant representative reporting flood losses",
+        "topico": "health service access barriers",
+        "accion": "report ongoing recovery assistance gaps"
+      }
+    },
+    {
+      "id": "ind-089",
+      "rol": "parent seeking safe housing for children",
+      "topico": "blocked access to clinics",
+      "accion": "alert volunteers about vulnerable families",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "business losses from rain damage",
+        "accion": "notify responders about isolated households"
+      },
+      "lider": {
+        "rol": "caregiver requesting safer housing",
+        "topico": "unsafe evacuation route closures",
+        "accion": "summarize critical disaster relief needs"
+      }
+    },
+    {
+      "id": "ind-090",
+      "rol": "elderly resident isolated by flood waters",
+      "topico": "storm damage in schools",
+      "accion": "share flood damage updates",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "rainfall driven family displacement",
+        "accion": "describe evacuation route blockages"
+      },
+      "lider": {
+        "rol": "affected resident reporting shelter needs",
+        "topico": "rainfall damage to small businesses",
+        "accion": "request cleanup of blocked drainage"
+      }
+    },
+    {
+      "id": "ind-091",
+      "rol": "bus driver observing blocked evacuation routes",
+      "topico": "loss of household supplies",
+      "accion": "ask for transport support",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "debris blocked road access",
+        "accion": "request emergency food and blankets"
+      },
+      "lider": {
+        "rol": "coastal community member reporting surge impacts",
+        "topico": "food aid distribution shortage",
+        "accion": "alert aid groups about at-risk families"
+      }
+    },
+    {
+      "id": "ind-092",
+      "rol": "school principal hosting emergency shelter",
+      "topico": "damaged community infrastructure",
+      "accion": "request drainage cleanup assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "missing neighborhood flood alerts",
+        "accion": "alert officials about rising water levels"
+      },
+      "lider": {
+        "rol": "shop owner reporting disaster losses",
+        "topico": "emergency road obstruction",
+        "accion": "share local flood damage evidence"
+      }
+    },
+    {
+      "id": "ind-093",
+      "rol": "local firefighter assessing damaged homes",
+      "topico": "safe transport for evacuees",
+      "accion": "alert authorities about rising water",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "river flooding near residences",
+        "accion": "share neighborhood flood impact observations"
+      },
+      "lider": {
+        "rol": "verified community flood damage reporter",
+        "topico": "mudslide threats after heavy rain",
+        "accion": "report school shelter resource gaps"
+      }
+    },
+    {
+      "id": "ind-094",
+      "rol": "community organizer collecting damage reports",
+      "topico": "neighborhood flood warning gaps",
+      "accion": "notify responders about isolated residents",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "damaged local public facilities",
+        "accion": "document homes damaged by floodwater"
+      },
+      "lider": {
+        "rol": "relief organizer reporting unmet needs",
+        "topico": "river overflow damage to homes",
+        "accion": "request food relief and warm blankets"
+      }
+    },
+    {
+      "id": "ind-095",
+      "rol": "coastal resident tracking storm surge",
+      "topico": "urgent shelter capacity",
+      "accion": "summarize urgent relief priorities",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "residential flood damage",
+        "accion": "request drainage and debris cleanup"
+      },
+      "lider": {
+        "rol": "riverside resident reporting overflow damage",
+        "topico": "post flood water contamination",
+        "accion": "describe road hazards blocking response"
+      }
+    },
+    {
+      "id": "ind-096",
+      "rol": "housing committee member reviewing flood claims",
+      "topico": "family displacement after rainfall",
+      "accion": "summarize family displacement needs",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "school facility storm damage",
+        "accion": "report disrupted access to medical care"
+      },
+      "lider": {
+        "rol": "community health aide reporting household risks",
+        "topico": "verified household flood losses",
+        "accion": "notify teams about stranded residents"
+      }
+    },
+    {
+      "id": "ind-097",
+      "rol": "social worker assisting evacuated families",
+      "topico": "power outages after flooding",
+      "accion": "describe road debris hazards",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "market area flood damage",
+        "accion": "report community recovery support needs"
+      },
+      "lider": {
+        "rol": "first responder documenting damaged housing",
+        "topico": "medical care gaps in shelters",
+        "accion": "ask responders for transport assistance"
+      }
+    },
+    {
+      "id": "ind-098",
+      "rol": "market vendor impacted by heavy rain",
+      "topico": "temporary shelter coordination",
+      "accion": "report neighborhood recovery needs",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "blocked evacuation corridors",
+        "accion": "ask for evacuation transport help"
+      },
+      "lider": {
+        "rol": "radio correspondent reporting storm damage",
+        "topico": "commercial street flood impacts",
+        "accion": "explain emergency shelter overcrowding"
+      }
+    },
+    {
+      "id": "ind-099",
+      "rol": "student documenting neighborhood flooding",
+      "topico": "flooded market streets",
+      "accion": "document damaged homes after rainfall",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "flood related power outage",
+        "accion": "request temporary housing support"
+      },
+      "lider": {
+        "rol": "youth volunteer reporting neighborhood damage",
+        "topico": "shelter registration and capacity",
+        "accion": "report barriers to urgent healthcare"
+      }
+    },
+    {
+      "id": "ind-100",
+      "rol": "health promoter checking vulnerable households",
+      "topico": "medical needs in shelters",
+      "accion": "request food and blankets",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "emergency food relief needs",
+        "accion": "describe debris blocking emergency roads"
+      },
+      "lider": {
+        "rol": "school administrator reporting shelter status",
+        "topico": "neighborhood blackout after flooding",
+        "accion": "request potable water assistance"
+      }
+    },
+    {
+      "id": "ind-101",
+      "rol": "local resident affected by flooding",
+      "topico": "flooded housing",
+      "accion": "report urgent shelter needs",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "emergency shelter shortage",
+        "accion": "share verified flood damage reports"
+      },
+      "lider": {
+        "rol": "clinic responder reporting flood impacts",
+        "topico": "family evacuation and displacement",
+        "accion": "document residential flood losses"
+      }
+    },
+    {
+      "id": "ind-102",
+      "rol": "neighborhood volunteer near evacuation zones",
+      "topico": "contaminated drinking water",
+      "accion": "request clean water delivery",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "settlement mudslide danger",
+        "accion": "report conditions inside school shelters"
+      },
+      "lider": {
+        "rol": "vendor reporting marketplace flood damage",
+        "topico": "overflowing emergency shelters",
+        "accion": "summarize evacuee family support needs"
+      }
+    },
+    {
+      "id": "ind-103",
+      "rol": "municipal worker monitoring flood damage",
+      "topico": "river overflow near homes",
+      "accion": "report school shelter conditions",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "evacuee transport safety",
+        "accion": "summarize displaced family assistance needs"
+      },
+      "lider": {
+        "rol": "driver reporting unsafe flooded roads",
+        "topico": "delayed flood warning communication",
+        "accion": "alert emergency teams about water rise"
+      }
+    },
+    {
+      "id": "ind-104",
+      "rol": "teacher coordinating family shelter updates",
+      "topico": "mudslide risk near settlements",
+      "accion": "request emergency housing assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "unsafe drinking water after floods",
+        "accion": "alert volunteers to vulnerable residents"
+      },
+      "lider": {
+        "rol": "local official relaying shelter requests",
+        "topico": "transport support for displaced families",
+        "accion": "share official flood impact updates"
+      }
+    },
+    {
+      "id": "ind-105",
+      "rol": "clinic nurse supporting displaced patients",
+      "topico": "road closures from debris",
+      "accion": "report medical access problems",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "household relief supply losses",
+        "accion": "request safe drinking water supplies"
+      },
+      "lider": {
+        "rol": "case worker documenting evacuee needs",
+        "topico": "public infrastructure flood damage",
+        "accion": "describe unsafe evacuation corridors"
+      }
+    },
+    {
+      "id": "ind-106",
+      "rol": "community radio reporter covering rainfall impacts",
+      "topico": "emergency food distribution",
+      "accion": "share community damage observations",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "shelter medical support needs",
+        "accion": "summarize immediate relief priorities"
+      },
+      "lider": {
+        "rol": "older adult reporting evacuation barriers",
+        "topico": "lost food and household supplies",
+        "accion": "request urgent shelter placement"
+      }
+    },
+    {
+      "id": "ind-107",
+      "rol": "rural farmer facing river overflow",
+      "topico": "rain damage to local businesses",
+      "accion": "describe blocked evacuation access",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "clinic access disruption",
+        "accion": "explain overcrowded shelter conditions"
+      },
+      "lider": {
+        "rol": "emergency volunteer documenting route damage",
+        "topico": "storm damaged school shelters",
+        "accion": "report verified housing flood damage"
+      }
+    },
+    {
+      "id": "ind-108",
+      "rol": "small business owner after storm damage",
+      "topico": "damaged evacuation routes",
+      "accion": "explain shelter overcrowding conditions",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "temporary shelter management",
+        "accion": "report emergency shelter shortages"
+      },
+      "lider": {
+        "rol": "tenant representative reporting flood losses",
+        "topico": "health service access barriers",
+        "accion": "report ongoing recovery assistance gaps"
+      }
+    },
+    {
+      "id": "ind-109",
+      "rol": "parent seeking safe housing for children",
+      "topico": "blocked access to clinics",
+      "accion": "alert volunteers about vulnerable families",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "business losses from rain damage",
+        "accion": "notify responders about isolated households"
+      },
+      "lider": {
+        "rol": "caregiver requesting safer housing",
+        "topico": "unsafe evacuation route closures",
+        "accion": "summarize critical disaster relief needs"
+      }
+    },
+    {
+      "id": "ind-110",
+      "rol": "elderly resident isolated by flood waters",
+      "topico": "storm damage in schools",
+      "accion": "share flood damage updates",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "rainfall driven family displacement",
+        "accion": "describe evacuation route blockages"
+      },
+      "lider": {
+        "rol": "affected resident reporting shelter needs",
+        "topico": "rainfall damage to small businesses",
+        "accion": "request cleanup of blocked drainage"
+      }
+    },
+    {
+      "id": "ind-111",
+      "rol": "bus driver observing blocked evacuation routes",
+      "topico": "loss of household supplies",
+      "accion": "ask for transport support",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "debris blocked road access",
+        "accion": "request emergency food and blankets"
+      },
+      "lider": {
+        "rol": "coastal community member reporting surge impacts",
+        "topico": "food aid distribution shortage",
+        "accion": "alert aid groups about at-risk families"
+      }
+    },
+    {
+      "id": "ind-112",
+      "rol": "school principal hosting emergency shelter",
+      "topico": "damaged community infrastructure",
+      "accion": "request drainage cleanup assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "missing neighborhood flood alerts",
+        "accion": "alert officials about rising water levels"
+      },
+      "lider": {
+        "rol": "shop owner reporting disaster losses",
+        "topico": "emergency road obstruction",
+        "accion": "share local flood damage evidence"
+      }
+    },
+    {
+      "id": "ind-113",
+      "rol": "local firefighter assessing damaged homes",
+      "topico": "safe transport for evacuees",
+      "accion": "alert authorities about rising water",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "river flooding near residences",
+        "accion": "share neighborhood flood impact observations"
+      },
+      "lider": {
+        "rol": "verified community flood damage reporter",
+        "topico": "mudslide threats after heavy rain",
+        "accion": "report school shelter resource gaps"
+      }
+    },
+    {
+      "id": "ind-114",
+      "rol": "community organizer collecting damage reports",
+      "topico": "neighborhood flood warning gaps",
+      "accion": "notify responders about isolated residents",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "damaged local public facilities",
+        "accion": "document homes damaged by floodwater"
+      },
+      "lider": {
+        "rol": "relief organizer reporting unmet needs",
+        "topico": "river overflow damage to homes",
+        "accion": "request food relief and warm blankets"
+      }
+    },
+    {
+      "id": "ind-115",
+      "rol": "coastal resident tracking storm surge",
+      "topico": "urgent shelter capacity",
+      "accion": "summarize urgent relief priorities",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "residential flood damage",
+        "accion": "request drainage and debris cleanup"
+      },
+      "lider": {
+        "rol": "riverside resident reporting overflow damage",
+        "topico": "post flood water contamination",
+        "accion": "describe road hazards blocking response"
+      }
+    },
+    {
+      "id": "ind-116",
+      "rol": "housing committee member reviewing flood claims",
+      "topico": "family displacement after rainfall",
+      "accion": "summarize family displacement needs",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "school facility storm damage",
+        "accion": "report disrupted access to medical care"
+      },
+      "lider": {
+        "rol": "community health aide reporting household risks",
+        "topico": "verified household flood losses",
+        "accion": "notify teams about stranded residents"
+      }
+    },
+    {
+      "id": "ind-117",
+      "rol": "social worker assisting evacuated families",
+      "topico": "power outages after flooding",
+      "accion": "describe road debris hazards",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "market area flood damage",
+        "accion": "report community recovery support needs"
+      },
+      "lider": {
+        "rol": "first responder documenting damaged housing",
+        "topico": "medical care gaps in shelters",
+        "accion": "ask responders for transport assistance"
+      }
+    },
+    {
+      "id": "ind-118",
+      "rol": "market vendor impacted by heavy rain",
+      "topico": "temporary shelter coordination",
+      "accion": "report neighborhood recovery needs",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "blocked evacuation corridors",
+        "accion": "ask for evacuation transport help"
+      },
+      "lider": {
+        "rol": "radio correspondent reporting storm damage",
+        "topico": "commercial street flood impacts",
+        "accion": "explain emergency shelter overcrowding"
+      }
+    },
+    {
+      "id": "ind-119",
+      "rol": "student documenting neighborhood flooding",
+      "topico": "flooded market streets",
+      "accion": "document damaged homes after rainfall",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "flood related power outage",
+        "accion": "request temporary housing support"
+      },
+      "lider": {
+        "rol": "youth volunteer reporting neighborhood damage",
+        "topico": "shelter registration and capacity",
+        "accion": "report barriers to urgent healthcare"
+      }
+    },
+    {
+      "id": "ind-120",
+      "rol": "health promoter checking vulnerable households",
+      "topico": "medical needs in shelters",
+      "accion": "request food and blankets",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "emergency food relief needs",
+        "accion": "describe debris blocking emergency roads"
+      },
+      "lider": {
+        "rol": "school administrator reporting shelter status",
+        "topico": "neighborhood blackout after flooding",
+        "accion": "request potable water assistance"
+      }
+    },
+    {
+      "id": "ind-121",
+      "rol": "local resident affected by flooding",
+      "topico": "flooded housing",
+      "accion": "report urgent shelter needs",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "emergency shelter shortage",
+        "accion": "share verified flood damage reports"
+      },
+      "lider": {
+        "rol": "clinic responder reporting flood impacts",
+        "topico": "family evacuation and displacement",
+        "accion": "document residential flood losses"
+      }
+    },
+    {
+      "id": "ind-122",
+      "rol": "neighborhood volunteer near evacuation zones",
+      "topico": "contaminated drinking water",
+      "accion": "request clean water delivery",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "settlement mudslide danger",
+        "accion": "report conditions inside school shelters"
+      },
+      "lider": {
+        "rol": "vendor reporting marketplace flood damage",
+        "topico": "overflowing emergency shelters",
+        "accion": "summarize evacuee family support needs"
+      }
+    },
+    {
+      "id": "ind-123",
+      "rol": "municipal worker monitoring flood damage",
+      "topico": "river overflow near homes",
+      "accion": "report school shelter conditions",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "evacuee transport safety",
+        "accion": "summarize displaced family assistance needs"
+      },
+      "lider": {
+        "rol": "driver reporting unsafe flooded roads",
+        "topico": "delayed flood warning communication",
+        "accion": "alert emergency teams about water rise"
+      }
+    },
+    {
+      "id": "ind-124",
+      "rol": "teacher coordinating family shelter updates",
+      "topico": "mudslide risk near settlements",
+      "accion": "request emergency housing assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "unsafe drinking water after floods",
+        "accion": "alert volunteers to vulnerable residents"
+      },
+      "lider": {
+        "rol": "local official relaying shelter requests",
+        "topico": "transport support for displaced families",
+        "accion": "share official flood impact updates"
+      }
+    },
+    {
+      "id": "ind-125",
+      "rol": "clinic nurse supporting displaced patients",
+      "topico": "road closures from debris",
+      "accion": "report medical access problems",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "household relief supply losses",
+        "accion": "request safe drinking water supplies"
+      },
+      "lider": {
+        "rol": "case worker documenting evacuee needs",
+        "topico": "public infrastructure flood damage",
+        "accion": "describe unsafe evacuation corridors"
+      }
+    },
+    {
+      "id": "ind-126",
+      "rol": "community radio reporter covering rainfall impacts",
+      "topico": "emergency food distribution",
+      "accion": "share community damage observations",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "shelter medical support needs",
+        "accion": "summarize immediate relief priorities"
+      },
+      "lider": {
+        "rol": "older adult reporting evacuation barriers",
+        "topico": "lost food and household supplies",
+        "accion": "request urgent shelter placement"
+      }
+    },
+    {
+      "id": "ind-127",
+      "rol": "rural farmer facing river overflow",
+      "topico": "rain damage to local businesses",
+      "accion": "describe blocked evacuation access",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "clinic access disruption",
+        "accion": "explain overcrowded shelter conditions"
+      },
+      "lider": {
+        "rol": "emergency volunteer documenting route damage",
+        "topico": "storm damaged school shelters",
+        "accion": "report verified housing flood damage"
+      }
+    },
+    {
+      "id": "ind-128",
+      "rol": "small business owner after storm damage",
+      "topico": "damaged evacuation routes",
+      "accion": "explain shelter overcrowding conditions",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "temporary shelter management",
+        "accion": "report emergency shelter shortages"
+      },
+      "lider": {
+        "rol": "tenant representative reporting flood losses",
+        "topico": "health service access barriers",
+        "accion": "report ongoing recovery assistance gaps"
+      }
+    },
+    {
+      "id": "ind-129",
+      "rol": "parent seeking safe housing for children",
+      "topico": "blocked access to clinics",
+      "accion": "alert volunteers about vulnerable families",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "business losses from rain damage",
+        "accion": "notify responders about isolated households"
+      },
+      "lider": {
+        "rol": "caregiver requesting safer housing",
+        "topico": "unsafe evacuation route closures",
+        "accion": "summarize critical disaster relief needs"
+      }
+    },
+    {
+      "id": "ind-130",
+      "rol": "elderly resident isolated by flood waters",
+      "topico": "storm damage in schools",
+      "accion": "share flood damage updates",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "rainfall driven family displacement",
+        "accion": "describe evacuation route blockages"
+      },
+      "lider": {
+        "rol": "affected resident reporting shelter needs",
+        "topico": "rainfall damage to small businesses",
+        "accion": "request cleanup of blocked drainage"
+      }
+    },
+    {
+      "id": "ind-131",
+      "rol": "bus driver observing blocked evacuation routes",
+      "topico": "loss of household supplies",
+      "accion": "ask for transport support",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "debris blocked road access",
+        "accion": "request emergency food and blankets"
+      },
+      "lider": {
+        "rol": "coastal community member reporting surge impacts",
+        "topico": "food aid distribution shortage",
+        "accion": "alert aid groups about at-risk families"
+      }
+    },
+    {
+      "id": "ind-132",
+      "rol": "school principal hosting emergency shelter",
+      "topico": "damaged community infrastructure",
+      "accion": "request drainage cleanup assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "missing neighborhood flood alerts",
+        "accion": "alert officials about rising water levels"
+      },
+      "lider": {
+        "rol": "shop owner reporting disaster losses",
+        "topico": "emergency road obstruction",
+        "accion": "share local flood damage evidence"
+      }
+    },
+    {
+      "id": "ind-133",
+      "rol": "local firefighter assessing damaged homes",
+      "topico": "safe transport for evacuees",
+      "accion": "alert authorities about rising water",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "river flooding near residences",
+        "accion": "share neighborhood flood impact observations"
+      },
+      "lider": {
+        "rol": "verified community flood damage reporter",
+        "topico": "mudslide threats after heavy rain",
+        "accion": "report school shelter resource gaps"
+      }
+    },
+    {
+      "id": "ind-134",
+      "rol": "community organizer collecting damage reports",
+      "topico": "neighborhood flood warning gaps",
+      "accion": "notify responders about isolated residents",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "damaged local public facilities",
+        "accion": "document homes damaged by floodwater"
+      },
+      "lider": {
+        "rol": "relief organizer reporting unmet needs",
+        "topico": "river overflow damage to homes",
+        "accion": "request food relief and warm blankets"
+      }
+    },
+    {
+      "id": "ind-135",
+      "rol": "coastal resident tracking storm surge",
+      "topico": "urgent shelter capacity",
+      "accion": "summarize urgent relief priorities",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "residential flood damage",
+        "accion": "request drainage and debris cleanup"
+      },
+      "lider": {
+        "rol": "riverside resident reporting overflow damage",
+        "topico": "post flood water contamination",
+        "accion": "describe road hazards blocking response"
+      }
+    },
+    {
+      "id": "ind-136",
+      "rol": "housing committee member reviewing flood claims",
+      "topico": "family displacement after rainfall",
+      "accion": "summarize family displacement needs",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "school facility storm damage",
+        "accion": "report disrupted access to medical care"
+      },
+      "lider": {
+        "rol": "community health aide reporting household risks",
+        "topico": "verified household flood losses",
+        "accion": "notify teams about stranded residents"
+      }
+    },
+    {
+      "id": "ind-137",
+      "rol": "social worker assisting evacuated families",
+      "topico": "power outages after flooding",
+      "accion": "describe road debris hazards",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "market area flood damage",
+        "accion": "report community recovery support needs"
+      },
+      "lider": {
+        "rol": "first responder documenting damaged housing",
+        "topico": "medical care gaps in shelters",
+        "accion": "ask responders for transport assistance"
+      }
+    },
+    {
+      "id": "ind-138",
+      "rol": "market vendor impacted by heavy rain",
+      "topico": "temporary shelter coordination",
+      "accion": "report neighborhood recovery needs",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "blocked evacuation corridors",
+        "accion": "ask for evacuation transport help"
+      },
+      "lider": {
+        "rol": "radio correspondent reporting storm damage",
+        "topico": "commercial street flood impacts",
+        "accion": "explain emergency shelter overcrowding"
+      }
+    },
+    {
+      "id": "ind-139",
+      "rol": "student documenting neighborhood flooding",
+      "topico": "flooded market streets",
+      "accion": "document damaged homes after rainfall",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "flood related power outage",
+        "accion": "request temporary housing support"
+      },
+      "lider": {
+        "rol": "youth volunteer reporting neighborhood damage",
+        "topico": "shelter registration and capacity",
+        "accion": "report barriers to urgent healthcare"
+      }
+    },
+    {
+      "id": "ind-140",
+      "rol": "health promoter checking vulnerable households",
+      "topico": "medical needs in shelters",
+      "accion": "request food and blankets",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "emergency food relief needs",
+        "accion": "describe debris blocking emergency roads"
+      },
+      "lider": {
+        "rol": "school administrator reporting shelter status",
+        "topico": "neighborhood blackout after flooding",
+        "accion": "request potable water assistance"
+      }
+    },
+    {
+      "id": "ind-141",
+      "rol": "local resident affected by flooding",
+      "topico": "flooded housing",
+      "accion": "report urgent shelter needs",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "emergency shelter shortage",
+        "accion": "share verified flood damage reports"
+      },
+      "lider": {
+        "rol": "clinic responder reporting flood impacts",
+        "topico": "family evacuation and displacement",
+        "accion": "document residential flood losses"
+      }
+    },
+    {
+      "id": "ind-142",
+      "rol": "neighborhood volunteer near evacuation zones",
+      "topico": "contaminated drinking water",
+      "accion": "request clean water delivery",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "settlement mudslide danger",
+        "accion": "report conditions inside school shelters"
+      },
+      "lider": {
+        "rol": "vendor reporting marketplace flood damage",
+        "topico": "overflowing emergency shelters",
+        "accion": "summarize evacuee family support needs"
+      }
+    },
+    {
+      "id": "ind-143",
+      "rol": "municipal worker monitoring flood damage",
+      "topico": "river overflow near homes",
+      "accion": "report school shelter conditions",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "evacuee transport safety",
+        "accion": "summarize displaced family assistance needs"
+      },
+      "lider": {
+        "rol": "driver reporting unsafe flooded roads",
+        "topico": "delayed flood warning communication",
+        "accion": "alert emergency teams about water rise"
+      }
+    },
+    {
+      "id": "ind-144",
+      "rol": "teacher coordinating family shelter updates",
+      "topico": "mudslide risk near settlements",
+      "accion": "request emergency housing assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "unsafe drinking water after floods",
+        "accion": "alert volunteers to vulnerable residents"
+      },
+      "lider": {
+        "rol": "local official relaying shelter requests",
+        "topico": "transport support for displaced families",
+        "accion": "share official flood impact updates"
+      }
+    },
+    {
+      "id": "ind-145",
+      "rol": "clinic nurse supporting displaced patients",
+      "topico": "road closures from debris",
+      "accion": "report medical access problems",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "household relief supply losses",
+        "accion": "request safe drinking water supplies"
+      },
+      "lider": {
+        "rol": "case worker documenting evacuee needs",
+        "topico": "public infrastructure flood damage",
+        "accion": "describe unsafe evacuation corridors"
+      }
+    },
+    {
+      "id": "ind-146",
+      "rol": "community radio reporter covering rainfall impacts",
+      "topico": "emergency food distribution",
+      "accion": "share community damage observations",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "shelter medical support needs",
+        "accion": "summarize immediate relief priorities"
+      },
+      "lider": {
+        "rol": "older adult reporting evacuation barriers",
+        "topico": "lost food and household supplies",
+        "accion": "request urgent shelter placement"
+      }
+    },
+    {
+      "id": "ind-147",
+      "rol": "rural farmer facing river overflow",
+      "topico": "rain damage to local businesses",
+      "accion": "describe blocked evacuation access",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "clinic access disruption",
+        "accion": "explain overcrowded shelter conditions"
+      },
+      "lider": {
+        "rol": "emergency volunteer documenting route damage",
+        "topico": "storm damaged school shelters",
+        "accion": "report verified housing flood damage"
+      }
+    },
+    {
+      "id": "ind-148",
+      "rol": "small business owner after storm damage",
+      "topico": "damaged evacuation routes",
+      "accion": "explain shelter overcrowding conditions",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "temporary shelter management",
+        "accion": "report emergency shelter shortages"
+      },
+      "lider": {
+        "rol": "tenant representative reporting flood losses",
+        "topico": "health service access barriers",
+        "accion": "report ongoing recovery assistance gaps"
+      }
+    },
+    {
+      "id": "ind-149",
+      "rol": "parent seeking safe housing for children",
+      "topico": "blocked access to clinics",
+      "accion": "alert volunteers about vulnerable families",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "business losses from rain damage",
+        "accion": "notify responders about isolated households"
+      },
+      "lider": {
+        "rol": "caregiver requesting safer housing",
+        "topico": "unsafe evacuation route closures",
+        "accion": "summarize critical disaster relief needs"
+      }
+    },
+    {
+      "id": "ind-150",
+      "rol": "elderly resident isolated by flood waters",
+      "topico": "storm damage in schools",
+      "accion": "share flood damage updates",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "rainfall driven family displacement",
+        "accion": "describe evacuation route blockages"
+      },
+      "lider": {
+        "rol": "affected resident reporting shelter needs",
+        "topico": "rainfall damage to small businesses",
+        "accion": "request cleanup of blocked drainage"
+      }
+    },
+    {
+      "id": "ind-151",
+      "rol": "bus driver observing blocked evacuation routes",
+      "topico": "loss of household supplies",
+      "accion": "ask for transport support",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "debris blocked road access",
+        "accion": "request emergency food and blankets"
+      },
+      "lider": {
+        "rol": "coastal community member reporting surge impacts",
+        "topico": "food aid distribution shortage",
+        "accion": "alert aid groups about at-risk families"
+      }
+    },
+    {
+      "id": "ind-152",
+      "rol": "school principal hosting emergency shelter",
+      "topico": "damaged community infrastructure",
+      "accion": "request drainage cleanup assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "missing neighborhood flood alerts",
+        "accion": "alert officials about rising water levels"
+      },
+      "lider": {
+        "rol": "shop owner reporting disaster losses",
+        "topico": "emergency road obstruction",
+        "accion": "share local flood damage evidence"
+      }
+    },
+    {
+      "id": "ind-153",
+      "rol": "local firefighter assessing damaged homes",
+      "topico": "safe transport for evacuees",
+      "accion": "alert authorities about rising water",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "river flooding near residences",
+        "accion": "share neighborhood flood impact observations"
+      },
+      "lider": {
+        "rol": "verified community flood damage reporter",
+        "topico": "mudslide threats after heavy rain",
+        "accion": "report school shelter resource gaps"
+      }
+    },
+    {
+      "id": "ind-154",
+      "rol": "community organizer collecting damage reports",
+      "topico": "neighborhood flood warning gaps",
+      "accion": "notify responders about isolated residents",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "damaged local public facilities",
+        "accion": "document homes damaged by floodwater"
+      },
+      "lider": {
+        "rol": "relief organizer reporting unmet needs",
+        "topico": "river overflow damage to homes",
+        "accion": "request food relief and warm blankets"
+      }
+    },
+    {
+      "id": "ind-155",
+      "rol": "coastal resident tracking storm surge",
+      "topico": "urgent shelter capacity",
+      "accion": "summarize urgent relief priorities",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "residential flood damage",
+        "accion": "request drainage and debris cleanup"
+      },
+      "lider": {
+        "rol": "riverside resident reporting overflow damage",
+        "topico": "post flood water contamination",
+        "accion": "describe road hazards blocking response"
+      }
+    },
+    {
+      "id": "ind-156",
+      "rol": "housing committee member reviewing flood claims",
+      "topico": "family displacement after rainfall",
+      "accion": "summarize family displacement needs",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "school facility storm damage",
+        "accion": "report disrupted access to medical care"
+      },
+      "lider": {
+        "rol": "community health aide reporting household risks",
+        "topico": "verified household flood losses",
+        "accion": "notify teams about stranded residents"
+      }
+    },
+    {
+      "id": "ind-157",
+      "rol": "social worker assisting evacuated families",
+      "topico": "power outages after flooding",
+      "accion": "describe road debris hazards",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "market area flood damage",
+        "accion": "report community recovery support needs"
+      },
+      "lider": {
+        "rol": "first responder documenting damaged housing",
+        "topico": "medical care gaps in shelters",
+        "accion": "ask responders for transport assistance"
+      }
+    },
+    {
+      "id": "ind-158",
+      "rol": "market vendor impacted by heavy rain",
+      "topico": "temporary shelter coordination",
+      "accion": "report neighborhood recovery needs",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "blocked evacuation corridors",
+        "accion": "ask for evacuation transport help"
+      },
+      "lider": {
+        "rol": "radio correspondent reporting storm damage",
+        "topico": "commercial street flood impacts",
+        "accion": "explain emergency shelter overcrowding"
+      }
+    },
+    {
+      "id": "ind-159",
+      "rol": "student documenting neighborhood flooding",
+      "topico": "flooded market streets",
+      "accion": "document damaged homes after rainfall",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "flood related power outage",
+        "accion": "request temporary housing support"
+      },
+      "lider": {
+        "rol": "youth volunteer reporting neighborhood damage",
+        "topico": "shelter registration and capacity",
+        "accion": "report barriers to urgent healthcare"
+      }
+    },
+    {
+      "id": "ind-160",
+      "rol": "health promoter checking vulnerable households",
+      "topico": "medical needs in shelters",
+      "accion": "request food and blankets",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "emergency food relief needs",
+        "accion": "describe debris blocking emergency roads"
+      },
+      "lider": {
+        "rol": "school administrator reporting shelter status",
+        "topico": "neighborhood blackout after flooding",
+        "accion": "request potable water assistance"
+      }
+    },
+    {
+      "id": "ind-161",
+      "rol": "local resident affected by flooding",
+      "topico": "flooded housing",
+      "accion": "report urgent shelter needs",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "emergency shelter shortage",
+        "accion": "share verified flood damage reports"
+      },
+      "lider": {
+        "rol": "clinic responder reporting flood impacts",
+        "topico": "family evacuation and displacement",
+        "accion": "document residential flood losses"
+      }
+    },
+    {
+      "id": "ind-162",
+      "rol": "neighborhood volunteer near evacuation zones",
+      "topico": "contaminated drinking water",
+      "accion": "request clean water delivery",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "settlement mudslide danger",
+        "accion": "report conditions inside school shelters"
+      },
+      "lider": {
+        "rol": "vendor reporting marketplace flood damage",
+        "topico": "overflowing emergency shelters",
+        "accion": "summarize evacuee family support needs"
+      }
+    },
+    {
+      "id": "ind-163",
+      "rol": "municipal worker monitoring flood damage",
+      "topico": "river overflow near homes",
+      "accion": "report school shelter conditions",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "evacuee transport safety",
+        "accion": "summarize displaced family assistance needs"
+      },
+      "lider": {
+        "rol": "driver reporting unsafe flooded roads",
+        "topico": "delayed flood warning communication",
+        "accion": "alert emergency teams about water rise"
+      }
+    },
+    {
+      "id": "ind-164",
+      "rol": "teacher coordinating family shelter updates",
+      "topico": "mudslide risk near settlements",
+      "accion": "request emergency housing assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "unsafe drinking water after floods",
+        "accion": "alert volunteers to vulnerable residents"
+      },
+      "lider": {
+        "rol": "local official relaying shelter requests",
+        "topico": "transport support for displaced families",
+        "accion": "share official flood impact updates"
+      }
+    },
+    {
+      "id": "ind-165",
+      "rol": "clinic nurse supporting displaced patients",
+      "topico": "road closures from debris",
+      "accion": "report medical access problems",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "household relief supply losses",
+        "accion": "request safe drinking water supplies"
+      },
+      "lider": {
+        "rol": "case worker documenting evacuee needs",
+        "topico": "public infrastructure flood damage",
+        "accion": "describe unsafe evacuation corridors"
+      }
+    },
+    {
+      "id": "ind-166",
+      "rol": "community radio reporter covering rainfall impacts",
+      "topico": "emergency food distribution",
+      "accion": "share community damage observations",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "shelter medical support needs",
+        "accion": "summarize immediate relief priorities"
+      },
+      "lider": {
+        "rol": "older adult reporting evacuation barriers",
+        "topico": "lost food and household supplies",
+        "accion": "request urgent shelter placement"
+      }
+    },
+    {
+      "id": "ind-167",
+      "rol": "rural farmer facing river overflow",
+      "topico": "rain damage to local businesses",
+      "accion": "describe blocked evacuation access",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "clinic access disruption",
+        "accion": "explain overcrowded shelter conditions"
+      },
+      "lider": {
+        "rol": "emergency volunteer documenting route damage",
+        "topico": "storm damaged school shelters",
+        "accion": "report verified housing flood damage"
+      }
+    },
+    {
+      "id": "ind-168",
+      "rol": "small business owner after storm damage",
+      "topico": "damaged evacuation routes",
+      "accion": "explain shelter overcrowding conditions",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "temporary shelter management",
+        "accion": "report emergency shelter shortages"
+      },
+      "lider": {
+        "rol": "tenant representative reporting flood losses",
+        "topico": "health service access barriers",
+        "accion": "report ongoing recovery assistance gaps"
+      }
+    },
+    {
+      "id": "ind-169",
+      "rol": "parent seeking safe housing for children",
+      "topico": "blocked access to clinics",
+      "accion": "alert volunteers about vulnerable families",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "business losses from rain damage",
+        "accion": "notify responders about isolated households"
+      },
+      "lider": {
+        "rol": "caregiver requesting safer housing",
+        "topico": "unsafe evacuation route closures",
+        "accion": "summarize critical disaster relief needs"
+      }
+    },
+    {
+      "id": "ind-170",
+      "rol": "elderly resident isolated by flood waters",
+      "topico": "storm damage in schools",
+      "accion": "share flood damage updates",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "rainfall driven family displacement",
+        "accion": "describe evacuation route blockages"
+      },
+      "lider": {
+        "rol": "affected resident reporting shelter needs",
+        "topico": "rainfall damage to small businesses",
+        "accion": "request cleanup of blocked drainage"
+      }
+    },
+    {
+      "id": "ind-171",
+      "rol": "bus driver observing blocked evacuation routes",
+      "topico": "loss of household supplies",
+      "accion": "ask for transport support",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "debris blocked road access",
+        "accion": "request emergency food and blankets"
+      },
+      "lider": {
+        "rol": "coastal community member reporting surge impacts",
+        "topico": "food aid distribution shortage",
+        "accion": "alert aid groups about at-risk families"
+      }
+    },
+    {
+      "id": "ind-172",
+      "rol": "school principal hosting emergency shelter",
+      "topico": "damaged community infrastructure",
+      "accion": "request drainage cleanup assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "missing neighborhood flood alerts",
+        "accion": "alert officials about rising water levels"
+      },
+      "lider": {
+        "rol": "shop owner reporting disaster losses",
+        "topico": "emergency road obstruction",
+        "accion": "share local flood damage evidence"
+      }
+    },
+    {
+      "id": "ind-173",
+      "rol": "local firefighter assessing damaged homes",
+      "topico": "safe transport for evacuees",
+      "accion": "alert authorities about rising water",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "river flooding near residences",
+        "accion": "share neighborhood flood impact observations"
+      },
+      "lider": {
+        "rol": "verified community flood damage reporter",
+        "topico": "mudslide threats after heavy rain",
+        "accion": "report school shelter resource gaps"
+      }
+    },
+    {
+      "id": "ind-174",
+      "rol": "community organizer collecting damage reports",
+      "topico": "neighborhood flood warning gaps",
+      "accion": "notify responders about isolated residents",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "damaged local public facilities",
+        "accion": "document homes damaged by floodwater"
+      },
+      "lider": {
+        "rol": "relief organizer reporting unmet needs",
+        "topico": "river overflow damage to homes",
+        "accion": "request food relief and warm blankets"
+      }
+    },
+    {
+      "id": "ind-175",
+      "rol": "coastal resident tracking storm surge",
+      "topico": "urgent shelter capacity",
+      "accion": "summarize urgent relief priorities",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "residential flood damage",
+        "accion": "request drainage and debris cleanup"
+      },
+      "lider": {
+        "rol": "riverside resident reporting overflow damage",
+        "topico": "post flood water contamination",
+        "accion": "describe road hazards blocking response"
+      }
+    },
+    {
+      "id": "ind-176",
+      "rol": "housing committee member reviewing flood claims",
+      "topico": "family displacement after rainfall",
+      "accion": "summarize family displacement needs",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "school facility storm damage",
+        "accion": "report disrupted access to medical care"
+      },
+      "lider": {
+        "rol": "community health aide reporting household risks",
+        "topico": "verified household flood losses",
+        "accion": "notify teams about stranded residents"
+      }
+    },
+    {
+      "id": "ind-177",
+      "rol": "social worker assisting evacuated families",
+      "topico": "power outages after flooding",
+      "accion": "describe road debris hazards",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "market area flood damage",
+        "accion": "report community recovery support needs"
+      },
+      "lider": {
+        "rol": "first responder documenting damaged housing",
+        "topico": "medical care gaps in shelters",
+        "accion": "ask responders for transport assistance"
+      }
+    },
+    {
+      "id": "ind-178",
+      "rol": "market vendor impacted by heavy rain",
+      "topico": "temporary shelter coordination",
+      "accion": "report neighborhood recovery needs",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "blocked evacuation corridors",
+        "accion": "ask for evacuation transport help"
+      },
+      "lider": {
+        "rol": "radio correspondent reporting storm damage",
+        "topico": "commercial street flood impacts",
+        "accion": "explain emergency shelter overcrowding"
+      }
+    },
+    {
+      "id": "ind-179",
+      "rol": "student documenting neighborhood flooding",
+      "topico": "flooded market streets",
+      "accion": "document damaged homes after rainfall",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "flood related power outage",
+        "accion": "request temporary housing support"
+      },
+      "lider": {
+        "rol": "youth volunteer reporting neighborhood damage",
+        "topico": "shelter registration and capacity",
+        "accion": "report barriers to urgent healthcare"
+      }
+    },
+    {
+      "id": "ind-180",
+      "rol": "health promoter checking vulnerable households",
+      "topico": "medical needs in shelters",
+      "accion": "request food and blankets",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "emergency food relief needs",
+        "accion": "describe debris blocking emergency roads"
+      },
+      "lider": {
+        "rol": "school administrator reporting shelter status",
+        "topico": "neighborhood blackout after flooding",
+        "accion": "request potable water assistance"
+      }
+    },
+    {
+      "id": "ind-181",
+      "rol": "local resident affected by flooding",
+      "topico": "flooded housing",
+      "accion": "report urgent shelter needs",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "emergency shelter shortage",
+        "accion": "share verified flood damage reports"
+      },
+      "lider": {
+        "rol": "clinic responder reporting flood impacts",
+        "topico": "family evacuation and displacement",
+        "accion": "document residential flood losses"
+      }
+    },
+    {
+      "id": "ind-182",
+      "rol": "neighborhood volunteer near evacuation zones",
+      "topico": "contaminated drinking water",
+      "accion": "request clean water delivery",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "settlement mudslide danger",
+        "accion": "report conditions inside school shelters"
+      },
+      "lider": {
+        "rol": "vendor reporting marketplace flood damage",
+        "topico": "overflowing emergency shelters",
+        "accion": "summarize evacuee family support needs"
+      }
+    },
+    {
+      "id": "ind-183",
+      "rol": "municipal worker monitoring flood damage",
+      "topico": "river overflow near homes",
+      "accion": "report school shelter conditions",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "evacuee transport safety",
+        "accion": "summarize displaced family assistance needs"
+      },
+      "lider": {
+        "rol": "driver reporting unsafe flooded roads",
+        "topico": "delayed flood warning communication",
+        "accion": "alert emergency teams about water rise"
+      }
+    },
+    {
+      "id": "ind-184",
+      "rol": "teacher coordinating family shelter updates",
+      "topico": "mudslide risk near settlements",
+      "accion": "request emergency housing assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "unsafe drinking water after floods",
+        "accion": "alert volunteers to vulnerable residents"
+      },
+      "lider": {
+        "rol": "local official relaying shelter requests",
+        "topico": "transport support for displaced families",
+        "accion": "share official flood impact updates"
+      }
+    },
+    {
+      "id": "ind-185",
+      "rol": "clinic nurse supporting displaced patients",
+      "topico": "road closures from debris",
+      "accion": "report medical access problems",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "household relief supply losses",
+        "accion": "request safe drinking water supplies"
+      },
+      "lider": {
+        "rol": "case worker documenting evacuee needs",
+        "topico": "public infrastructure flood damage",
+        "accion": "describe unsafe evacuation corridors"
+      }
+    },
+    {
+      "id": "ind-186",
+      "rol": "community radio reporter covering rainfall impacts",
+      "topico": "emergency food distribution",
+      "accion": "share community damage observations",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "shelter medical support needs",
+        "accion": "summarize immediate relief priorities"
+      },
+      "lider": {
+        "rol": "older adult reporting evacuation barriers",
+        "topico": "lost food and household supplies",
+        "accion": "request urgent shelter placement"
+      }
+    },
+    {
+      "id": "ind-187",
+      "rol": "rural farmer facing river overflow",
+      "topico": "rain damage to local businesses",
+      "accion": "describe blocked evacuation access",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "clinic access disruption",
+        "accion": "explain overcrowded shelter conditions"
+      },
+      "lider": {
+        "rol": "emergency volunteer documenting route damage",
+        "topico": "storm damaged school shelters",
+        "accion": "report verified housing flood damage"
+      }
+    },
+    {
+      "id": "ind-188",
+      "rol": "small business owner after storm damage",
+      "topico": "damaged evacuation routes",
+      "accion": "explain shelter overcrowding conditions",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "temporary shelter management",
+        "accion": "report emergency shelter shortages"
+      },
+      "lider": {
+        "rol": "tenant representative reporting flood losses",
+        "topico": "health service access barriers",
+        "accion": "report ongoing recovery assistance gaps"
+      }
+    },
+    {
+      "id": "ind-189",
+      "rol": "parent seeking safe housing for children",
+      "topico": "blocked access to clinics",
+      "accion": "alert volunteers about vulnerable families",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "business losses from rain damage",
+        "accion": "notify responders about isolated households"
+      },
+      "lider": {
+        "rol": "caregiver requesting safer housing",
+        "topico": "unsafe evacuation route closures",
+        "accion": "summarize critical disaster relief needs"
+      }
+    },
+    {
+      "id": "ind-190",
+      "rol": "elderly resident isolated by flood waters",
+      "topico": "storm damage in schools",
+      "accion": "share flood damage updates",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "rainfall driven family displacement",
+        "accion": "describe evacuation route blockages"
+      },
+      "lider": {
+        "rol": "affected resident reporting shelter needs",
+        "topico": "rainfall damage to small businesses",
+        "accion": "request cleanup of blocked drainage"
+      }
+    },
+    {
+      "id": "ind-191",
+      "rol": "bus driver observing blocked evacuation routes",
+      "topico": "loss of household supplies",
+      "accion": "ask for transport support",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "debris blocked road access",
+        "accion": "request emergency food and blankets"
+      },
+      "lider": {
+        "rol": "coastal community member reporting surge impacts",
+        "topico": "food aid distribution shortage",
+        "accion": "alert aid groups about at-risk families"
+      }
+    },
+    {
+      "id": "ind-192",
+      "rol": "school principal hosting emergency shelter",
+      "topico": "damaged community infrastructure",
+      "accion": "request drainage cleanup assistance",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "missing neighborhood flood alerts",
+        "accion": "alert officials about rising water levels"
+      },
+      "lider": {
+        "rol": "shop owner reporting disaster losses",
+        "topico": "emergency road obstruction",
+        "accion": "share local flood damage evidence"
+      }
+    },
+    {
+      "id": "ind-193",
+      "rol": "local firefighter assessing damaged homes",
+      "topico": "safe transport for evacuees",
+      "accion": "alert authorities about rising water",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "river flooding near residences",
+        "accion": "share neighborhood flood impact observations"
+      },
+      "lider": {
+        "rol": "verified community flood damage reporter",
+        "topico": "mudslide threats after heavy rain",
+        "accion": "report school shelter resource gaps"
+      }
+    },
+    {
+      "id": "ind-194",
+      "rol": "community organizer collecting damage reports",
+      "topico": "neighborhood flood warning gaps",
+      "accion": "notify responders about isolated residents",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "damaged local public facilities",
+        "accion": "document homes damaged by floodwater"
+      },
+      "lider": {
+        "rol": "relief organizer reporting unmet needs",
+        "topico": "river overflow damage to homes",
+        "accion": "request food relief and warm blankets"
+      }
+    },
+    {
+      "id": "ind-195",
+      "rol": "coastal resident tracking storm surge",
+      "topico": "urgent shelter capacity",
+      "accion": "summarize urgent relief priorities",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "residential flood damage",
+        "accion": "request drainage and debris cleanup"
+      },
+      "lider": {
+        "rol": "riverside resident reporting overflow damage",
+        "topico": "post flood water contamination",
+        "accion": "describe road hazards blocking response"
+      }
+    },
+    {
+      "id": "ind-196",
+      "rol": "housing committee member reviewing flood claims",
+      "topico": "family displacement after rainfall",
+      "accion": "summarize family displacement needs",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "school facility storm damage",
+        "accion": "report disrupted access to medical care"
+      },
+      "lider": {
+        "rol": "community health aide reporting household risks",
+        "topico": "verified household flood losses",
+        "accion": "notify teams about stranded residents"
+      }
+    },
+    {
+      "id": "ind-197",
+      "rol": "social worker assisting evacuated families",
+      "topico": "power outages after flooding",
+      "accion": "describe road debris hazards",
+      "pbest": {
+        "rol": "resident documenting household flood losses",
+        "topico": "market area flood damage",
+        "accion": "report community recovery support needs"
+      },
+      "lider": {
+        "rol": "first responder documenting damaged housing",
+        "topico": "medical care gaps in shelters",
+        "accion": "ask responders for transport assistance"
+      }
+    },
+    {
+      "id": "ind-198",
+      "rol": "market vendor impacted by heavy rain",
+      "topico": "temporary shelter coordination",
+      "accion": "report neighborhood recovery needs",
+      "pbest": {
+        "rol": "farmer reporting river flood impacts",
+        "topico": "blocked evacuation corridors",
+        "accion": "ask for evacuation transport help"
+      },
+      "lider": {
+        "rol": "radio correspondent reporting storm damage",
+        "topico": "commercial street flood impacts",
+        "accion": "explain emergency shelter overcrowding"
+      }
+    },
+    {
+      "id": "ind-199",
+      "rol": "student documenting neighborhood flooding",
+      "topico": "flooded market streets",
+      "accion": "document damaged homes after rainfall",
+      "pbest": {
+        "rol": "school leader coordinating shelter response",
+        "topico": "flood related power outage",
+        "accion": "request temporary housing support"
+      },
+      "lider": {
+        "rol": "youth volunteer reporting neighborhood damage",
+        "topico": "shelter registration and capacity",
+        "accion": "report barriers to urgent healthcare"
+      }
+    },
+    {
+      "id": "ind-200",
+      "rol": "health promoter checking vulnerable households",
+      "topico": "medical needs in shelters",
+      "accion": "request food and blankets",
+      "pbest": {
+        "rol": "social worker reporting displaced families",
+        "topico": "emergency food relief needs",
+        "accion": "describe debris blocking emergency roads"
+      },
+      "lider": {
+        "rol": "school administrator reporting shelter status",
+        "topico": "neighborhood blackout after flooding",
+        "accion": "request potable water assistance"
+      }
+    }
+  ]
+}
