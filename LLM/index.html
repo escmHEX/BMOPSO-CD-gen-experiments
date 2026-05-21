@@ -15,6 +15,7 @@
         </div>
         <nav class="tool-nav" aria-label="Herramientas disponibles">
           <button class="nav-item is-active" type="button" data-tool="templateChecker">Evaluador de plantillas</button>
+          <button class="nav-item" type="button" data-tool="solutionEvaluator">Probar evaluación de soluciones</button>
           <button class="nav-item" type="button" data-tool="embeddingCalculator">Calculadora SBERT</button>
         </nav>
         <div class="sidebar-note">
@@ -403,6 +404,213 @@ Each line must follow this format:
                 </thead>
                 <tbody id="candidateResultsBody">
                   <tr><td colspan="6">Sin candidatos todavía.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section id="solutionEvaluator" class="tool-panel" aria-label="Probar evaluación de soluciones">
+          <header class="tool-header">
+            <div>
+              <p class="eyebrow">Solución mock -> prompt -> LLM -> F.O</p>
+              <h1>Probar evaluación de soluciones</h1>
+            </div>
+            <div class="header-status">
+              <span id="solutionConnectionDot" class="status-dot" aria-hidden="true"></span>
+              <span id="solutionConnectionText">Sin probar conexión</span>
+            </div>
+          </header>
+
+          <section class="grid two-columns">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Conexión y prueba</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>API LM Studio</span>
+                  <select id="solutionLmApiMode">
+                    <option value="native">REST v1 (/api/v1)</option>
+                    <option value="openai">OpenAI-compatible (/v1)</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Endpoint / proxy</span>
+                  <input id="solutionLmEndpoint" type="text" value="/lmstudio/api/v1" autocomplete="off">
+                </label>
+                <label>
+                  <span>Modelo LLM</span>
+                  <select id="solutionLlmModelSelect">
+                    <option value="">Cargar modelos desde LM Studio</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Modelo manual</span>
+                  <input id="solutionLlmModelManual" type="text" value="meta-llama-3.1-8b-instruct" autocomplete="off">
+                </label>
+                <label>
+                  <span>Soluciones mock</span>
+                  <input id="solutionCount" type="number" min="1" max="200" value="20">
+                </label>
+                <label>
+                  <span>Temperatura</span>
+                  <input id="solutionTemperature" type="number" min="0" max="2" step="0.05" value="0.75">
+                </label>
+                <label>
+                  <span>Top p</span>
+                  <input id="solutionTopP" type="number" min="0" max="1" step="0.01" value="0.95">
+                </label>
+                <label>
+                  <span>Máx. tokens</span>
+                  <input id="solutionMaxTokens" type="number" min="8" max="2048" value="180">
+                </label>
+                <label>
+                  <span>Timeout por solución (s)</span>
+                  <input id="solutionRequestTimeout" type="number" min="5" max="600" value="120">
+                </label>
+                <label>
+                  <span>Paralelismo</span>
+                  <input id="solutionConcurrency" type="number" min="1" max="8" value="1">
+                </label>
+              </div>
+              <div class="inline-actions">
+                <button id="loadSolutionModelsButton" class="secondary" type="button">Cargar modelos</button>
+                <button id="previewSolutionsButton" class="secondary" type="button">Previsualizar</button>
+                <button id="runSolutionsButton" type="button">Ejecutar prueba</button>
+                <button id="stopSolutionsButton" class="danger" type="button" disabled>Detener</button>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Referencia y embeddings</h2>
+              </div>
+              <div class="form-grid">
+                <label class="span-2">
+                  <span>Texto de referencia</span>
+                  <select id="solutionReferencePreset"></select>
+                </label>
+                <label class="span-2">
+                  <span>Texto usado</span>
+                  <textarea id="solutionReferenceText" rows="4"></textarea>
+                </label>
+                <div class="span-2 pso-db-note">
+                  <span id="solutionReferenceSource">Fuente no cargada.</span>
+                </div>
+                <label>
+                  <span>Embedding F.O</span>
+                  <select id="solutionEmbeddingModel">
+                    <option value="Xenova/all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                    <option value="Xenova/gte-small">gte-small</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Base diversidad F2</span>
+                  <select id="solutionDiversityBasis">
+                    <option value="generated">Texto generado</option>
+                    <option value="prompt">Prompt renderizado</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Tau mín. fidelidad</span>
+                  <input id="solutionFidelityMin" type="number" min="-1" max="1" step="0.01" value="0.20">
+                </label>
+                <label>
+                  <span>Tau máx. copia</span>
+                  <input id="solutionCopyMax" type="number" min="-1" max="1" step="0.01" value="0.95">
+                </label>
+              </div>
+            </article>
+          </section>
+
+          <section class="panel template-panel">
+            <div class="panel-title">
+              <h2>Plantilla determinística</h2>
+              <span>Variables: {role}, {topic}, {action}, {component_list}, {reference_text}</span>
+            </div>
+            <textarea id="solutionPromptTemplate" class="code-textarea" rows="12">Generate a short natural-disaster scenario message using the following semantic components: role = {role}; topic = {topic}; action = {action}. The generated message must follow the role, address the topic, and satisfy the action.</textarea>
+          </section>
+
+          <section class="metrics-grid" aria-label="Resumen de evaluación de soluciones">
+            <article class="metric">
+              <span>Llamadas LLM</span>
+              <strong id="solutionLlmCalls">--</strong>
+              <p>Solicitudes de generación realizadas durante la prueba.</p>
+            </article>
+            <article class="metric">
+              <span>Tiempo LLM total</span>
+              <strong id="solutionLlmTotalMs">--</strong>
+              <p>Suma de tiempos reportados por las llamadas al generador.</p>
+            </article>
+            <article class="metric">
+              <span>Tiempo flujo total</span>
+              <strong id="solutionFlowTotalMs">--</strong>
+              <p>Incluye render, llamadas, embeddings y cálculo de dominancia.</p>
+            </article>
+            <article class="metric">
+              <span>No dominadas</span>
+              <strong id="solutionNonDominatedCount">--</strong>
+              <p>Soluciones del frente de Pareto sobre [fidelidad, diversidad].</p>
+            </article>
+            <article class="metric">
+              <span>EVOLMD-MO estimado</span>
+              <strong id="solutionEvolmdCost">--</strong>
+              <p id="solutionEvolmdCostDetail">Estimación pendiente.</p>
+            </article>
+            <article class="metric">
+              <span>MESAP estimado</span>
+              <strong id="solutionMesapCost">--</strong>
+              <p id="solutionMesapCostDetail">Estimación pendiente.</p>
+            </article>
+          </section>
+
+          <section class="status-panel" aria-live="polite">
+            <span id="solutionStatusTone" class="status-dot" aria-hidden="true"></span>
+            <div>
+              <p id="solutionStatusTitle">Listo</p>
+              <p id="solutionStatusDetail">La prueba usa composición determinística y una llamada LLM generadora por solución.</p>
+            </div>
+          </section>
+
+          <section class="grid two-columns results-layout">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Primer prompt renderizado</h2>
+              </div>
+              <pre id="solutionPromptPreview" class="output-box">Previsualiza o ejecuta para ver la primera solución.</pre>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Resumen F.O</h2>
+              </div>
+              <dl id="solutionObjectiveDetails" class="definition-grid"></dl>
+            </article>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Soluciones evaluadas</h2>
+              <button id="clearSolutionResultsButton" class="secondary compact" type="button">Limpiar resultados</button>
+            </div>
+            <div class="table-wrap">
+              <table class="wide-table solution-results-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Rol</th>
+                    <th>Tópico</th>
+                    <th>Acción</th>
+                    <th>Prompt</th>
+                    <th>Texto generado</th>
+                    <th>Vector F.O</th>
+                    <th>No dominada</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody id="solutionResultsBody">
+                  <tr><td colspan="9">Sin soluciones evaluadas todavía.</td></tr>
                 </tbody>
               </table>
             </div>

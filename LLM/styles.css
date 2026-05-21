@@ -548,6 +548,15 @@ td {
   min-width: 190px;
 }
 
+.long-cell {
+  max-width: 360px;
+  white-space: pre-wrap;
+}
+
+.solution-results-table {
+  min-width: 1680px;
+}
+
 .valid {
   color: #057a55;
   font-weight: 800;

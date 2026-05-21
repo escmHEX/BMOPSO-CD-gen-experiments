@@ -56,6 +56,19 @@ El umbral `tau_target_copy` queda en `0.94` por defecto. Si `cos(candidate, targ
 
 Las líneas duplicadas no se descartan silenciosamente: se conservan en la tabla y se marcan como `duplicate_output`.
 
+## Prueba de evaluación de soluciones
+
+La sección `Probar evaluación de soluciones` ejecuta un flujo completo:
+
+1. Genera soluciones mock con `rol`, `topico` y `accion` a partir de textos de referencia breves publicados en la memoria de Nicolas Meneses o el paper EVOLMD-MO.
+2. Renderiza un prompt mediante la plantilla determinística configurable.
+3. Envía el prompt al LLM generador con el system prompt fijo de generación de texto.
+4. Calcula embeddings con `Xenova/all-MiniLM-L6-v2` por defecto o `Xenova/gte-small`.
+5. Calcula el vector F.O `[F1, F2]`, donde `F1 = cos(texto generado, referencia)` y `F2` es la distancia coseno promedio contra las demás soluciones.
+6. Marca las soluciones no dominadas usando dominancia de Pareto sobre maximización de `F1` y `F2`.
+
+Las estimaciones comparativas de costo usan el tiempo promedio local medido en la prueba. Para EVOLMD-MO se estima Init Agent + Data Agent por solución y mutación esperada con `Pm = 0.05`. Para MESAP se estima la inicialización descrita en la memoria con 3 llamadas por solución y un sobrecosto temporal de 18%.
+
 ## Simulación de iteración PSO
 
 La sección `Componente semántico` incluye el switch `Simular iteración PSO`.

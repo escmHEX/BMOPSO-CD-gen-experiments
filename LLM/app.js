@@ -86,11 +86,177 @@ const PSO_OPERATORS = {
   },
 };
 
+const SOLUTION_GENERATION_SYSTEM_PROMPT = `You are a plain-text generator for natural-disaster scenario messages. You will receive one text-generation instruction from the user. Follow the instruction and generate exactly one final text message.
+
+Output rules:
+- Return plain text only.
+- Return the dataset content itself, not a prompt, explanation, title, label, list, code, or metadata.
+- Do not describe the task.
+- Do not add unsolicited safety advice.
+- Do not use quotation marks, hashtags, URLs, usernames, placeholders, tags, or special markers.
+- Limit the message to between 1 and 4 sentences.
+- Return only the final message.`;
+
+const SOLUTION_REFERENCE_PRESETS = [
+  {
+    id: "nicolas_food",
+    label: "Nicolas: racionamiento de alimentos",
+    source: "Memoria de Nicolas Meneses, escenario de calibracion 1.",
+    referenceText: "We're rationing food. Only one store open and it's chaos",
+    roles: [
+      "affected resident seeking supplies",
+      "parent worried about food access",
+      "store customer reporting scarcity",
+      "neighborhood volunteer coordinating aid",
+      "local organizer monitoring supply lines",
+      "community member facing rationing",
+      "family caregiver near crowded stores",
+      "resident documenting food shortages",
+    ],
+    topics: [
+      "food rationing during emergency",
+      "limited grocery access",
+      "crowded supply distribution",
+      "household food insecurity",
+      "chaotic store conditions",
+      "scarce essential supplies",
+      "neighborhood aid coordination",
+      "urgent food access",
+    ],
+    actions: [
+      "report supply shortage",
+      "request coordinated food aid",
+      "warn about store crowding",
+      "ask for emergency distribution",
+      "summarize rationing impact",
+      "share local scarcity update",
+      "request support for families",
+      "document urgent food needs",
+    ],
+  },
+  {
+    id: "nicolas_cleanup",
+    label: "Nicolas: coordinacion de limpieza",
+    source: "Memoria de Nicolas Meneses, escenario de calibracion 2.",
+    referenceText: "We're organizing a cleanup drive in the park at 9 AM",
+    roles: [
+      "community volunteer coordinator",
+      "neighbor organizing cleanup work",
+      "local resident mobilizing helpers",
+      "park volunteer team leader",
+      "municipal liaison sharing cleanup plans",
+      "student volunteer coordinating attendance",
+      "resident reporting community action",
+      "aid organizer preparing a work crew",
+    ],
+    topics: [
+      "park cleanup coordination",
+      "volunteer mobilization after damage",
+      "scheduled community cleanup",
+      "debris removal planning",
+      "neighborhood recovery work",
+      "morning cleanup logistics",
+      "public space restoration",
+      "community disaster response",
+    ],
+    actions: [
+      "invite volunteers to attend",
+      "announce cleanup schedule",
+      "coordinate tools and helpers",
+      "request local participation",
+      "share recovery logistics",
+      "organize debris removal",
+      "confirm meeting time",
+      "summarize cleanup plan",
+    ],
+  },
+  {
+    id: "nicolas_water",
+    label: "Nicolas: tratamiento de agua",
+    source: "Memoria de Nicolas Meneses, escenario de calibracion 3.",
+    referenceText: "Please conserve water as our treatment facilities are still offline",
+    roles: [
+      "local authority issuing service update",
+      "water utility representative",
+      "municipal emergency communicator",
+      "public works official",
+      "community leader sharing water guidance",
+      "resident relay for official alerts",
+      "infrastructure coordinator",
+      "emergency operations spokesperson",
+    ],
+    topics: [
+      "water conservation during outage",
+      "offline treatment facilities",
+      "critical service disruption",
+      "public water restrictions",
+      "infrastructure recovery delay",
+      "safe water management",
+      "municipal utility outage",
+      "household conservation guidance",
+    ],
+    actions: [
+      "ask residents to conserve water",
+      "report treatment facility outage",
+      "share official service update",
+      "warn about limited water supply",
+      "request reduced household use",
+      "explain ongoing infrastructure issue",
+      "summarize conservation measures",
+      "notify community about water limits",
+    ],
+  },
+  {
+    id: "diego_disaster_response",
+    label: "Diego: respuesta adaptativa",
+    source: "Paper EVOLMD-MO, resumen sobre disaster response.",
+    referenceText: "adaptive stream processing for disaster response",
+    roles: [
+      "disaster analyst monitoring live reports",
+      "emergency coordinator tracking incidents",
+      "data operator supporting response teams",
+      "field responder reporting urgent events",
+      "public safety analyst",
+      "crisis operations specialist",
+      "community alert coordinator",
+      "response planner reviewing data streams",
+    ],
+    topics: [
+      "adaptive disaster response",
+      "live emergency stream processing",
+      "rapid incident monitoring",
+      "dynamic crisis data analysis",
+      "synthetic disaster message generation",
+      "emergency information triage",
+      "real time response coordination",
+      "disaster training data quality",
+    ],
+    actions: [
+      "generate actionable alert text",
+      "summarize changing emergency conditions",
+      "report incident signals clearly",
+      "support response team prioritization",
+      "describe urgent public safety needs",
+      "create concise disaster updates",
+      "highlight relevant response context",
+      "inform adaptive processing models",
+    ],
+  },
+];
+
+const SOLUTION_COST_ASSUMPTIONS = {
+  evolmdMutationProbability: 0.05,
+  mesapCallsPerSolution: 3,
+  mesapRuntimeMultiplier: 1.18,
+};
+
 const workerRequests = new Map();
 let nextWorkerRequestId = 1;
 let stopRequested = false;
+let solutionEvalStopRequested = false;
 let latestEmbeddingVectors = null;
 let latestCheckerRows = [];
+let latestSolutionRows = [];
 let psoDatabase = null;
 
 const dom = {
@@ -167,6 +333,45 @@ const dom = {
   candidateResultsBody: document.querySelector("#candidateResultsBody"),
   candidateResultsTable: document.querySelector("#candidateResultsHead").closest("table"),
   clearCheckerResultsButton: document.querySelector("#clearCheckerResultsButton"),
+  solutionLmEndpoint: document.querySelector("#solutionLmEndpoint"),
+  solutionLmApiMode: document.querySelector("#solutionLmApiMode"),
+  solutionLlmModelSelect: document.querySelector("#solutionLlmModelSelect"),
+  solutionLlmModelManual: document.querySelector("#solutionLlmModelManual"),
+  solutionCount: document.querySelector("#solutionCount"),
+  solutionTemperature: document.querySelector("#solutionTemperature"),
+  solutionTopP: document.querySelector("#solutionTopP"),
+  solutionMaxTokens: document.querySelector("#solutionMaxTokens"),
+  solutionRequestTimeout: document.querySelector("#solutionRequestTimeout"),
+  solutionConcurrency: document.querySelector("#solutionConcurrency"),
+  loadSolutionModelsButton: document.querySelector("#loadSolutionModelsButton"),
+  previewSolutionsButton: document.querySelector("#previewSolutionsButton"),
+  runSolutionsButton: document.querySelector("#runSolutionsButton"),
+  stopSolutionsButton: document.querySelector("#stopSolutionsButton"),
+  solutionReferencePreset: document.querySelector("#solutionReferencePreset"),
+  solutionReferenceText: document.querySelector("#solutionReferenceText"),
+  solutionReferenceSource: document.querySelector("#solutionReferenceSource"),
+  solutionEmbeddingModel: document.querySelector("#solutionEmbeddingModel"),
+  solutionDiversityBasis: document.querySelector("#solutionDiversityBasis"),
+  solutionFidelityMin: document.querySelector("#solutionFidelityMin"),
+  solutionCopyMax: document.querySelector("#solutionCopyMax"),
+  solutionPromptTemplate: document.querySelector("#solutionPromptTemplate"),
+  solutionLlmCalls: document.querySelector("#solutionLlmCalls"),
+  solutionLlmTotalMs: document.querySelector("#solutionLlmTotalMs"),
+  solutionFlowTotalMs: document.querySelector("#solutionFlowTotalMs"),
+  solutionNonDominatedCount: document.querySelector("#solutionNonDominatedCount"),
+  solutionEvolmdCost: document.querySelector("#solutionEvolmdCost"),
+  solutionEvolmdCostDetail: document.querySelector("#solutionEvolmdCostDetail"),
+  solutionMesapCost: document.querySelector("#solutionMesapCost"),
+  solutionMesapCostDetail: document.querySelector("#solutionMesapCostDetail"),
+  solutionStatusTone: document.querySelector("#solutionStatusTone"),
+  solutionStatusTitle: document.querySelector("#solutionStatusTitle"),
+  solutionStatusDetail: document.querySelector("#solutionStatusDetail"),
+  solutionConnectionDot: document.querySelector("#solutionConnectionDot"),
+  solutionConnectionText: document.querySelector("#solutionConnectionText"),
+  solutionPromptPreview: document.querySelector("#solutionPromptPreview"),
+  solutionObjectiveDetails: document.querySelector("#solutionObjectiveDetails"),
+  solutionResultsBody: document.querySelector("#solutionResultsBody"),
+  clearSolutionResultsButton: document.querySelector("#clearSolutionResultsButton"),
   embeddingModelLabel: document.querySelector("#embeddingModelLabel"),
   embeddingModelSelect: document.querySelector("#embeddingModelSelect"),
   embeddingTextA: document.querySelector("#embeddingTextA"),
@@ -304,6 +509,10 @@ function endpointForMode(mode) {
 
 function selectedLlmModel() {
   return dom.llmModelSelect.value || dom.llmModelManual.value.trim();
+}
+
+function selectedSolutionLlmModel() {
+  return dom.solutionLlmModelSelect.value || dom.solutionLlmModelManual.value.trim();
 }
 
 function selectedEmbeddingModel() {
@@ -593,10 +802,16 @@ async function callLmStudio(prompt, runNumber, config) {
   const started = performance.now();
   const isNativeApi = config.apiMode === "native";
   const requestUrl = isNativeApi ? `${config.endpoint}/chat` : `${config.endpoint}/chat/completions`;
+  const messages = config.systemPrompt
+    ? [
+        { role: "system", content: config.systemPrompt },
+        { role: "user", content: prompt },
+      ]
+    : [{ role: "user", content: prompt }];
   const requestBody = isNativeApi
     ? {
         model: config.model,
-        input: prompt,
+        input: config.systemPrompt ? `${config.systemPrompt}\n\nUser instruction:\n${prompt}` : prompt,
         temperature: config.temperature,
         top_p: config.topP,
         max_output_tokens: config.maxTokens,
@@ -605,7 +820,7 @@ async function callLmStudio(prompt, runNumber, config) {
       }
     : {
         model: config.model,
-        messages: [{ role: "user", content: prompt }],
+        messages,
         temperature: config.temperature,
         top_p: config.topP,
         max_tokens: config.maxTokens,
@@ -706,6 +921,48 @@ async function fetchLmStudioModels() {
   } finally {
     dom.checkerConnectionDot.classList.remove("is-busy");
     dom.loadModelsButton.disabled = false;
+  }
+}
+
+async function fetchSolutionLmStudioModels() {
+  const endpoint = normalizeEndpoint(dom.solutionLmEndpoint.value);
+  dom.solutionLmEndpoint.value = endpoint;
+  dom.loadSolutionModelsButton.disabled = true;
+  dom.solutionConnectionDot.classList.add("is-busy");
+  dom.solutionConnectionDot.classList.remove("is-error");
+  dom.solutionConnectionText.textContent = "Consultando LM Studio";
+
+  try {
+    const response = await fetch(`${endpoint}/models`);
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error?.message || `HTTP ${response.status}`);
+    }
+
+    const models = parseLmStudioModels(payload, dom.solutionLmApiMode.value);
+    dom.solutionLlmModelSelect.replaceChildren(
+      ...models.map((model) => {
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.textContent = model.label;
+        return option;
+      }),
+    );
+
+    if (models.length > 0) {
+      const loaded = models.find((model) => model.loaded) || models[0];
+      dom.solutionLlmModelSelect.value = loaded.id;
+      dom.solutionLlmModelManual.value = loaded.id;
+    }
+
+    dom.solutionConnectionText.textContent = `${models.length} modelo(s) disponibles`;
+  } catch (error) {
+    dom.solutionConnectionDot.classList.add("is-error");
+    dom.solutionConnectionText.textContent = "Error de conexión";
+    setStatus(dom.solutionStatusTone, dom.solutionStatusTitle, dom.solutionStatusDetail, "No se pudo conectar a LM Studio", error.message, "error");
+  } finally {
+    dom.solutionConnectionDot.classList.remove("is-busy");
+    dom.loadSolutionModelsButton.disabled = false;
   }
 }
 
@@ -911,7 +1168,7 @@ function randomItem(items) {
 }
 
 function escapeHtml(value) {
-  return value
+  return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -995,6 +1252,392 @@ async function scoreRunCandidates(runNumber, rawOutput, baseline, config) {
     },
     rows,
   };
+}
+
+function solutionReferencePreset() {
+  return SOLUTION_REFERENCE_PRESETS.find((preset) => preset.id === dom.solutionReferencePreset.value)
+    || SOLUTION_REFERENCE_PRESETS[0];
+}
+
+function populateSolutionReferencePresets() {
+  dom.solutionReferencePreset.replaceChildren(
+    ...SOLUTION_REFERENCE_PRESETS.map((preset) => new Option(preset.label, preset.id)),
+  );
+}
+
+function applySolutionReferencePreset() {
+  const preset = solutionReferencePreset();
+  dom.solutionReferenceText.value = preset.referenceText;
+  dom.solutionReferenceSource.textContent = preset.source;
+  previewSolutions();
+}
+
+function resetSolutionMetrics() {
+  dom.solutionLlmCalls.textContent = "--";
+  dom.solutionLlmTotalMs.textContent = "--";
+  dom.solutionFlowTotalMs.textContent = "--";
+  dom.solutionNonDominatedCount.textContent = "--";
+  dom.solutionEvolmdCost.textContent = "--";
+  dom.solutionEvolmdCostDetail.textContent = "Estimación pendiente.";
+  dom.solutionMesapCost.textContent = "--";
+  dom.solutionMesapCostDetail.textContent = "Estimación pendiente.";
+  dom.solutionObjectiveDetails.replaceChildren();
+}
+
+function clearSolutionResults() {
+  latestSolutionRows = [];
+  dom.solutionResultsBody.innerHTML = '<tr><td colspan="9">Sin soluciones evaluadas todavía.</td></tr>';
+  resetSolutionMetrics();
+}
+
+function setSolutionRunning(isRunning) {
+  dom.runSolutionsButton.disabled = isRunning;
+  dom.stopSolutionsButton.disabled = !isRunning;
+  dom.loadSolutionModelsButton.disabled = isRunning;
+  dom.previewSolutionsButton.disabled = isRunning;
+  dom.clearSolutionResultsButton.disabled = isRunning;
+}
+
+function solutionComponentList(solution) {
+  return `role = ${solution.role}; topic = ${solution.topic}; action = ${solution.action}`;
+}
+
+function solutionVariables(solution, referenceText) {
+  return {
+    role: solution.role,
+    topic: solution.topic,
+    action: solution.action,
+    component_list: solutionComponentList(solution),
+    reference_text: referenceText,
+  };
+}
+
+function renderSolutionPrompt(solution, referenceText, template) {
+  return renderPromptWithVariables(solutionVariables(solution, referenceText), template);
+}
+
+function createMockSolutions(preset, count) {
+  const solutions = [];
+  for (let index = 0; index < count; index += 1) {
+    const role = preset.roles[index % preset.roles.length];
+    const topic = preset.topics[Math.floor(index / preset.roles.length) % preset.topics.length];
+    const action = preset.actions[Math.floor(index / (preset.roles.length * preset.topics.length)) % preset.actions.length];
+    solutions.push({
+      id: `sol-${String(index + 1).padStart(3, "0")}`,
+      number: index + 1,
+      role,
+      topic,
+      action,
+    });
+  }
+  return solutions;
+}
+
+function readSolutionConfig() {
+  const endpoint = normalizeEndpoint(dom.solutionLmEndpoint.value);
+  const model = selectedSolutionLlmModel();
+  const referenceText = dom.solutionReferenceText.value.trim();
+  const fidelityMin = readClampedNumber(dom.solutionFidelityMin, "Tau mín. fidelidad", -1, 1);
+  const copyMax = readClampedNumber(dom.solutionCopyMax, "Tau máx. copia", -1, 1);
+
+  if (!endpoint) throw new Error("Define el endpoint de LM Studio.");
+  if (!model) throw new Error("Selecciona o escribe el modelo LLM.");
+  if (!referenceText) throw new Error("Define el texto de referencia.");
+  if (fidelityMin > copyMax) {
+    throw new Error("Tau mín. fidelidad no puede ser mayor que Tau máx. copia.");
+  }
+
+  const solutionCount = Math.floor(readClampedNumber(dom.solutionCount, "Soluciones mock", 1, 200));
+  const concurrency = Math.floor(readClampedNumber(dom.solutionConcurrency, "Paralelismo", 1, 8));
+
+  return {
+    endpoint,
+    apiMode: dom.solutionLmApiMode.value,
+    model,
+    solutionCount,
+    temperature: readClampedNumber(dom.solutionTemperature, "Temperatura", 0, 2),
+    topP: readClampedNumber(dom.solutionTopP, "Top p", 0, 1),
+    maxTokens: readClampedNumber(dom.solutionMaxTokens, "Máx. tokens", 8, 2048),
+    timeoutMs: readClampedNumber(dom.solutionRequestTimeout, "Timeout por solución", 5, 600) * 1000,
+    concurrency,
+    embeddingModel: dom.solutionEmbeddingModel.value,
+    diversityBasis: dom.solutionDiversityBasis.value,
+    fidelityMin,
+    copyMax,
+    referenceText,
+    referencePreset: solutionReferencePreset(),
+    promptTemplate: dom.solutionPromptTemplate.value,
+    systemPrompt: SOLUTION_GENERATION_SYSTEM_PROMPT,
+  };
+}
+
+function previewSolutions() {
+  try {
+    const count = Math.min(200, Math.max(1, Number(dom.solutionCount.value) || 1));
+    const firstSolution = createMockSolutions(solutionReferencePreset(), count)[0];
+    dom.solutionPromptPreview.textContent = firstSolution
+      ? renderSolutionPrompt(firstSolution, dom.solutionReferenceText.value.trim(), dom.solutionPromptTemplate.value)
+      : "No hay soluciones para previsualizar.";
+  } catch (error) {
+    dom.solutionPromptPreview.textContent = error.message;
+  }
+}
+
+function normalizeGeneratedText(rawOutput) {
+  return rawOutput
+    .replace(/```[A-Za-z]*\n?/g, "")
+    .replace(/```/g, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim();
+}
+
+function objectiveVectorLabel(row) {
+  if (!Number.isFinite(row.fidelity) || !Number.isFinite(row.diversity)) {
+    return "--";
+  }
+  return `[${formatNumber(row.fidelity, 4)}, ${formatNumber(row.diversity, 4)}]`;
+}
+
+function solutionValidationLabel(row, config) {
+  if (row.error) {
+    return row.error;
+  }
+  if (!Number.isFinite(row.fidelity)) {
+    return "pendiente F.O";
+  }
+  if (row.fidelity < config.fidelityMin) {
+    return "baja_fidelidad";
+  }
+  if (row.fidelity > config.copyMax) {
+    return "posible_copia";
+  }
+  return "ok";
+}
+
+function renderSolutionRows(rows, config = null) {
+  if (rows.length === 0) {
+    dom.solutionResultsBody.innerHTML = '<tr><td colspan="9">Sin soluciones evaluadas todavía.</td></tr>';
+    return;
+  }
+
+  dom.solutionResultsBody.replaceChildren(
+    ...rows.map((row) => {
+      const tr = document.createElement("tr");
+      const status = config ? solutionValidationLabel(row, config) : row.error || "pendiente";
+      const isOk = status === "ok";
+      tr.innerHTML = `
+        <td>${row.number}</td>
+        <td class="context-cell">${escapeHtml(row.role)}</td>
+        <td class="context-cell">${escapeHtml(row.topic)}</td>
+        <td class="context-cell">${escapeHtml(row.action)}</td>
+        <td class="context-cell long-cell">${escapeHtml(row.prompt || "--")}</td>
+        <td class="context-cell long-cell">${escapeHtml(row.generatedText || "--")}</td>
+        <td>${objectiveVectorLabel(row)}</td>
+        <td>${row.nonDominated ? '<span class="valid">sí</span>' : "--"}</td>
+        <td><span class="${isOk ? "valid" : "invalid"}">${escapeHtml(status)}</span></td>
+      `;
+      return tr;
+    }),
+  );
+}
+
+function markNonDominated(rows) {
+  rows.forEach((row) => {
+    if (!Number.isFinite(row.fidelity) || !Number.isFinite(row.diversity)) {
+      row.nonDominated = false;
+      return;
+    }
+
+    row.nonDominated = !rows.some((other) => (
+      other !== row
+      && Number.isFinite(other.fidelity)
+      && Number.isFinite(other.diversity)
+      && other.fidelity >= row.fidelity
+      && other.diversity >= row.diversity
+      && (other.fidelity > row.fidelity || other.diversity > row.diversity)
+    ));
+  });
+}
+
+async function scoreSolutionObjectiveRows(rows, config) {
+  const completedRows = rows.filter((row) => !row.error && row.generatedText);
+  if (completedRows.length === 0) {
+    markNonDominated(rows);
+    return rows;
+  }
+
+  const generatedEmbeddings = await requestEmbeddings(
+    config.embeddingModel,
+    [config.referenceText, ...completedRows.map((row) => row.generatedText)],
+  );
+  const referenceEmbedding = generatedEmbeddings[0];
+  const generatedVectors = generatedEmbeddings.slice(1);
+  const diversityVectors = config.diversityBasis === "prompt"
+    ? await requestEmbeddings(config.embeddingModel, completedRows.map((row) => row.prompt))
+    : generatedVectors;
+
+  completedRows.forEach((row, index) => {
+    row.fidelity = cosineSimilarity(generatedVectors[index], referenceEmbedding);
+    if (diversityVectors.length <= 1) {
+      row.diversity = 0;
+      return;
+    }
+
+    const totalDistance = diversityVectors.reduce((sum, vector, otherIndex) => {
+      if (otherIndex === index) {
+        return sum;
+      }
+      return sum + cosineDistance(cosineSimilarity(diversityVectors[index], vector));
+    }, 0);
+    row.diversity = totalDistance / (diversityVectors.length - 1);
+  });
+
+  markNonDominated(rows);
+  return rows;
+}
+
+function estimateComparativeCosts(solutionCount, averageLlmMs) {
+  const expectedMutations = Math.ceil(solutionCount * SOLUTION_COST_ASSUMPTIONS.evolmdMutationProbability);
+  const evolmdCalls = (solutionCount * 2) + (expectedMutations * 2);
+  const mesapCalls = solutionCount * SOLUTION_COST_ASSUMPTIONS.mesapCallsPerSolution;
+
+  return {
+    evolmdCalls,
+    evolmdMs: Number.isFinite(averageLlmMs) ? evolmdCalls * averageLlmMs : NaN,
+    mesapCalls,
+    mesapMs: Number.isFinite(averageLlmMs)
+      ? mesapCalls * averageLlmMs * SOLUTION_COST_ASSUMPTIONS.mesapRuntimeMultiplier
+      : NaN,
+  };
+}
+
+function summarizeSolutionResults(rows, config, llmCalls, flowElapsedMs) {
+  const timedRows = rows.filter((row) => Number.isFinite(row.elapsedMs));
+  const llmElapsedMs = timedRows.reduce((sum, row) => sum + row.elapsedMs, 0);
+  const averageLlmMs = llmCalls > 0 ? llmElapsedMs / llmCalls : NaN;
+  const completedRows = rows.filter((row) => !row.error && row.generatedText);
+  const scoredRows = completedRows.filter((row) => Number.isFinite(row.fidelity));
+  const nonDominatedRows = scoredRows.filter((row) => row.nonDominated);
+  const bestFidelity = scoredRows.reduce((best, row) => (!best || row.fidelity > best.fidelity ? row : best), null);
+  const bestDiversity = scoredRows.reduce((best, row) => (!best || row.diversity > best.diversity ? row : best), null);
+  const estimates = estimateComparativeCosts(config.solutionCount, averageLlmMs);
+
+  dom.solutionLlmCalls.textContent = `${llmCalls}/${config.solutionCount}`;
+  dom.solutionLlmTotalMs.textContent = formatDuration(llmElapsedMs);
+  dom.solutionFlowTotalMs.textContent = formatDuration(flowElapsedMs);
+  dom.solutionNonDominatedCount.textContent = scoredRows.length ? `${nonDominatedRows.length}/${scoredRows.length}` : "--";
+  dom.solutionEvolmdCost.textContent = `${estimates.evolmdCalls} llamadas`;
+  dom.solutionEvolmdCostDetail.textContent = Number.isFinite(estimates.evolmdMs)
+    ? `${formatDuration(estimates.evolmdMs)} estimados con Init/Data Agent y mutación Pm=0,05.`
+    : "Sin promedio local para estimar ms.";
+  dom.solutionMesapCost.textContent = `${estimates.mesapCalls} llamadas`;
+  dom.solutionMesapCostDetail.textContent = Number.isFinite(estimates.mesapMs)
+    ? `${formatDuration(estimates.mesapMs)} estimados con 3 llamadas por solución y sobrecosto 18%.`
+    : "Sin promedio local para estimar ms.";
+
+  renderDefinitionList(dom.solutionObjectiveDetails, [
+    ["Modelo embedding", EMBEDDING_MODELS[config.embeddingModel].displayName],
+    ["F1 fidelidad", "cos(texto generado, referencia)"],
+    ["F2 diversidad", config.diversityBasis === "prompt" ? "distancia promedio entre prompts" : "distancia promedio entre textos generados"],
+    ["Mayor fidelidad", bestFidelity ? `${bestFidelity.id}: ${formatNumber(bestFidelity.fidelity)}` : "--"],
+    ["Mayor diversidad", bestDiversity ? `${bestDiversity.id}: ${formatNumber(bestDiversity.diversity)}` : "--"],
+  ]);
+}
+
+async function runSolutionEvaluation() {
+  let config;
+  try {
+    config = readSolutionConfig();
+  } catch (error) {
+    setStatus(dom.solutionStatusTone, dom.solutionStatusTitle, dom.solutionStatusDetail, "Configuración incompleta", error.message, "error");
+    return;
+  }
+
+  solutionEvalStopRequested = false;
+  clearSolutionResults();
+  setSolutionRunning(true);
+
+  const flowStarted = performance.now();
+  const solutions = createMockSolutions(config.referencePreset, config.solutionCount);
+  const rows = [];
+  let nextSolutionIndex = 0;
+  let llmCalls = 0;
+  dom.solutionPromptPreview.textContent = renderSolutionPrompt(solutions[0], config.referenceText, config.promptTemplate);
+
+  try {
+    async function solutionWorker() {
+      while (!solutionEvalStopRequested && nextSolutionIndex < solutions.length) {
+        const solution = solutions[nextSolutionIndex];
+        nextSolutionIndex += 1;
+        const prompt = renderSolutionPrompt(solution, config.referenceText, config.promptTemplate);
+        setStatus(
+          dom.solutionStatusTone,
+          dom.solutionStatusTitle,
+          dom.solutionStatusDetail,
+          "Generando textos",
+          `Solución ${solution.number} de ${config.solutionCount}.`,
+          "busy",
+        );
+
+        try {
+          llmCalls += 1;
+          const response = await callLmStudio(prompt, solution.number, config);
+          const generatedText = normalizeGeneratedText(response.raw);
+          if (!generatedText) {
+            throw new Error("respuesta vacía");
+          }
+          rows.push({
+            ...solution,
+            prompt,
+            generatedText,
+            elapsedMs: response.elapsedMs,
+            error: null,
+          });
+        } catch (error) {
+          rows.push({
+            ...solution,
+            prompt,
+            generatedText: "",
+            elapsedMs: null,
+            error: error.name === "AbortError" ? "timeout" : error.message,
+          });
+        }
+
+        rows.sort((a, b) => a.number - b.number);
+        latestSolutionRows = rows;
+        renderSolutionRows(rows, config);
+        summarizeSolutionResults(rows, config, llmCalls, performance.now() - flowStarted);
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(config.concurrency, solutions.length) }, () => solutionWorker()));
+
+    setStatus(
+      dom.solutionStatusTone,
+      dom.solutionStatusTitle,
+      dom.solutionStatusDetail,
+      "Calculando F.O",
+      "Generando embeddings y frente de no dominancia.",
+      "busy",
+    );
+    await scoreSolutionObjectiveRows(rows, config);
+    rows.sort((a, b) => a.number - b.number);
+    latestSolutionRows = rows;
+    renderSolutionRows(rows, config);
+    summarizeSolutionResults(rows, config, llmCalls, performance.now() - flowStarted);
+
+    setStatus(
+      dom.solutionStatusTone,
+      dom.solutionStatusTitle,
+      dom.solutionStatusDetail,
+      solutionEvalStopRequested ? "Prueba detenida" : "Prueba completada",
+      `${rows.length} solución(es) procesada(s).`,
+    );
+  } catch (error) {
+    setStatus(dom.solutionStatusTone, dom.solutionStatusTitle, dom.solutionStatusDetail, "Error en prueba", error.message, "error");
+  } finally {
+    setSolutionRunning(false);
+  }
 }
 
 async function loadPsoDatabase() {
@@ -1538,6 +2181,30 @@ dom.clearCheckerResultsButton.addEventListener("click", () => {
   resetPsoMetrics();
   setResultsTableMode(dom.simulatePsoSwitch.checked ? "pso" : "standard");
 });
+dom.loadSolutionModelsButton.addEventListener("click", fetchSolutionLmStudioModels);
+dom.previewSolutionsButton.addEventListener("click", previewSolutions);
+dom.runSolutionsButton.addEventListener("click", runSolutionEvaluation);
+dom.stopSolutionsButton.addEventListener("click", () => {
+  solutionEvalStopRequested = true;
+  setStatus(dom.solutionStatusTone, dom.solutionStatusTitle, dom.solutionStatusDetail, "Deteniendo", "Se terminarán las solicitudes ya iniciadas.", "busy");
+});
+dom.clearSolutionResultsButton.addEventListener("click", clearSolutionResults);
+dom.solutionReferencePreset.addEventListener("change", applySolutionReferencePreset);
+dom.solutionCount.addEventListener("change", previewSolutions);
+dom.solutionPromptTemplate.addEventListener("input", previewSolutions);
+dom.solutionReferenceText.addEventListener("input", previewSolutions);
+dom.solutionLlmModelSelect.addEventListener("change", () => {
+  if (dom.solutionLlmModelSelect.value) {
+    dom.solutionLlmModelManual.value = dom.solutionLlmModelSelect.value;
+  }
+});
+dom.solutionLmApiMode.addEventListener("change", () => {
+  dom.solutionLmEndpoint.value = endpointForMode(dom.solutionLmApiMode.value);
+  dom.solutionLlmModelSelect.replaceChildren(new Option("Cargar modelos desde LM Studio", ""));
+  dom.solutionLlmModelManual.value = "meta-llama-3.1-8b-instruct";
+  dom.solutionConnectionText.textContent = "Sin probar conexión";
+  dom.solutionConnectionDot.classList.remove("is-error", "is-busy");
+});
 dom.simulatePsoSwitch.addEventListener("change", () => {
   updateSimulationModeUi();
   if (dom.simulatePsoSwitch.checked) {
@@ -1582,5 +2249,8 @@ dom.copyEmbeddingBButton.addEventListener("click", () => {
 });
 
 renderEmbeddingModelDetails();
+populateSolutionReferencePresets();
+applySolutionReferencePreset();
+resetSolutionMetrics();
 dom.renderedPromptPreview.textContent = renderPrompt();
 updateSimulationModeUi();
