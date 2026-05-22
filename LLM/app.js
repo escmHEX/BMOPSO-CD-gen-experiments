@@ -258,6 +258,8 @@ let latestEmbeddingVectors = null;
 let latestCheckerRows = [];
 let latestSolutionRows = [];
 let psoDatabase = null;
+let comparatorPollTimer = null;
+let currentComparatorRunId = null;
 
 const dom = {
   navItems: document.querySelectorAll(".nav-item"),
@@ -372,6 +374,37 @@ const dom = {
   solutionObjectiveDetails: document.querySelector("#solutionObjectiveDetails"),
   solutionResultsBody: document.querySelector("#solutionResultsBody"),
   clearSolutionResultsButton: document.querySelector("#clearSolutionResultsButton"),
+  comparatorReferenceText: document.querySelector("#comparatorReferenceText"),
+  comparatorModel: document.querySelector("#comparatorModel"),
+  comparatorTopK: document.querySelector("#comparatorTopK"),
+  comparatorProposalParallelism: document.querySelector("#comparatorProposalParallelism"),
+  comparatorTimeoutMinutes: document.querySelector("#comparatorTimeoutMinutes"),
+  comparatorN: document.querySelector("#comparatorN"),
+  comparatorGeneraciones: document.querySelector("#comparatorGeneraciones"),
+  comparatorK: document.querySelector("#comparatorK"),
+  comparatorProbCrossover: document.querySelector("#comparatorProbCrossover"),
+  comparatorProbMutacion: document.querySelector("#comparatorProbMutacion"),
+  runComparatorButton: document.querySelector("#runComparatorButton"),
+  cancelComparatorButton: document.querySelector("#cancelComparatorButton"),
+  clearComparatorButton: document.querySelector("#clearComparatorButton"),
+  comparatorConnectionDot: document.querySelector("#comparatorConnectionDot"),
+  comparatorConnectionText: document.querySelector("#comparatorConnectionText"),
+  comparatorRunStatus: document.querySelector("#comparatorRunStatus"),
+  comparatorProgressPercent: document.querySelector("#comparatorProgressPercent"),
+  comparatorProgressSummary: document.querySelector("#comparatorProgressSummary"),
+  comparatorCompletedProposals: document.querySelector("#comparatorCompletedProposals"),
+  comparatorShownRows: document.querySelector("#comparatorShownRows"),
+  comparatorRunId: document.querySelector("#comparatorRunId"),
+  comparatorStatusTone: document.querySelector("#comparatorStatusTone"),
+  comparatorStatusTitle: document.querySelector("#comparatorStatusTitle"),
+  comparatorStatusDetail: document.querySelector("#comparatorStatusDetail"),
+  comparatorProgressBar: document.querySelector("#comparatorProgressBar"),
+  comparatorProgressDetail: document.querySelector("#comparatorProgressDetail"),
+  comparatorProgressDetails: document.querySelector("#comparatorProgressDetails"),
+  comparatorProposalCards: document.querySelector("#comparatorProposalCards"),
+  comparatorResultsBody: document.querySelector("#comparatorResultsBody"),
+  comparatorLogOutput: document.querySelector("#comparatorLogOutput"),
+  comparatorIntegrationDetails: document.querySelector("#comparatorIntegrationDetails"),
   embeddingModelLabel: document.querySelector("#embeddingModelLabel"),
   embeddingModelSelect: document.querySelector("#embeddingModelSelect"),
   embeddingTextA: document.querySelector("#embeddingTextA"),
@@ -428,6 +461,9 @@ Format:
 ...
 """`,
 };
+
+const COMPARATOR_API = "/api/comparator";
+const COMPARATOR_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 function setStatus(toneElement, titleElement, detailElement, title, detail, state = "ready") {
   titleElement.textContent = title;
@@ -1640,6 +1676,400 @@ async function runSolutionEvaluation() {
   }
 }
 
+function comparatorStatusLabel(status) {
+  const labels = {
+    queued: "en cola",
+    running: "ejecutando",
+    completed: "completado",
+    failed: "fallido",
+    cancelled: "cancelado",
+  };
+  return labels[status] || status || "--";
+}
+
+function comparatorStatusClass(status) {
+  if (status === "completed" || status === "ok") {
+    return "valid";
+  }
+  if (status === "queued" || status === "running") {
+    return "in-progress";
+  }
+  return "invalid";
+}
+
+function setComparatorRunning(isRunning, cancelRequested = false) {
+  dom.runComparatorButton.disabled = isRunning;
+  dom.cancelComparatorButton.disabled = !isRunning || !currentComparatorRunId || cancelRequested;
+  dom.cancelComparatorButton.textContent = cancelRequested ? "Cancelando..." : "Cancelar";
+  dom.clearComparatorButton.disabled = isRunning;
+  [
+    dom.comparatorReferenceText,
+    dom.comparatorModel,
+    dom.comparatorTopK,
+    dom.comparatorProposalParallelism,
+    dom.comparatorTimeoutMinutes,
+    dom.comparatorN,
+    dom.comparatorGeneraciones,
+    dom.comparatorK,
+    dom.comparatorProbCrossover,
+    dom.comparatorProbMutacion,
+  ].forEach((field) => {
+    field.disabled = isRunning;
+  });
+}
+
+function stopComparatorPolling() {
+  if (comparatorPollTimer) {
+    window.clearInterval(comparatorPollTimer);
+    comparatorPollTimer = null;
+  }
+}
+
+function resetComparatorUi() {
+  stopComparatorPolling();
+  currentComparatorRunId = null;
+  dom.comparatorRunStatus.textContent = "--";
+  dom.comparatorProgressPercent.textContent = "--";
+  dom.comparatorProgressSummary.textContent = "Sin corrida activa.";
+  dom.comparatorCompletedProposals.textContent = "--";
+  dom.comparatorShownRows.textContent = "--";
+  dom.comparatorRunId.textContent = "--";
+  dom.comparatorConnectionText.textContent = "Sin ejecucion";
+  dom.comparatorConnectionDot.classList.remove("is-busy", "is-error");
+  dom.comparatorResultsBody.innerHTML = '<tr><td colspan="7">Sin resultados todavia.</td></tr>';
+  dom.comparatorProposalCards.innerHTML = `
+    <article class="proposal-card">
+      <strong>Sin corrida</strong>
+      <p>Ejecuta el comparador para ver los resumenes.</p>
+    </article>
+  `;
+  dom.comparatorLogOutput.textContent = "Sin logs todavia.";
+  renderComparatorProgress(null);
+  setComparatorRunning(false);
+  setStatus(
+    dom.comparatorStatusTone,
+    dom.comparatorStatusTitle,
+    dom.comparatorStatusDetail,
+    "Listo",
+    "Ejecuta EVOLMD y EVOLMD-MO desde sus clones Python usando Ollama local.",
+  );
+}
+
+function readComparatorConfig() {
+  const referenceText = dom.comparatorReferenceText.value.trim();
+  const model = dom.comparatorModel.value.trim();
+  if (!referenceText) {
+    throw new Error("Define el texto de referencia.");
+  }
+  if (!model) {
+    throw new Error("Define el modelo Ollama.");
+  }
+
+  return {
+    referenceText,
+    model,
+    topK: Math.floor(readClampedNumber(dom.comparatorTopK, "Top K tabla", 1, 200)),
+    n: Math.floor(readClampedNumber(dom.comparatorN, "N individuos", 1, 500)),
+    generaciones: Math.floor(readClampedNumber(dom.comparatorGeneraciones, "Generaciones", 0, 500)),
+    k: Math.floor(readClampedNumber(dom.comparatorK, "K torneo", 1, 100)),
+    probCrossover: readClampedNumber(dom.comparatorProbCrossover, "Prob. crossover", 0, 1),
+    probMutacion: readClampedNumber(dom.comparatorProbMutacion, "Prob. mutacion", 0, 1),
+    proposalParallelism: Math.floor(readClampedNumber(dom.comparatorProposalParallelism, "Propuestas paralelas", 1, 8)),
+    timeoutMinutes: Math.floor(readClampedNumber(dom.comparatorTimeoutMinutes, "Timeout por propuesta", 1, 1440)),
+  };
+}
+
+async function requestComparatorJson(path, options = {}) {
+  const response = await fetch(`${COMPARATOR_API}${path}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function loadComparatorProposals() {
+  try {
+    const payload = await requestComparatorJson("/proposals");
+    const proposalSummary = payload.proposals
+      .map((proposal) => `${proposal.displayName}: ${proposal.available ? "clonado" : "faltante"} (${proposal.objectiveNames.join(", ")})`)
+      .join("; ");
+    renderDefinitionList(dom.comparatorIntegrationDetails, [
+      ["Contrato", "{proposalId, displayName, rows, metrics, outputDir, status}"],
+      ["Propuestas", proposalSummary],
+      ["EVOLMD", "data_final_evaluada.json -> [fitness]"],
+      ["EVOLMD-MO", "pareto_front.json -> [fidelity_sbert, diversity_individual]"],
+      ["MO", "HV con referencia [0,0]; spread menor es mejor; No aplica si no hay dos objetivos."],
+    ]);
+  } catch (error) {
+    renderDefinitionList(dom.comparatorIntegrationDetails, [
+      ["Contrato", "{proposalId, displayName, rows, metrics, outputDir, status}"],
+      ["API", `No se pudo consultar el backend: ${error.message}`],
+    ]);
+  }
+}
+
+async function runComparator() {
+  let config;
+  try {
+    config = readComparatorConfig();
+  } catch (error) {
+    setStatus(dom.comparatorStatusTone, dom.comparatorStatusTitle, dom.comparatorStatusDetail, "Configuracion incompleta", error.message, "error");
+    return;
+  }
+
+  stopComparatorPolling();
+  setComparatorRunning(true);
+  dom.comparatorResultsBody.innerHTML = '<tr><td colspan="7">Esperando resultados.</td></tr>';
+  dom.comparatorProposalCards.innerHTML = "";
+  dom.comparatorLogOutput.textContent = "Iniciando corrida...";
+  dom.comparatorConnectionDot.classList.add("is-busy");
+  dom.comparatorConnectionDot.classList.remove("is-error");
+  dom.comparatorConnectionText.textContent = "Ejecutando";
+  setStatus(
+    dom.comparatorStatusTone,
+    dom.comparatorStatusTitle,
+    dom.comparatorStatusDetail,
+    "Iniciando comparador",
+    "El backend ejecutara los clones Python y la web consultara el progreso.",
+    "busy",
+  );
+
+  try {
+    const run = await requestComparatorJson("/runs", {
+      method: "POST",
+      body: JSON.stringify(config),
+    });
+    currentComparatorRunId = run.runId;
+    setComparatorRunning(true, Boolean(run.cancelRequested));
+    renderComparatorRun(run);
+    comparatorPollTimer = window.setInterval(() => refreshComparatorRun(currentComparatorRunId), 2000);
+    await refreshComparatorRun(currentComparatorRunId);
+  } catch (error) {
+    currentComparatorRunId = null;
+    dom.comparatorConnectionDot.classList.add("is-error");
+    dom.comparatorConnectionText.textContent = "Error";
+    setComparatorRunning(false);
+    setStatus(dom.comparatorStatusTone, dom.comparatorStatusTitle, dom.comparatorStatusDetail, "Error al iniciar", error.message, "error");
+  }
+}
+
+async function refreshComparatorRun(runId) {
+  if (!runId) {
+    return;
+  }
+
+  try {
+    const run = await requestComparatorJson(`/runs/${encodeURIComponent(runId)}`);
+    renderComparatorRun(run);
+    if (COMPARATOR_TERMINAL_STATUSES.has(run.status)) {
+      stopComparatorPolling();
+      currentComparatorRunId = run.runId;
+      setComparatorRunning(false);
+    } else {
+      currentComparatorRunId = run.runId;
+      setComparatorRunning(true, Boolean(run.cancelRequested));
+    }
+  } catch (error) {
+    stopComparatorPolling();
+    setComparatorRunning(false);
+    dom.comparatorConnectionDot.classList.add("is-error");
+    setStatus(dom.comparatorStatusTone, dom.comparatorStatusTitle, dom.comparatorStatusDetail, "Error al consultar corrida", error.message, "error");
+  }
+}
+
+async function cancelComparatorRun() {
+  if (!currentComparatorRunId) {
+    return;
+  }
+  dom.cancelComparatorButton.disabled = true;
+  dom.cancelComparatorButton.textContent = "Cancelando...";
+  setStatus(dom.comparatorStatusTone, dom.comparatorStatusTitle, dom.comparatorStatusDetail, "Cancelando", "Se solicitara terminar el proceso activo.", "busy");
+  try {
+    const run = await requestComparatorJson(`/runs/${encodeURIComponent(currentComparatorRunId)}/cancel`, {
+      method: "POST",
+      body: "{}",
+    });
+    renderComparatorRun(run);
+    setComparatorRunning(!COMPARATOR_TERMINAL_STATUSES.has(run.status), Boolean(run.cancelRequested));
+  } catch (error) {
+    setComparatorRunning(true, false);
+    setStatus(dom.comparatorStatusTone, dom.comparatorStatusTitle, dom.comparatorStatusDetail, "No se pudo cancelar", error.message, "error");
+  }
+}
+
+function flattenComparatorRows(run) {
+  return (run.proposals || []).flatMap((proposal) => (
+    (proposal.rows || []).map((row) => ({
+      ...row,
+      proposalStatus: proposal.status,
+      proposalError: proposal.error,
+    }))
+  ));
+}
+
+function comparatorProposalViews(run) {
+  const finalById = new Map((run.proposals || []).map((proposal) => [proposal.proposalId, proposal]));
+  const states = Object.values(run.proposalStates || {});
+  const merged = states.map((state) => ({
+    ...state,
+    ...(finalById.get(state.proposalId) || {}),
+    progressState: state,
+  }));
+  const knownIds = new Set(merged.map((proposal) => proposal.proposalId));
+  for (const proposal of run.proposals || []) {
+    if (!knownIds.has(proposal.proposalId)) {
+      merged.push(proposal);
+    }
+  }
+  return merged;
+}
+
+function renderComparatorProgress(progress) {
+  if (!progress) {
+    dom.comparatorProgressPercent.textContent = "--";
+    dom.comparatorProgressSummary.textContent = "Sin corrida activa.";
+    dom.comparatorProgressDetail.textContent = "Sin ejecucion.";
+    dom.comparatorProgressBar.style.width = "0%";
+    renderDefinitionList(dom.comparatorProgressDetails, [
+      ["Tiempo transcurrido", "--"],
+      ["Tiempo restante", "--"],
+      ["Propuesta activa", "--"],
+      ["Cola", "--"],
+    ]);
+    return;
+  }
+
+  const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  dom.comparatorProgressPercent.textContent = `${percent}%`;
+  dom.comparatorProgressSummary.textContent = progress.detail || "Ejecutando.";
+  dom.comparatorProgressDetail.textContent = progress.detail || "Ejecutando.";
+  dom.comparatorProgressBar.style.width = `${percent}%`;
+  renderDefinitionList(dom.comparatorProgressDetails, [
+    ["Tiempo transcurrido", progress.elapsedLabel || "--"],
+    ["Tiempo restante estimado", progress.remainingLabel || "No disponible"],
+    ["Propuesta activa", progress.activeProposalName || "--"],
+    ["Cola", `${progress.queuedProposals ?? 0}/${progress.totalProposals ?? 0}`],
+  ]);
+}
+
+function renderComparatorRun(run) {
+  const rows = flattenComparatorRows(run);
+  const progress = run.progress || {};
+  const completedProposals = progress.completedProposals ?? (run.proposals || []).filter((proposal) => proposal.status === "completed").length;
+  const fallbackTotalProposals = Object.keys(run.proposalStates || {}).length || (run.proposals || []).length || 2;
+  const totalProposals = progress.totalProposals ?? fallbackTotalProposals;
+  const status = comparatorStatusLabel(run.status);
+
+  dom.comparatorRunStatus.textContent = status;
+  dom.comparatorCompletedProposals.textContent = `${completedProposals}/${totalProposals}`;
+  dom.comparatorShownRows.textContent = String(rows.length);
+  dom.comparatorRunId.textContent = run.runId || "--";
+  dom.comparatorConnectionText.textContent = status;
+  dom.comparatorConnectionDot.classList.toggle("is-busy", run.status === "queued" || run.status === "running");
+  dom.comparatorConnectionDot.classList.toggle("is-error", run.status === "failed");
+
+  renderComparatorProgress(run.progress || null);
+  renderComparatorCards(comparatorProposalViews(run));
+  renderComparatorRows(rows);
+  renderComparatorLogs(run.logs || []);
+
+  const detail = run.error
+    ? run.error
+    : run.cancelRequested
+      ? "Cancelacion solicitada; esperando cierre de procesos activos."
+      : progress.detail || `${completedProposals} propuesta(s) completada(s), ${rows.length} fila(s) visibles.`;
+  setStatus(
+    dom.comparatorStatusTone,
+    dom.comparatorStatusTitle,
+    dom.comparatorStatusDetail,
+    `Comparador ${status}`,
+    detail,
+    run.status === "running" || run.status === "queued" ? "busy" : run.status === "failed" ? "error" : "ready",
+  );
+}
+
+function renderComparatorCards(proposals) {
+  if (!proposals.length) {
+    dom.comparatorProposalCards.innerHTML = `
+      <article class="proposal-card">
+        <strong>Esperando propuestas</strong>
+        <p>El backend aun no ha devuelto resultados normalizados.</p>
+      </article>
+    `;
+    return;
+  }
+
+  dom.comparatorProposalCards.replaceChildren(
+    ...proposals.map((proposal) => {
+      const metrics = proposal.metrics || {};
+      const progressState = proposal.progressState || proposal;
+      const progressPercent = Math.round(Math.max(0, Math.min(1, Number(progressState.progress || 0))) * 100);
+      const stageLabel = progressState.stageLabel || comparatorStatusLabel(proposal.status);
+      const article = document.createElement("article");
+      article.className = "proposal-card";
+      article.innerHTML = `
+        <strong>${escapeHtml(proposal.displayName || proposal.proposalId)}</strong>
+        <p><span class="${comparatorStatusClass(proposal.status)}">${escapeHtml(comparatorStatusLabel(proposal.status))}</span>${proposal.error ? `: ${escapeHtml(proposal.error)}` : ""}</p>
+        <div class="mini-progress" aria-label="Progreso ${escapeHtml(proposal.displayName || proposal.proposalId)}">
+          <span style="width: ${progressPercent}%"></span>
+        </div>
+        <p>${escapeHtml(stageLabel)} (${progressPercent}%)</p>
+        <dl>
+          <dt>Filas</dt><dd>${escapeHtml(String(metrics.completedRows ?? 0))}/${escapeHtml(String(metrics.totalRows ?? 0))}</dd>
+          <dt>Mejor F.O.</dt><dd>${escapeHtml(metrics.bestObjectiveLabel || "--")}</dd>
+          <dt>No dominadas</dt><dd>${escapeHtml(String(metrics.nonDominatedRows ?? 0))}</dd>
+          <dt>HV</dt><dd>${escapeHtml(metrics.hypervolumeLabel || "No aplica")}</dd>
+          <dt>Spread</dt><dd>${escapeHtml(metrics.spreadLabel || "No aplica")}</dd>
+          <dt>Salida</dt><dd>${escapeHtml(metrics.outputDir || proposal.outputDir || "--")}</dd>
+        </dl>
+      `;
+      return article;
+    }),
+  );
+}
+
+function renderComparatorRows(rows) {
+  if (!rows.length) {
+    dom.comparatorResultsBody.innerHTML = '<tr><td colspan="7">Sin resultados todavia.</td></tr>';
+    return;
+  }
+
+  dom.comparatorResultsBody.replaceChildren(
+    ...rows.map((row) => {
+      const tr = document.createElement("tr");
+      const status = row.status || row.proposalStatus || "--";
+      tr.innerHTML = `
+        <td>${escapeHtml(row.displayName || row.proposalId)}</td>
+        <td>${escapeHtml(String(row.rank ?? "--"))}</td>
+        <td class="context-cell long-cell">${escapeHtml(row.generatedText || "--")}</td>
+        <td>${escapeHtml(row.objectiveLabel || "--")}</td>
+        <td class="context-cell long-cell">${escapeHtml(row.prompt || "--")}</td>
+        <td><span class="${comparatorStatusClass(status)}">${escapeHtml(status)}</span></td>
+        <td>${row.nonDominated ? '<span class="valid">si</span>' : "--"}</td>
+      `;
+      return tr;
+    }),
+  );
+}
+
+function renderComparatorLogs(logs) {
+  if (!logs.length) {
+    dom.comparatorLogOutput.textContent = "Sin logs todavia.";
+    return;
+  }
+  dom.comparatorLogOutput.textContent = logs
+    .slice(-40)
+    .map((entry) => `[${entry.proposalId}] ${entry.message}`)
+    .join("\n");
+}
+
 async function loadPsoDatabase() {
   if (psoDatabase) {
     return psoDatabase;
@@ -2193,6 +2623,9 @@ dom.solutionReferencePreset.addEventListener("change", applySolutionReferencePre
 dom.solutionCount.addEventListener("change", previewSolutions);
 dom.solutionPromptTemplate.addEventListener("input", previewSolutions);
 dom.solutionReferenceText.addEventListener("input", previewSolutions);
+dom.runComparatorButton.addEventListener("click", runComparator);
+dom.cancelComparatorButton.addEventListener("click", cancelComparatorRun);
+dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
 dom.solutionLlmModelSelect.addEventListener("change", () => {
   if (dom.solutionLlmModelSelect.value) {
     dom.solutionLlmModelManual.value = dom.solutionLlmModelSelect.value;
@@ -2252,5 +2685,7 @@ renderEmbeddingModelDetails();
 populateSolutionReferencePresets();
 applySolutionReferencePreset();
 resetSolutionMetrics();
+resetComparatorUi();
+loadComparatorProposals();
 dom.renderedPromptPreview.textContent = renderPrompt();
 updateSimulationModeUi();

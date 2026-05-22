@@ -69,6 +69,34 @@ La sección `Probar evaluación de soluciones` ejecuta un flujo completo:
 
 Las estimaciones comparativas de costo usan el tiempo promedio local medido en la prueba. Para EVOLMD-MO se estima Init Agent + Data Agent por solución y mutación esperada con `Pm = 0.05`. Para MESAP se estima la inicialización descrita en la memoria con 3 llamadas por solución y un sobrecosto temporal de 18%.
 
+## Comparador de propuestas
+
+La sección `Comparador de propuestas` integra baselines clonados como submodules:
+
+- `baselines/external/evolmd`
+- `baselines/external/evolmd-mo`
+
+La web llama a la API local de `server.py`:
+
+- `GET /api/comparator/proposals`
+- `POST /api/comparator/runs`
+- `GET /api/comparator/runs/{runId}`
+- `POST /api/comparator/runs/{runId}/cancel`
+
+El backend ejecuta los `main.py` originales con Ollama local, usando `http://127.0.0.1:11434` tal como esperan los clones. Cada corrida se guarda en `runs/comparator/<runId>/`, junto con un `summary.json` normalizado.
+
+Los adaptadores propios están fuera de los submodules, en `baselines/comparator.py`. EVOLMD lee `data_final_evaluada.json` y normaliza F.O. como `[fitness]`. EVOLMD-MO lee `pareto_front.json` y normaliza F.O. como `[fidelity_sbert, diversity_individual]`.
+
+El lanzamiento pasa por `baselines/bootstrap.py`, que precarga los módulos declarados por cada adaptador antes de ejecutar el `main.py` original. Esto evita problemas de orden de carga de PyTorch en Windows sin modificar los clones.
+
+La API devuelve progreso estructurado en `progress` y `proposalStates`. La web muestra porcentaje, etapa activa, tiempo transcurrido, tiempo restante estimado y estado por propuesta. La cancelación termina el árbol de procesos activo en Windows para cortar llamadas largas sin esperar nuevos logs.
+
+`proposalParallelism` controla cuántas propuestas se ejecutan al mismo tiempo desde el adaptador. No modifica el paralelismo interno de EVOLMD ni EVOLMD-MO, porque ese comportamiento queda dentro de los clones upstream. `timeoutMinutes` limita la duración máxima por propuesta.
+
+HV y spread solo aplican a propuestas multiobjetivo. Para EVOLMD-MO se usa maximización, fidelidad normalizada con `(fidelity + 1) / 2`, diversidad acotada a `[0, 1]`, punto de referencia HV `[0, 0]` y spread como desviación normalizada entre distancias consecutivas del frente no dominado.
+
+Antes de ejecutar una comparación real, instala las dependencias Python en el Python global usado por `py`, y mantén Ollama corriendo con el modelo elegido, por ejemplo `llama3`.
+
 ## Simulación de iteración PSO
 
 La sección `Componente semántico` incluye el switch `Simular iteración PSO`.

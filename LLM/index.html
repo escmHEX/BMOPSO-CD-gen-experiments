@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Portal de herramientas LLM</title>
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
@@ -16,6 +17,7 @@
         <nav class="tool-nav" aria-label="Herramientas disponibles">
           <button class="nav-item is-active" type="button" data-tool="templateChecker">Evaluador de plantillas</button>
           <button class="nav-item" type="button" data-tool="solutionEvaluator">Probar evaluación de soluciones</button>
+          <button class="nav-item" type="button" data-tool="proposalComparator">Comparador de propuestas</button>
           <button class="nav-item" type="button" data-tool="embeddingCalculator">Calculadora SBERT</button>
         </nav>
         <div class="sidebar-note">
@@ -614,6 +616,182 @@ Each line must follow this format:
                 </tbody>
               </table>
             </div>
+          </section>
+        </section>
+
+        <section id="proposalComparator" class="tool-panel" aria-label="Comparador de propuestas">
+          <header class="tool-header">
+            <div>
+              <p class="eyebrow">Baselines clonados + Ollama local</p>
+              <h1>Comparador de propuestas</h1>
+            </div>
+            <div class="header-status">
+              <span id="comparatorConnectionDot" class="status-dot" aria-hidden="true"></span>
+              <span id="comparatorConnectionText">Sin ejecucion</span>
+            </div>
+          </header>
+
+          <section class="grid two-columns">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Referencia y ejecucion</h2>
+              </div>
+              <div class="form-grid">
+                <label class="span-2">
+                  <span>Texto de referencia</span>
+                  <textarea id="comparatorReferenceText" rows="5">Our action center has been updated with more information about restaurant shutdowns and disaster financing options for SMBs.</textarea>
+                </label>
+                <label>
+                  <span>Modelo Ollama</span>
+                  <input id="comparatorModel" type="text" value="llama3" autocomplete="off">
+                </label>
+                <label>
+                  <span>Top K tabla</span>
+                  <input id="comparatorTopK" type="number" min="1" max="200" value="10">
+                </label>
+                <label>
+                  <span>Propuestas paralelas</span>
+                  <input id="comparatorProposalParallelism" type="number" min="1" max="8" value="1">
+                </label>
+                <label>
+                  <span>Timeout por propuesta (min)</span>
+                  <input id="comparatorTimeoutMinutes" type="number" min="1" max="1440" value="60">
+                </label>
+              </div>
+              <div class="inline-actions">
+                <button id="runComparatorButton" type="button">Ejecutar comparacion</button>
+                <button id="cancelComparatorButton" class="danger" type="button" disabled>Cancelar</button>
+                <button id="clearComparatorButton" class="secondary" type="button">Limpiar</button>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Parametros GA</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>N individuos</span>
+                  <input id="comparatorN" type="number" min="1" max="500" value="10">
+                </label>
+                <label>
+                  <span>Generaciones</span>
+                  <input id="comparatorGeneraciones" type="number" min="0" max="500" value="3">
+                </label>
+                <label>
+                  <span>K torneo</span>
+                  <input id="comparatorK" type="number" min="1" max="100" value="3">
+                </label>
+                <label>
+                  <span>Prob. crossover</span>
+                  <input id="comparatorProbCrossover" type="number" min="0" max="1" step="0.01" value="0.8">
+                </label>
+                <label>
+                  <span>Prob. mutacion</span>
+                  <input id="comparatorProbMutacion" type="number" min="0" max="1" step="0.01" value="0.05">
+                </label>
+              </div>
+            </article>
+          </section>
+
+          <section class="metrics-grid" aria-label="Resumen del comparador">
+            <article class="metric">
+              <span>Estado</span>
+              <strong id="comparatorRunStatus">--</strong>
+              <p>Estado general de la corrida backend.</p>
+            </article>
+            <article class="metric">
+              <span>Progreso</span>
+              <strong id="comparatorProgressPercent">--</strong>
+              <p id="comparatorProgressSummary">Sin corrida activa.</p>
+            </article>
+            <article class="metric">
+              <span>Propuestas completadas</span>
+              <strong id="comparatorCompletedProposals">--</strong>
+              <p>Baselines clonados con salida normalizada.</p>
+            </article>
+            <article class="metric">
+              <span>Textos en tabla</span>
+              <strong id="comparatorShownRows">--</strong>
+              <p>Filas mostradas segun el Top K configurado.</p>
+            </article>
+            <article class="metric">
+              <span>Run ID</span>
+              <strong id="comparatorRunId">--</strong>
+              <p>Identificador de la carpeta en runs/comparator.</p>
+            </article>
+          </section>
+
+          <section class="status-panel" aria-live="polite">
+            <span id="comparatorStatusTone" class="status-dot" aria-hidden="true"></span>
+            <div>
+              <p id="comparatorStatusTitle">Listo</p>
+              <p id="comparatorStatusDetail">Ejecuta EVOLMD y EVOLMD-MO desde sus clones Python usando Ollama local.</p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Progreso de corrida</h2>
+              <span id="comparatorProgressDetail">Sin ejecucion.</span>
+            </div>
+            <div class="progress-track" aria-hidden="true">
+              <span id="comparatorProgressBar"></span>
+            </div>
+            <dl id="comparatorProgressDetails" class="definition-grid compact-definition-grid"></dl>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Resumen por propuesta</h2>
+              <span>HV y spread solo aplican a propuestas multiobjetivo.</span>
+            </div>
+            <div id="comparatorProposalCards" class="proposal-card-grid">
+              <article class="proposal-card">
+                <strong>Sin corrida</strong>
+                <p>Ejecuta el comparador para ver los resumenes.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Tabla comparativa</h2>
+            </div>
+            <div class="table-wrap">
+              <table class="wide-table comparator-results-table">
+                <thead>
+                  <tr>
+                    <th>Propuesta</th>
+                    <th>Rank</th>
+                    <th>Texto generado</th>
+                    <th>Vector F.O.</th>
+                    <th>Prompt</th>
+                    <th>Estado</th>
+                    <th>No dominada</th>
+                  </tr>
+                </thead>
+                <tbody id="comparatorResultsBody">
+                  <tr><td colspan="7">Sin resultados todavia.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="grid two-columns results-layout">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Ultimos logs</h2>
+              </div>
+              <pre id="comparatorLogOutput" class="output-box">Sin logs todavia.</pre>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Contrato de integracion</h2>
+              </div>
+              <dl id="comparatorIntegrationDetails" class="definition-grid"></dl>
+            </article>
           </section>
         </section>
 

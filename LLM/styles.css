@@ -557,6 +557,90 @@ td {
   min-width: 1680px;
 }
 
+.comparator-results-table {
+  min-width: 1480px;
+}
+
+.proposal-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.proposal-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+  padding: 14px;
+}
+
+.proposal-card strong {
+  font-size: 1rem;
+}
+
+.proposal-card p {
+  color: var(--muted);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.progress-track,
+.mini-progress {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #edf2f7;
+}
+
+.progress-track {
+  height: 12px;
+}
+
+.mini-progress {
+  height: 8px;
+}
+
+.progress-track span,
+.mini-progress span {
+  display: block;
+  width: 0%;
+  height: 100%;
+  background: var(--blue);
+  transition: width 180ms ease;
+}
+
+.compact-definition-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.compact-definition-grid div {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.proposal-card dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 10px;
+  margin: 0;
+}
+
+.proposal-card dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.proposal-card dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .valid {
   color: #057a55;
   font-weight: 800;
@@ -564,6 +648,11 @@ td {
 
 .invalid {
   color: var(--danger);
+  font-weight: 800;
+}
+
+.in-progress {
+  color: var(--blue);
   font-weight: 800;
 }
 

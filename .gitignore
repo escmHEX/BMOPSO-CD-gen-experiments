@@ -1,0 +1,4 @@
+runs/comparator/
+__pycache__/
+.pytest_cache/
+.playwright-mcp/
