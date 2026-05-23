@@ -29,6 +29,9 @@ STAGE_RE = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s+(.+)$")
 GENERATION_RE = re.compile(r"Generaci[oó]n\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
 PERCENT_RE = re.compile(r"(\d{1,3})%")
 PROPOSAL_TOTALS = {proposal_id: total for proposal_id, total in (("evolmd", 6), ("evolmd-mo", 5))}
+POSTHOC_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+_POSTHOC_MODEL: Any = None
+_POSTHOC_MODEL_LOCK = threading.Lock()
 
 
 def utc_now() -> str:
@@ -102,6 +105,31 @@ def mark_non_dominated(rows: list[dict[str, Any]]) -> None:
         row["nonDominated"] = len(row.get("objectiveVector") or []) >= 2 and not is_dominated(row, rows)
 
 
+def is_diagnostic_dominated(row: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
+    vector = row.get("diagnosticObjectiveVector") or []
+    if len(vector) < 2:
+        return False
+    for other in rows:
+        if other is row:
+            continue
+        other_vector = other.get("diagnosticObjectiveVector") or []
+        if len(other_vector) != len(vector):
+            continue
+        if all(a >= b for a, b in zip(other_vector, vector)) and any(
+            a > b for a, b in zip(other_vector, vector)
+        ):
+            return True
+    return False
+
+
+def mark_posthoc_non_dominated(rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        row["postHocNonDominated"] = (
+            len(row.get("diagnosticObjectiveVector") or []) >= 2
+            and not is_diagnostic_dominated(row, rows)
+        )
+
+
 def normalized_mo_point(row: dict[str, Any]) -> tuple[float, float] | None:
     vector = row.get("objectiveVector") or []
     if len(vector) < 2:
@@ -111,6 +139,42 @@ def normalized_mo_point(row: dict[str, Any]) -> tuple[float, float] | None:
     normalized_fidelity = clamp((fidelity + 1.0) / 2.0, 0.0, 1.0)
     normalized_diversity = clamp(diversity, 0.0, 1.0)
     return normalized_fidelity, normalized_diversity
+
+
+def normalized_posthoc_point(row: dict[str, Any]) -> tuple[float, float] | None:
+    vector = row.get("diagnosticObjectiveVector") or []
+    if len(vector) < 2:
+        return None
+    return clamp(finite_float(vector[0]), 0.0, 1.0), clamp(finite_float(vector[1]), 0.0, 1.0)
+
+
+def posthoc_embedding_model() -> Any:
+    global _POSTHOC_MODEL
+    with _POSTHOC_MODEL_LOCK:
+        if _POSTHOC_MODEL is None:
+            import torch  # noqa: F401
+            from sentence_transformers import SentenceTransformer
+
+            _POSTHOC_MODEL = SentenceTransformer(POSTHOC_EMBEDDING_MODEL)
+        return _POSTHOC_MODEL
+
+
+def calculate_posthoc_semantic_diversity(generated_texts: list[str]) -> list[float]:
+    if len(generated_texts) <= 1:
+        return [0.0] * len(generated_texts)
+
+    import torch
+    from sentence_transformers import util
+
+    texts = [text if text.strip() else "[texto vacio]" for text in generated_texts]
+    embeddings = posthoc_embedding_model().encode(texts, convert_to_tensor=True, normalize_embeddings=True)
+    similarity_matrix = util.cos_sim(embeddings, embeddings)
+    scores: list[float] = []
+    for index in range(len(texts)):
+        sum_similarity = torch.sum(similarity_matrix[index]) - 1.0
+        average_similarity = sum_similarity / (len(texts) - 1)
+        scores.append(clamp(1.0 - float(average_similarity), 0.0, 1.0))
+    return scores
 
 
 def pareto_points(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -983,6 +1047,8 @@ class ComparatorService:
             for index, row in enumerate(raw_rows, start=1)
             if isinstance(row, dict)
         ]
+        if proposal.single_objective:
+            self._attach_evolmd_posthoc_diagnostics(rows)
 
         mark_non_dominated(rows)
         if proposal.single_objective:
@@ -1000,6 +1066,20 @@ class ComparatorService:
             row["rank"] = rank
             row["shownInTopK"] = rank <= top_k
         return rows
+
+    def _attach_evolmd_posthoc_diagnostics(self, rows: list[dict[str, Any]]) -> None:
+        scores = calculate_posthoc_semantic_diversity([row.get("generatedText") or "" for row in rows])
+        for row, diversity_score in zip(rows, scores):
+            diagnostic_vector = [finite_float(row["objectiveVector"][0]), diversity_score]
+            row["diagnosticObjectiveVector"] = diagnostic_vector
+            row["diagnosticObjectiveLabel"] = objective_label(diagnostic_vector)
+            row["diagnosticObjectiveNames"] = ["fitness", "semantic_diversity_posthoc"]
+            row["postHocDiagnostics"] = {
+                "semanticDiversity": diversity_score,
+                "semanticDiversityModel": POSTHOC_EMBEDDING_MODEL,
+                "note": "Diagnostic only; EVOLMD selection remains single-objective.",
+            }
+        mark_posthoc_non_dominated(rows)
 
     def _normalize_evolmd_row(
         self,
@@ -1081,7 +1161,41 @@ class ComparatorService:
             "outputDir": str(output_dir),
         }
 
-        if not proposal.single_objective:
+        if proposal.single_objective:
+            diagnostic_rows = [row for row in rows if row.get("diagnosticObjectiveVector")]
+            diagnostic_points = [
+                point
+                for row in diagnostic_rows
+                if row.get("postHocNonDominated")
+                for point in [normalized_posthoc_point(row)]
+                if point is not None
+            ]
+            hypervolume = calculate_hypervolume(diagnostic_points)
+            spread = calculate_spread(diagnostic_points)
+            best_diagnostic = (
+                max(
+                    diagnostic_rows,
+                    key=lambda row: sum(row.get("diagnosticObjectiveVector") or []),
+                ).get("diagnosticObjectiveVector")
+                if diagnostic_rows
+                else []
+            )
+            metrics["postHocDiagnostic"] = True
+            metrics["diagnosticObjectiveNames"] = ["fitness", "semantic_diversity_posthoc"]
+            metrics["bestDiagnosticObjectiveVector"] = best_diagnostic
+            metrics["bestDiagnosticObjectiveLabel"] = objective_label(best_diagnostic)
+            metrics["postHocNonDominatedRows"] = sum(1 for row in rows if row.get("postHocNonDominated"))
+            metrics["hypervolume"] = hypervolume
+            metrics["hypervolumeLabel"] = f"{hypervolume:.6f}" if hypervolume is not None else "No aplica"
+            metrics["spread"] = spread
+            metrics["spreadLabel"] = f"{spread:.6f}" if spread is not None else "No aplica"
+            metrics["moConvention"] = (
+                "Post-hoc diagnostic only; EVOLMD optimized fitness as a single objective. "
+                "Semantic diversity is 1 - average cosine similarity over SBERT embeddings. "
+                "HV uses [fitness, diversity] in [0, 1] with reference point [0, 0]; "
+                "spread is normalized consecutive-distance deviation over the diagnostic non-dominated set."
+            )
+        else:
             points = [
                 point
                 for row in rows

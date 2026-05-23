@@ -87,6 +87,8 @@ El backend ejecuta los `main.py` originales con Ollama local, usando `http://127
 
 Los adaptadores propios están fuera de los submodules, en `baselines/comparator.py`. EVOLMD lee `data_final_evaluada.json` y normaliza F.O. como `[fitness]`. EVOLMD-MO lee `pareto_front.json` y normaliza F.O. como `[fidelity_sbert, diversity_individual]`.
 
+Para EVOLMD, el adaptador calcula diversidad semántica post-hoc sobre los textos finales con SBERT `all-MiniLM-L6-v2`. Ese cálculo no cambia selección, cruce, mutación ni supervivencia de EVOLMD. Se reporta como vector diagnóstico `[fitness, semantic_diversity_posthoc]` y permite mostrar HV/spread post-hoc separados del objetivo original single-objective.
+
 El lanzamiento pasa por `baselines/bootstrap.py`, que precarga los módulos declarados por cada adaptador antes de ejecutar el `main.py` original. Esto evita problemas de orden de carga de PyTorch en Windows sin modificar los clones.
 
 La API devuelve progreso estructurado en `progress` y `proposalStates`. La web muestra porcentaje, etapa activa, tiempo transcurrido, tiempo restante estimado y estado por propuesta. La cancelación termina el árbol de procesos activo en Windows para cortar llamadas largas sin esperar nuevos logs.
@@ -95,7 +97,7 @@ Los costos de ejecución se devuelven en `costSummary` a nivel de corrida y en `
 
 `proposalParallelism` controla cuántas propuestas se ejecutan al mismo tiempo desde el adaptador. No modifica el paralelismo interno de EVOLMD ni EVOLMD-MO, porque ese comportamiento queda dentro de los clones upstream. `timeoutMinutes` limita la duración máxima por propuesta.
 
-HV y spread solo aplican a propuestas multiobjetivo. Para EVOLMD-MO se usa maximización, fidelidad normalizada con `(fidelity + 1) / 2`, diversidad acotada a `[0, 1]`, punto de referencia HV `[0, 0]` y spread como desviación normalizada entre distancias consecutivas del frente no dominado.
+Para EVOLMD-MO se usa maximización, fidelidad normalizada con `(fidelity + 1) / 2`, diversidad acotada a `[0, 1]`, punto de referencia HV `[0, 0]` y spread como desviación normalizada entre distancias consecutivas del frente no dominado. Para EVOLMD, HV/spread son diagnósticos post-hoc sobre `[fitness, semantic_diversity_posthoc]`, con ambos valores acotados a `[0, 1]`.
 
 Antes de ejecutar una comparación real, instala las dependencias Python en el Python global usado por `py`, y mantén Ollama corriendo con el modelo elegido, por ejemplo `llama3`.
 

@@ -1744,7 +1744,7 @@ function resetComparatorUi() {
   dom.comparatorRunId.textContent = "--";
   dom.comparatorConnectionText.textContent = "Sin ejecucion";
   dom.comparatorConnectionDot.classList.remove("is-busy", "is-error");
-  dom.comparatorResultsBody.innerHTML = '<tr><td colspan="7">Sin resultados todavia.</td></tr>';
+  dom.comparatorResultsBody.innerHTML = '<tr><td colspan="8">Sin resultados todavia.</td></tr>';
   dom.comparatorProposalCards.innerHTML = `
     <article class="proposal-card">
       <strong>Sin corrida</strong>
@@ -1812,8 +1812,9 @@ async function loadComparatorProposals() {
       ["Contrato", "{proposalId, displayName, rows, metrics, outputDir, status}"],
       ["Propuestas", proposalSummary],
       ["EVOLMD", "data_final_evaluada.json -> [fitness]"],
+      ["EVOLMD post-hoc", "Vector diagnostico [fitness, semantic_diversity_posthoc]; HV/spread no alteran la seleccion."],
       ["EVOLMD-MO", "pareto_front.json -> [fidelity_sbert, diversity_individual]"],
-      ["MO", "HV con referencia [0,0]; spread menor es mejor; No aplica si no hay dos objetivos."],
+      ["MO", "HV con referencia [0,0]; spread menor es mejor; para EVOLMD son diagnosticos post-hoc."],
     ]);
   } catch (error) {
     renderDefinitionList(dom.comparatorIntegrationDetails, [
@@ -2036,6 +2037,9 @@ function renderComparatorCards(proposals) {
     ...proposals.map((proposal) => {
       const metrics = proposal.metrics || {};
       const cost = proposal.cost || {};
+      const hvLabel = metrics.postHocDiagnostic ? "HV post-hoc" : "HV";
+      const spreadLabel = metrics.postHocDiagnostic ? "Spread post-hoc" : "Spread";
+      const nonDominatedLabel = metrics.postHocDiagnostic ? "No dom. post-hoc" : "No dominadas";
       const progressState = proposal.progressState || proposal;
       const progressPercent = Math.round(Math.max(0, Math.min(1, Number(progressState.progress || 0))) * 100);
       const stageLabel = progressState.stageLabel || comparatorStatusLabel(proposal.status);
@@ -2051,9 +2055,10 @@ function renderComparatorCards(proposals) {
         <dl>
           <dt>Filas</dt><dd>${escapeHtml(String(metrics.completedRows ?? 0))}/${escapeHtml(String(metrics.totalRows ?? 0))}</dd>
           <dt>Mejor F.O.</dt><dd>${escapeHtml(metrics.bestObjectiveLabel || "--")}</dd>
-          <dt>No dominadas</dt><dd>${escapeHtml(String(metrics.nonDominatedRows ?? 0))}</dd>
-          <dt>HV</dt><dd>${escapeHtml(metrics.hypervolumeLabel || "No aplica")}</dd>
-          <dt>Spread</dt><dd>${escapeHtml(metrics.spreadLabel || "No aplica")}</dd>
+          <dt>${escapeHtml(nonDominatedLabel)}</dt><dd>${escapeHtml(String((metrics.postHocDiagnostic ? metrics.postHocNonDominatedRows : metrics.nonDominatedRows) ?? 0))}</dd>
+          <dt>${escapeHtml(hvLabel)}</dt><dd>${escapeHtml(metrics.hypervolumeLabel || "No aplica")}</dd>
+          <dt>${escapeHtml(spreadLabel)}</dt><dd>${escapeHtml(metrics.spreadLabel || "No aplica")}</dd>
+          ${metrics.postHocDiagnostic ? `<dt>Vector post-hoc</dt><dd>${escapeHtml(metrics.bestDiagnosticObjectiveLabel || "--")}</dd>` : ""}
           <dt>Wall-clock</dt><dd>${escapeHtml(cost.processWallClockLabel || "--")}</dd>
           <dt>Llamadas LLM</dt><dd>${escapeHtml(String(cost.llmCalls ?? 0))}</dd>
           <dt>Tiempo LLM</dt><dd>${escapeHtml(cost.llmClientWallClockLabel || "--")}</dd>
@@ -2069,7 +2074,7 @@ function renderComparatorCards(proposals) {
 
 function renderComparatorRows(rows) {
   if (!rows.length) {
-    dom.comparatorResultsBody.innerHTML = '<tr><td colspan="7">Sin resultados todavia.</td></tr>';
+    dom.comparatorResultsBody.innerHTML = '<tr><td colspan="8">Sin resultados todavia.</td></tr>';
     return;
   }
 
@@ -2077,14 +2082,20 @@ function renderComparatorRows(rows) {
     ...rows.map((row) => {
       const tr = document.createElement("tr");
       const status = row.status || row.proposalStatus || "--";
+      const nonDominatedLabel = row.nonDominated
+        ? '<span class="valid">si</span>'
+        : row.postHocNonDominated
+          ? '<span class="valid">si post-hoc</span>'
+          : "--";
       tr.innerHTML = `
         <td>${escapeHtml(row.displayName || row.proposalId)}</td>
         <td>${escapeHtml(String(row.rank ?? "--"))}</td>
         <td class="context-cell long-cell">${escapeHtml(row.generatedText || "--")}</td>
         <td>${escapeHtml(row.objectiveLabel || "--")}</td>
+        <td>${escapeHtml(row.diagnosticObjectiveLabel || "--")}</td>
         <td class="context-cell long-cell">${escapeHtml(row.prompt || "--")}</td>
         <td><span class="${comparatorStatusClass(status)}">${escapeHtml(status)}</span></td>
-        <td>${row.nonDominated ? '<span class="valid">si</span>' : "--"}</td>
+        <td>${nonDominatedLabel}</td>
       `;
       return tr;
     }),
