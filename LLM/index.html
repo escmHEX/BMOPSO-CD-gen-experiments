@@ -706,6 +706,21 @@ Each line must follow this format:
               <p id="comparatorProgressSummary">Sin corrida activa.</p>
             </article>
             <article class="metric">
+              <span>Llamadas LLM</span>
+              <strong id="comparatorLlmCalls">--</strong>
+              <p id="comparatorLlmCallsDetail">Total de llamadas reales a Ollama.</p>
+            </article>
+            <article class="metric">
+              <span>Wall-clock</span>
+              <strong id="comparatorWallClock">--</strong>
+              <p>Tiempo real de la corrida backend.</p>
+            </article>
+            <article class="metric">
+              <span>Tiempo LLM</span>
+              <strong id="comparatorLlmTime">--</strong>
+              <p>Suma de latencia cliente de llamadas a Ollama.</p>
+            </article>
+            <article class="metric">
               <span>Propuestas completadas</span>
               <strong id="comparatorCompletedProposals">--</strong>
               <p>Baselines clonados con salida normalizada.</p>

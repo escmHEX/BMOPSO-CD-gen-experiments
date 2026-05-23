@@ -91,6 +91,8 @@ El lanzamiento pasa por `baselines/bootstrap.py`, que precarga los módulos decl
 
 La API devuelve progreso estructurado en `progress` y `proposalStates`. La web muestra porcentaje, etapa activa, tiempo transcurrido, tiempo restante estimado y estado por propuesta. La cancelación termina el árbol de procesos activo en Windows para cortar llamadas largas sin esperar nuevos logs.
 
+Los costos de ejecución se devuelven en `costSummary` a nivel de corrida y en `proposal.cost` por baseline. Se mide wall-clock del proceso, runtime reportado por `runtime.txt`, llamadas reales a Ollama interceptadas desde `baselines/bootstrap.py`, tiempo cliente acumulado de esas llamadas, duración reportada por Ollama cuando está disponible, tokens `prompt_eval_count`/`eval_count`, promedio por llamada y llamadas fallidas.
+
 `proposalParallelism` controla cuántas propuestas se ejecutan al mismo tiempo desde el adaptador. No modifica el paralelismo interno de EVOLMD ni EVOLMD-MO, porque ese comportamiento queda dentro de los clones upstream. `timeoutMinutes` limita la duración máxima por propuesta.
 
 HV y spread solo aplican a propuestas multiobjetivo. Para EVOLMD-MO se usa maximización, fidelidad normalizada con `(fidelity + 1) / 2`, diversidad acotada a `[0, 1]`, punto de referencia HV `[0, 0]` y spread como desviación normalizada entre distancias consecutivas del frente no dominado.

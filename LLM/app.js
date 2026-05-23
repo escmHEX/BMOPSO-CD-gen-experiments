@@ -392,6 +392,10 @@ const dom = {
   comparatorRunStatus: document.querySelector("#comparatorRunStatus"),
   comparatorProgressPercent: document.querySelector("#comparatorProgressPercent"),
   comparatorProgressSummary: document.querySelector("#comparatorProgressSummary"),
+  comparatorLlmCalls: document.querySelector("#comparatorLlmCalls"),
+  comparatorLlmCallsDetail: document.querySelector("#comparatorLlmCallsDetail"),
+  comparatorWallClock: document.querySelector("#comparatorWallClock"),
+  comparatorLlmTime: document.querySelector("#comparatorLlmTime"),
   comparatorCompletedProposals: document.querySelector("#comparatorCompletedProposals"),
   comparatorShownRows: document.querySelector("#comparatorShownRows"),
   comparatorRunId: document.querySelector("#comparatorRunId"),
@@ -1731,6 +1735,10 @@ function resetComparatorUi() {
   dom.comparatorRunStatus.textContent = "--";
   dom.comparatorProgressPercent.textContent = "--";
   dom.comparatorProgressSummary.textContent = "Sin corrida activa.";
+  dom.comparatorLlmCalls.textContent = "--";
+  dom.comparatorLlmCallsDetail.textContent = "Total de llamadas reales a Ollama.";
+  dom.comparatorWallClock.textContent = "--";
+  dom.comparatorLlmTime.textContent = "--";
   dom.comparatorCompletedProposals.textContent = "--";
   dom.comparatorShownRows.textContent = "--";
   dom.comparatorRunId.textContent = "--";
@@ -1959,6 +1967,23 @@ function renderComparatorProgress(progress) {
   ]);
 }
 
+function renderComparatorCostSummary(costSummary) {
+  if (!costSummary) {
+    dom.comparatorLlmCalls.textContent = "--";
+    dom.comparatorLlmCallsDetail.textContent = "Total de llamadas reales a Ollama.";
+    dom.comparatorWallClock.textContent = "--";
+    dom.comparatorLlmTime.textContent = "--";
+    return;
+  }
+
+  const successful = costSummary.llmSuccessfulCalls ?? 0;
+  const failed = costSummary.llmFailedCalls ?? 0;
+  dom.comparatorLlmCalls.textContent = String(costSummary.llmCalls ?? 0);
+  dom.comparatorLlmCallsDetail.textContent = `${successful} ok, ${failed} fallida(s), ${costSummary.totalTokens ?? 0} tokens reportados.`;
+  dom.comparatorWallClock.textContent = costSummary.runWallClockLabel || "--";
+  dom.comparatorLlmTime.textContent = costSummary.llmClientWallClockLabel || "--";
+}
+
 function renderComparatorRun(run) {
   const rows = flattenComparatorRows(run);
   const progress = run.progress || {};
@@ -1976,6 +2001,7 @@ function renderComparatorRun(run) {
   dom.comparatorConnectionDot.classList.toggle("is-error", run.status === "failed");
 
   renderComparatorProgress(run.progress || null);
+  renderComparatorCostSummary(run.costSummary || null);
   renderComparatorCards(comparatorProposalViews(run));
   renderComparatorRows(rows);
   renderComparatorLogs(run.logs || []);
@@ -2009,6 +2035,7 @@ function renderComparatorCards(proposals) {
   dom.comparatorProposalCards.replaceChildren(
     ...proposals.map((proposal) => {
       const metrics = proposal.metrics || {};
+      const cost = proposal.cost || {};
       const progressState = proposal.progressState || proposal;
       const progressPercent = Math.round(Math.max(0, Math.min(1, Number(progressState.progress || 0))) * 100);
       const stageLabel = progressState.stageLabel || comparatorStatusLabel(proposal.status);
@@ -2027,6 +2054,11 @@ function renderComparatorCards(proposals) {
           <dt>No dominadas</dt><dd>${escapeHtml(String(metrics.nonDominatedRows ?? 0))}</dd>
           <dt>HV</dt><dd>${escapeHtml(metrics.hypervolumeLabel || "No aplica")}</dd>
           <dt>Spread</dt><dd>${escapeHtml(metrics.spreadLabel || "No aplica")}</dd>
+          <dt>Wall-clock</dt><dd>${escapeHtml(cost.processWallClockLabel || "--")}</dd>
+          <dt>Llamadas LLM</dt><dd>${escapeHtml(String(cost.llmCalls ?? 0))}</dd>
+          <dt>Tiempo LLM</dt><dd>${escapeHtml(cost.llmClientWallClockLabel || "--")}</dd>
+          <dt>Prom. llamada</dt><dd>${escapeHtml(cost.llmAverageCallLabel || "No disponible")}</dd>
+          <dt>Tokens</dt><dd>${escapeHtml(String(cost.totalTokens ?? 0))}</dd>
           <dt>Salida</dt><dd>${escapeHtml(metrics.outputDir || proposal.outputDir || "--")}</dd>
         </dl>
       `;

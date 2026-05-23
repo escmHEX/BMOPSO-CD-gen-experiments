@@ -27,49 +27,62 @@ def release_existing_server_port(host: str, port: int) -> None:
     if sys.platform != "win32":
         return
 
-    script = f"""
-$conn = Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue |
-  Where-Object {{ $_.LocalAddress -eq '{host}' -or $_.LocalAddress -eq '0.0.0.0' -or $_.LocalAddress -eq '::' -or $_.LocalAddress -eq '::1' -or $_.LocalAddress -eq '127.0.0.1' }} |
-  Select-Object -First 1
-if ($conn) {{
-  $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $($conn.OwningProcess)"
-  [pscustomobject]@{{ pid = $conn.OwningProcess; commandLine = $proc.CommandLine }} | ConvertTo-Json -Compress
-}}
-"""
-
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", script],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
-    payload = result.stdout.strip()
-    if not payload:
+    process_id = find_windows_listener_pid(host, port)
+    if process_id is None or process_id == os.getpid():
         return
 
-    try:
-        process_info = json.loads(payload)
-    except json.JSONDecodeError as error:
-        raise RuntimeError(f"Could not inspect the process listening on port {port}: {payload}") from error
-
-    process_id = int(process_info["pid"])
-    command_line = str(process_info.get("commandLine") or "")
-    if process_id == os.getpid():
-        return
+    command_line = windows_process_command_line(process_id)
     if "server.py" not in command_line:
         raise RuntimeError(
             f"Port {port} is already in use by a different process: PID {process_id}, {command_line}"
         )
 
     subprocess.run(
-        ["powershell", "-NoProfile", "-Command", f"Stop-Process -Id {process_id} -Force"],
+        ["taskkill", "/PID", str(process_id), "/F"],
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=15,
         check=True,
     )
     time.sleep(1)
+
+
+def find_windows_listener_pid(host: str, port: int) -> int | None:
+    result = subprocess.run(
+        ["netstat", "-ano", "-p", "tcp"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    candidate_hosts = {host, "0.0.0.0", "::", "::1", "127.0.0.1"}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0].upper() != "TCP" or parts[3].upper() != "LISTENING":
+            continue
+        local_address = parts[1]
+        if not local_address.endswith(f":{port}"):
+            continue
+        address = local_address.rsplit(":", 1)[0].strip("[]")
+        if address not in candidate_hosts:
+            continue
+        try:
+            return int(parts[4])
+        except ValueError:
+            return None
+    return None
+
+
+def windows_process_command_line(process_id: int) -> str:
+    script = f"(Get-CimInstance Win32_Process -Filter \"ProcessId = {process_id}\").CommandLine"
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    return result.stdout.strip()
 
 
 class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):

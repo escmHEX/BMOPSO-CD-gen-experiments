@@ -184,6 +184,133 @@ def write_json(path: Path, payload: Any) -> None:
         json.dump(payload, file, ensure_ascii=False, indent=2)
 
 
+def read_json_or_default(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return read_json(path)
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def label_from_seconds(seconds: Any) -> str:
+    return format_duration(finite_float(seconds, -1.0))
+
+
+def parse_runtime_file(path: Path) -> dict[str, float]:
+    if not path.exists():
+        return {}
+    runtime: dict[str, float] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        key, separator, value = line.partition("=")
+        if not separator:
+            continue
+        runtime[key.strip()] = finite_float(value.strip())
+    return runtime
+
+
+def empty_cost_metrics() -> dict[str, Any]:
+    return {
+        "processWallClockSeconds": 0.0,
+        "processWallClockLabel": "0s",
+        "algorithmRuntimeSeconds": None,
+        "algorithmRuntimeLabel": "No disponible",
+        "llmCalls": 0,
+        "llmSuccessfulCalls": 0,
+        "llmFailedCalls": 0,
+        "llmClientWallClockSeconds": 0.0,
+        "llmClientWallClockLabel": "0s",
+        "llmAverageCallSeconds": None,
+        "llmAverageCallLabel": "No disponible",
+        "ollamaTotalDurationSeconds": 0.0,
+        "ollamaTotalDurationLabel": "0s",
+        "promptEvalCount": 0,
+        "evalCount": 0,
+        "totalTokens": 0,
+        "returnCode": None,
+        "timedOut": False,
+        "cancelled": False,
+        "runtimeBreakdown": {},
+    }
+
+
+def build_cost_metrics(
+    process_cost: dict[str, Any],
+    llm_payload: dict[str, Any],
+    output_dir: Path | None,
+    cancelled: bool,
+) -> dict[str, Any]:
+    summary = llm_payload.get("summary") if isinstance(llm_payload, dict) else {}
+    summary = summary if isinstance(summary, dict) else {}
+    runtime = parse_runtime_file(output_dir / "runtime.txt") if output_dir else {}
+    algorithm_runtime = runtime.get("total_sec")
+    llm_calls = int(finite_float(summary.get("totalCalls")))
+    llm_client_seconds = finite_float(summary.get("clientWallClockSeconds"))
+    average_call_seconds = llm_client_seconds / llm_calls if llm_calls > 0 else None
+    cost = empty_cost_metrics()
+    cost.update(
+        {
+            "processWallClockSeconds": finite_float(process_cost.get("processWallClockSeconds")),
+            "processWallClockLabel": label_from_seconds(process_cost.get("processWallClockSeconds")),
+            "algorithmRuntimeSeconds": algorithm_runtime,
+            "algorithmRuntimeLabel": label_from_seconds(algorithm_runtime),
+            "llmCalls": llm_calls,
+            "llmSuccessfulCalls": int(finite_float(summary.get("successfulCalls"))),
+            "llmFailedCalls": int(finite_float(summary.get("failedCalls"))),
+            "llmClientWallClockSeconds": llm_client_seconds,
+            "llmClientWallClockLabel": label_from_seconds(llm_client_seconds),
+            "llmAverageCallSeconds": average_call_seconds,
+            "llmAverageCallLabel": label_from_seconds(average_call_seconds),
+            "ollamaTotalDurationSeconds": finite_float(summary.get("ollamaTotalDurationSeconds")),
+            "ollamaTotalDurationLabel": label_from_seconds(summary.get("ollamaTotalDurationSeconds")),
+            "promptEvalCount": int(finite_float(summary.get("promptEvalCount"))),
+            "evalCount": int(finite_float(summary.get("evalCount"))),
+            "totalTokens": int(finite_float(summary.get("totalTokens"))),
+            "returnCode": process_cost.get("returnCode"),
+            "timedOut": bool(process_cost.get("timedOut")),
+            "cancelled": cancelled,
+            "runtimeBreakdown": runtime,
+            "metricsPath": process_cost.get("metricsPath"),
+        }
+    )
+    return cost
+
+
+def summarize_costs(proposals: list[dict[str, Any]], run_elapsed_seconds: float) -> dict[str, Any]:
+    costs = [proposal.get("cost") or empty_cost_metrics() for proposal in proposals]
+    llm_calls = sum(int(cost.get("llmCalls") or 0) for cost in costs)
+    llm_client_seconds = sum(finite_float(cost.get("llmClientWallClockSeconds")) for cost in costs)
+    process_seconds_sum = sum(finite_float(cost.get("processWallClockSeconds")) for cost in costs)
+    algorithm_seconds_sum = sum(
+        finite_float(cost.get("algorithmRuntimeSeconds"))
+        for cost in costs
+        if cost.get("algorithmRuntimeSeconds") is not None
+    )
+    prompt_tokens = sum(int(cost.get("promptEvalCount") or 0) for cost in costs)
+    completion_tokens = sum(int(cost.get("evalCount") or 0) for cost in costs)
+    average_call_seconds = llm_client_seconds / llm_calls if llm_calls > 0 else None
+    return {
+        "runWallClockSeconds": run_elapsed_seconds,
+        "runWallClockLabel": label_from_seconds(run_elapsed_seconds),
+        "proposalWallClockSecondsSum": process_seconds_sum,
+        "proposalWallClockSumLabel": label_from_seconds(process_seconds_sum),
+        "algorithmRuntimeSecondsSum": algorithm_seconds_sum,
+        "algorithmRuntimeSumLabel": label_from_seconds(algorithm_seconds_sum),
+        "llmCalls": llm_calls,
+        "llmSuccessfulCalls": sum(int(cost.get("llmSuccessfulCalls") or 0) for cost in costs),
+        "llmFailedCalls": sum(int(cost.get("llmFailedCalls") or 0) for cost in costs),
+        "llmClientWallClockSeconds": llm_client_seconds,
+        "llmClientWallClockLabel": label_from_seconds(llm_client_seconds),
+        "llmAverageCallSeconds": average_call_seconds,
+        "llmAverageCallLabel": label_from_seconds(average_call_seconds),
+        "ollamaTotalDurationSeconds": sum(finite_float(cost.get("ollamaTotalDurationSeconds")) for cost in costs),
+        "ollamaTotalDurationLabel": label_from_seconds(sum(finite_float(cost.get("ollamaTotalDurationSeconds")) for cost in costs)),
+        "promptEvalCount": prompt_tokens,
+        "evalCount": completion_tokens,
+        "totalTokens": prompt_tokens + completion_tokens,
+    }
+
+
 @dataclass(frozen=True)
 class ProposalDefinition:
     proposal_id: str
@@ -284,6 +411,7 @@ class ComparatorService:
                 "remainingSeconds": None,
                 "remainingLabel": "No disponible",
             },
+            "costSummary": summarize_costs([], 0.0),
             "error": None,
             "cancelRequested": False,
             "activeProcesses": {},
@@ -403,6 +531,7 @@ class ComparatorService:
                 else:
                     run["status"] = STATUS_COMPLETED
                 run["updatedAt"] = utc_now()
+                self._refresh_cost_summary_unlocked(run)
                 self._append_log_unlocked(run, "system", f"Comparator run finished with status {run['status']}.")
                 self._write_summary_unlocked(run)
         except Exception as error:
@@ -410,6 +539,7 @@ class ComparatorService:
                 run["status"] = STATUS_FAILED
                 run["error"] = str(error)
                 run["updatedAt"] = utc_now()
+                self._refresh_cost_summary_unlocked(run)
                 self._append_log_unlocked(run, "system", f"Unexpected error: {error}")
                 self._write_summary_unlocked(run)
 
@@ -472,6 +602,7 @@ class ComparatorService:
         state["updatedAt"] = utc_now()
         run["updatedAt"] = utc_now()
         self._refresh_run_progress_unlocked(run)
+        self._refresh_cost_summary_unlocked(run)
 
     def _sort_proposals_unlocked(self, run: dict[str, Any]) -> None:
         order = {proposal.proposal_id: index for index, proposal in enumerate(PROPOSALS)}
@@ -485,6 +616,11 @@ class ComparatorService:
                 state["progress"] = 1.0
                 state["updatedAt"] = utc_now()
         self._refresh_run_progress_unlocked(run)
+
+    def _refresh_cost_summary_unlocked(self, run: dict[str, Any]) -> None:
+        started_at = run.get("startedAtEpoch")
+        elapsed = max(0.0, time.time() - started_at) if started_at else 0.0
+        run["costSummary"] = summarize_costs(run.get("proposals") or [], elapsed)
 
     def _execute_proposal(self, run: dict[str, Any], proposal: ProposalDefinition) -> dict[str, Any]:
         with self._lock:
@@ -504,6 +640,7 @@ class ComparatorService:
         reference_path.write_text(run["config"]["referenceText"], encoding="utf-8")
         output_base = proposal_dir / "exec"
         output_base.mkdir(parents=True, exist_ok=True)
+        cost_metrics_path = proposal_dir / "cost_metrics.json"
 
         repository_dir = self.root / proposal.repository_path
         if not (repository_dir / "main.py").exists():
@@ -536,39 +673,53 @@ class ComparatorService:
         ]
 
         self._append_log(run, proposal.proposal_id, "Starting baseline process.")
-        return_code = self._run_process(
+        process_cost = self._run_process(
             run,
             proposal.proposal_id,
             command,
             repository_dir,
             proposal.preload_modules,
+            cost_metrics_path,
         )
+        return_code = int(process_cost["returnCode"])
+        llm_payload = read_json_or_default(cost_metrics_path, {})
 
         if run.get("cancelRequested"):
-            return self._cancelled_result(proposal, proposal_dir)
+            cost = build_cost_metrics(process_cost, llm_payload, None, True)
+            return self._cancelled_result(proposal, proposal_dir, cost)
         if return_code != 0:
             message = (
                 f"Process timed out after {run['config']['timeoutMinutes']} minute(s)."
                 if return_code == 124
                 else f"Process exited with code {return_code}. Check dependencies, Ollama, and model availability."
             )
+            cost = build_cost_metrics(process_cost, llm_payload, None, False)
             return self._failed_result(
                 proposal,
                 proposal_dir,
                 message,
+                cost,
             )
 
         output_dir = latest_child_directory(output_base)
         if not output_dir:
-            return self._failed_result(proposal, proposal_dir, "No output directory was created.")
+            cost = build_cost_metrics(process_cost, llm_payload, None, False)
+            return self._failed_result(proposal, proposal_dir, "No output directory was created.", cost)
 
         result_path = output_dir / proposal.result_file
         if not result_path.exists():
-            return self._failed_result(proposal, proposal_dir, f"Expected result file was not found: {result_path.name}.")
+            cost = build_cost_metrics(process_cost, llm_payload, output_dir, False)
+            return self._failed_result(
+                proposal,
+                proposal_dir,
+                f"Expected result file was not found: {result_path.name}.",
+                cost,
+            )
 
         try:
             rows = self._normalize_rows(proposal, read_json(result_path), run["config"]["topK"])
             metrics = self._summarize_rows(proposal, rows, output_dir)
+            cost = build_cost_metrics(process_cost, llm_payload, output_dir, False)
             return {
                 "proposalId": proposal.proposal_id,
                 "displayName": proposal.display_name,
@@ -576,10 +727,12 @@ class ComparatorService:
                 "outputDir": str(output_dir),
                 "rows": rows[: run["config"]["topK"]],
                 "metrics": metrics,
+                "cost": cost,
                 "error": None,
             }
         except Exception as error:
-            return self._failed_result(proposal, proposal_dir, f"Could not normalize output: {error}")
+            cost = build_cost_metrics(process_cost, llm_payload, output_dir, False)
+            return self._failed_result(proposal, proposal_dir, f"Could not normalize output: {error}", cost)
 
     def _set_proposal_state_unlocked(
         self,
@@ -709,12 +862,16 @@ class ComparatorService:
         command: list[str],
         cwd: Path,
         preload_modules: tuple[str, ...],
-    ) -> int:
+        cost_metrics_path: Path,
+    ) -> dict[str, Any]:
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "utf-8"
+        environment["BASELINE_COST_METRICS_PATH"] = str(cost_metrics_path)
         if preload_modules:
             environment["BASELINE_PRELOAD_MODULES"] = ",".join(preload_modules)
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+        process_started = time.perf_counter()
+        timed_out = False
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
@@ -770,6 +927,7 @@ class ComparatorService:
                 self._append_log(run, proposal_id, f"Timeout reached after {run['config']['timeoutMinutes']} minute(s).")
                 self._terminate_process(process)
                 termination_requested = True
+                timed_out = True
                 return_code = 124
                 break
 
@@ -784,7 +942,12 @@ class ComparatorService:
         with self._lock:
             if run.get("activeProcesses", {}).get(proposal_id) is process:
                 run["activeProcesses"].pop(proposal_id, None)
-        return return_code
+        return {
+            "returnCode": return_code,
+            "processWallClockSeconds": time.perf_counter() - process_started,
+            "timedOut": timed_out,
+            "metricsPath": str(cost_metrics_path),
+        }
 
     def _terminate_process(self, process: subprocess.Popen[str]) -> None:
         if process.poll() is not None:
@@ -945,6 +1108,7 @@ class ComparatorService:
         proposal: ProposalDefinition,
         proposal_dir: Path,
         message: str,
+        cost: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "proposalId": proposal.proposal_id,
@@ -965,12 +1129,19 @@ class ComparatorService:
                 "spreadLabel": "No aplica",
                 "outputDir": str(proposal_dir),
             },
+            "cost": cost or empty_cost_metrics(),
             "error": message,
         }
 
-    def _cancelled_result(self, proposal: ProposalDefinition, proposal_dir: Path) -> dict[str, Any]:
-        result = self._failed_result(proposal, proposal_dir, "Execution was cancelled.")
+    def _cancelled_result(
+        self,
+        proposal: ProposalDefinition,
+        proposal_dir: Path,
+        cost: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        result = self._failed_result(proposal, proposal_dir, "Execution was cancelled.", cost)
         result["status"] = STATUS_CANCELLED
+        result["cost"]["cancelled"] = True
         return result
 
     def _append_log(self, run: dict[str, Any], proposal_id: str, message: str) -> None:
