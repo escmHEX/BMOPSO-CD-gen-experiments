@@ -1,4 +1,6 @@
 runs/comparator/
+runs/initial-population/
 __pycache__/
 .pytest_cache/
 .playwright-mcp/
+.server-*.log

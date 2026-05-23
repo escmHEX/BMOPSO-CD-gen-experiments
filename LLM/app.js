@@ -260,6 +260,8 @@ let latestSolutionRows = [];
 let psoDatabase = null;
 let comparatorPollTimer = null;
 let currentComparatorRunId = null;
+let initialPopulationPollTimer = null;
+let currentInitialPopulationRunId = null;
 
 const dom = {
   navItems: document.querySelectorAll(".nav-item"),
@@ -374,6 +376,58 @@ const dom = {
   solutionObjectiveDetails: document.querySelector("#solutionObjectiveDetails"),
   solutionResultsBody: document.querySelector("#solutionResultsBody"),
   clearSolutionResultsButton: document.querySelector("#clearSolutionResultsButton"),
+  initialLmApiMode: document.querySelector("#initialLmApiMode"),
+  initialLmStudioBase: document.querySelector("#initialLmStudioBase"),
+  initialPopulationLmModels: document.querySelector("#initialPopulationLmModels"),
+  initialN: document.querySelector("#initialN"),
+  initialTopK: document.querySelector("#initialTopK"),
+  initialGenerationParallelism: document.querySelector("#initialGenerationParallelism"),
+  initialTimeoutSeconds: document.querySelector("#initialTimeoutSeconds"),
+  initialSeed: document.querySelector("#initialSeed"),
+  initialEmbeddingModel: document.querySelector("#initialEmbeddingModel"),
+  initialReferenceText: document.querySelector("#initialReferenceText"),
+  initialDomain: document.querySelector("#initialDomain"),
+  initialRolesMaxWords: document.querySelector("#initialRolesMaxWords"),
+  initialTopicsMaxWords: document.querySelector("#initialTopicsMaxWords"),
+  initialActionsMaxWords: document.querySelector("#initialActionsMaxWords"),
+  initialGeneratedMinWords: document.querySelector("#initialGeneratedMinWords"),
+  initialGeneratedMaxWords: document.querySelector("#initialGeneratedMaxWords"),
+  initialStrategySummary: document.querySelector("#initialStrategySummary"),
+  initialIntegrationDetails: document.querySelector("#initialIntegrationDetails"),
+  initialPromptTemplate: document.querySelector("#initialPromptTemplate"),
+  initialStageConfigs: document.querySelectorAll(".initial-stage-config"),
+  loadInitialModelsButton: document.querySelector("#loadInitialModelsButton"),
+  runInitialPopulationButton: document.querySelector("#runInitialPopulationButton"),
+  cancelInitialPopulationButton: document.querySelector("#cancelInitialPopulationButton"),
+  clearInitialPopulationButton: document.querySelector("#clearInitialPopulationButton"),
+  initialPopulationConnectionDot: document.querySelector("#initialPopulationConnectionDot"),
+  initialPopulationConnectionText: document.querySelector("#initialPopulationConnectionText"),
+  initialRunStatus: document.querySelector("#initialRunStatus"),
+  initialProgressPercent: document.querySelector("#initialProgressPercent"),
+  initialProgressSummary: document.querySelector("#initialProgressSummary"),
+  initialLlmCalls: document.querySelector("#initialLlmCalls"),
+  initialLlmCallsDetail: document.querySelector("#initialLlmCallsDetail"),
+  initialWallClock: document.querySelector("#initialWallClock"),
+  initialSequentialWallClock: document.querySelector("#initialSequentialWallClock"),
+  initialLlmTime: document.querySelector("#initialLlmTime"),
+  initialEmbeddingTime: document.querySelector("#initialEmbeddingTime"),
+  initialFinalIndividuals: document.querySelector("#initialFinalIndividuals"),
+  initialNonDominated: document.querySelector("#initialNonDominated"),
+  initialHypervolume: document.querySelector("#initialHypervolume"),
+  initialSpread: document.querySelector("#initialSpread"),
+  initialCallsPerIndividual: document.querySelector("#initialCallsPerIndividual"),
+  initialRunId: document.querySelector("#initialRunId"),
+  initialStatusTone: document.querySelector("#initialStatusTone"),
+  initialStatusTitle: document.querySelector("#initialStatusTitle"),
+  initialStatusDetail: document.querySelector("#initialStatusDetail"),
+  initialProgressDetail: document.querySelector("#initialProgressDetail"),
+  initialProgressBar: document.querySelector("#initialProgressBar"),
+  initialProgressDetails: document.querySelector("#initialProgressDetails"),
+  initialAnchorsContent: document.querySelector("#initialAnchorsContent"),
+  initialPoolsContent: document.querySelector("#initialPoolsContent"),
+  initialResultsBody: document.querySelector("#initialResultsBody"),
+  initialArtifactDetails: document.querySelector("#initialArtifactDetails"),
+  initialLogOutput: document.querySelector("#initialLogOutput"),
   comparatorReferenceText: document.querySelector("#comparatorReferenceText"),
   comparatorModel: document.querySelector("#comparatorModel"),
   comparatorTopK: document.querySelector("#comparatorTopK"),
@@ -468,6 +522,8 @@ Format:
 
 const COMPARATOR_API = "/api/comparator";
 const COMPARATOR_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const INITIAL_POPULATION_API = "/api/initial-population";
+const INITIAL_POPULATION_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 function setStatus(toneElement, titleElement, detailElement, title, detail, state = "ready") {
   titleElement.textContent = title;
@@ -1680,6 +1736,582 @@ async function runSolutionEvaluation() {
   }
 }
 
+function initialPopulationStatusLabel(status) {
+  const labels = {
+    queued: "en cola",
+    running: "ejecutando",
+    completed: "completado",
+    failed: "fallido",
+    cancelled: "cancelado",
+  };
+  return labels[status] || status || "--";
+}
+
+function formatOptionalNumber(value, digits = 6) {
+  const number = Number(value);
+  return Number.isFinite(number) ? formatNumber(number, digits) : "--";
+}
+
+function readInitialStageConfigs() {
+  const stages = {};
+  dom.initialStageConfigs.forEach((panel) => {
+    const stageName = panel.dataset.initialStage;
+    const stage = {};
+    panel.querySelectorAll("[data-stage-field]").forEach((field) => {
+      const key = field.dataset.stageField;
+      if (["temperature", "topP"].includes(key)) {
+        stage[key] = readClampedNumber(field, `${stageName}.${key}`, 0, key === "topP" ? 1 : 2);
+      } else if (["topK", "maxTokens"].includes(key)) {
+        stage[key] = Math.floor(readClampedNumber(field, `${stageName}.${key}`, key === "topK" ? 0 : 8, key === "topK" ? 500 : 4096));
+      } else {
+        const value = field.value.trim();
+        if (!value) {
+          throw new Error(`${stageName}.${key} no puede estar vacio.`);
+        }
+        stage[key] = value;
+      }
+    });
+    stages[stageName] = stage;
+  });
+  return stages;
+}
+
+function readInitialPopulationConfig() {
+  const referenceText = dom.initialReferenceText.value.trim();
+  const domain = dom.initialDomain.value.trim();
+  const baseUrl = dom.initialLmStudioBase.value.trim();
+  const promptTemplate = dom.initialPromptTemplate.value.trim();
+
+  if (!referenceText) throw new Error("Define el texto de referencia.");
+  if (!domain) throw new Error("Define el dominio general.");
+  if (!baseUrl) throw new Error("Define la Base URL de LM Studio.");
+  if (!promptTemplate) throw new Error("Define la plantilla deterministica final.");
+
+  const generatedMinWords = Math.floor(readClampedNumber(dom.initialGeneratedMinWords, "Min. palabras texto", 1, 500));
+  const generatedMaxWords = Math.floor(readClampedNumber(dom.initialGeneratedMaxWords, "Max. palabras texto", 1, 500));
+  if (generatedMinWords > generatedMaxWords) {
+    throw new Error("Min. palabras texto no puede ser mayor que Max. palabras texto.");
+  }
+
+  return {
+    strategyId: "hybrid-semantic-v6",
+    referenceText,
+    domain,
+    n: Math.floor(readClampedNumber(dom.initialN, "N individuos", 1, 500)),
+    topK: Math.floor(readClampedNumber(dom.initialTopK, "Top K tabla", 1, 500)),
+    timeoutSeconds: Math.floor(readClampedNumber(dom.initialTimeoutSeconds, "Timeout corrida", 5, 3600)),
+    generationParallelism: Math.floor(readClampedNumber(dom.initialGenerationParallelism, "Paralelismo generacion", 1, 16)),
+    seed: Math.floor(readClampedNumber(dom.initialSeed, "Semilla", 0, 2147483647)),
+    embeddingModel: dom.initialEmbeddingModel.value,
+    lmStudio: {
+      baseUrl,
+      apiMode: dom.initialLmApiMode.value,
+    },
+    stages: readInitialStageConfigs(),
+    promptTemplate,
+    validation: {
+      rolesMaxWords: Math.floor(readClampedNumber(dom.initialRolesMaxWords, "Max. palabras roles", 1, 20)),
+      topicsMaxWords: Math.floor(readClampedNumber(dom.initialTopicsMaxWords, "Max. palabras topicos", 1, 30)),
+      actionsMaxWords: Math.floor(readClampedNumber(dom.initialActionsMaxWords, "Max. palabras acciones", 1, 20)),
+      generatedMinWords,
+      generatedMaxWords,
+    },
+  };
+}
+
+async function requestInitialPopulationJson(path, options = {}) {
+  const response = await fetch(`${INITIAL_POPULATION_API}${path}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function loadInitialPopulationStrategies() {
+  try {
+    const payload = await requestInitialPopulationJson("/strategies");
+    const strategies = payload.strategies || [];
+    dom.initialStrategySummary.textContent = strategies
+      .map((strategy) => `${strategy.displayName}: ${strategy.available ? "disponible" : "faltante"}`)
+      .join("; ") || "Sin estrategias registradas.";
+    renderDefinitionList(dom.initialIntegrationDetails, [
+      ["Contrato", "{strategyId, displayName, rows, metrics, cost, outputDir, status}"],
+      ["Estrategias", strategies.map((strategy) => strategy.strategyId).join(", ") || "--"],
+      ["Salida", "runs/initial-population/<runId>/summary.json + artefactos por etapa"],
+      ["Objetivos", "semantic_fidelity y semantic_diversity"],
+      ["Costo", "llamadas LM Studio, tokens reportados, wall-clock y batches SBERT"],
+    ]);
+  } catch (error) {
+    dom.initialStrategySummary.textContent = "No se pudo consultar el registro.";
+    renderDefinitionList(dom.initialIntegrationDetails, [
+      ["API", error.message],
+    ]);
+  }
+}
+
+async function loadInitialPopulationModels() {
+  const params = new URLSearchParams({
+    baseUrl: dom.initialLmStudioBase.value.trim(),
+    apiMode: dom.initialLmApiMode.value,
+  });
+  dom.loadInitialModelsButton.disabled = true;
+  try {
+    const payload = await requestInitialPopulationJson(`/lm-studio/models?${params.toString()}`);
+    dom.initialPopulationLmModels.replaceChildren(
+      ...(payload.models || []).map((model) => {
+        const option = document.createElement("option");
+        option.value = model;
+        return option;
+      }),
+    );
+    dom.initialPopulationConnectionText.textContent = `${(payload.models || []).length} modelo(s)`;
+    dom.initialPopulationConnectionDot.classList.remove("is-error", "is-busy");
+    setStatus(dom.initialStatusTone, dom.initialStatusTitle, dom.initialStatusDetail, "Modelos cargados", `${(payload.models || []).length} modelo(s) disponibles desde LM Studio.`);
+  } catch (error) {
+    dom.initialPopulationConnectionText.textContent = "Error modelos";
+    dom.initialPopulationConnectionDot.classList.add("is-error");
+    setStatus(dom.initialStatusTone, dom.initialStatusTitle, dom.initialStatusDetail, "No se pudieron cargar modelos", error.message, "error");
+  } finally {
+    dom.loadInitialModelsButton.disabled = false;
+  }
+}
+
+function setInitialPopulationRunning(isRunning, cancelRequested = false) {
+  dom.runInitialPopulationButton.disabled = isRunning;
+  dom.cancelInitialPopulationButton.disabled = !isRunning || !currentInitialPopulationRunId || cancelRequested;
+  dom.cancelInitialPopulationButton.textContent = cancelRequested ? "Cancelando..." : "Cancelar";
+  dom.clearInitialPopulationButton.disabled = isRunning;
+  [
+    dom.initialLmApiMode,
+    dom.initialLmStudioBase,
+    dom.initialN,
+    dom.initialTopK,
+    dom.initialGenerationParallelism,
+    dom.initialTimeoutSeconds,
+    dom.initialSeed,
+    dom.initialEmbeddingModel,
+    dom.initialReferenceText,
+    dom.initialDomain,
+    dom.initialRolesMaxWords,
+    dom.initialTopicsMaxWords,
+    dom.initialActionsMaxWords,
+    dom.initialGeneratedMinWords,
+    dom.initialGeneratedMaxWords,
+    dom.initialPromptTemplate,
+    ...Array.from(dom.initialStageConfigs).flatMap((panel) => Array.from(panel.querySelectorAll("[data-stage-field]"))),
+  ].forEach((field) => {
+    field.disabled = isRunning;
+  });
+}
+
+function stopInitialPopulationPolling() {
+  if (initialPopulationPollTimer) {
+    window.clearInterval(initialPopulationPollTimer);
+    initialPopulationPollTimer = null;
+  }
+}
+
+function resetInitialPopulationUi() {
+  stopInitialPopulationPolling();
+  currentInitialPopulationRunId = null;
+  dom.initialRunStatus.textContent = "--";
+  dom.initialProgressPercent.textContent = "--";
+  dom.initialProgressSummary.textContent = "Sin corrida activa.";
+  dom.initialLlmCalls.textContent = "--";
+  dom.initialLlmCallsDetail.textContent = "Total de llamadas a LM Studio.";
+  dom.initialWallClock.textContent = "--";
+  dom.initialSequentialWallClock.textContent = "--";
+  dom.initialLlmTime.textContent = "--";
+  dom.initialEmbeddingTime.textContent = "--";
+  dom.initialFinalIndividuals.textContent = "--";
+  dom.initialNonDominated.textContent = "--";
+  dom.initialHypervolume.textContent = "--";
+  dom.initialSpread.textContent = "--";
+  dom.initialCallsPerIndividual.textContent = "--";
+  dom.initialRunId.textContent = "--";
+  dom.initialPopulationConnectionText.textContent = "Sin ejecucion";
+  dom.initialPopulationConnectionDot.classList.remove("is-busy", "is-error");
+  dom.initialResultsBody.innerHTML = '<tr><td colspan="11">Sin resultados todavia.</td></tr>';
+  dom.initialLogOutput.textContent = "Sin logs todavia.";
+  renderInitialProgress(null);
+  renderInitialSemanticArtifacts(null);
+  renderDefinitionList(dom.initialArtifactDetails, [
+    ["Estado", "Sin corrida"],
+    ["Salida", "--"],
+    ["Error", "--"],
+  ]);
+  setInitialPopulationRunning(false);
+  setStatus(
+    dom.initialStatusTone,
+    dom.initialStatusTitle,
+    dom.initialStatusDetail,
+    "Listo",
+    "Ejecuta la estrategia hibrida v6 desde Python usando LM Studio local.",
+  );
+}
+
+async function runInitialPopulation() {
+  let config;
+  try {
+    config = readInitialPopulationConfig();
+  } catch (error) {
+    setStatus(dom.initialStatusTone, dom.initialStatusTitle, dom.initialStatusDetail, "Configuracion incompleta", error.message, "error");
+    return;
+  }
+
+  stopInitialPopulationPolling();
+  setInitialPopulationRunning(true);
+  dom.initialResultsBody.innerHTML = '<tr><td colspan="11">Esperando resultados.</td></tr>';
+  dom.initialLogOutput.textContent = "Iniciando corrida...";
+  dom.initialPopulationConnectionDot.classList.add("is-busy");
+  dom.initialPopulationConnectionDot.classList.remove("is-error");
+  dom.initialPopulationConnectionText.textContent = "Ejecutando";
+  setStatus(
+    dom.initialStatusTone,
+    dom.initialStatusTitle,
+    dom.initialStatusDetail,
+    "Iniciando estrategia",
+    "El backend ejecutara el runner Python y la web consultara el progreso.",
+    "busy",
+  );
+
+  try {
+    const run = await requestInitialPopulationJson("/runs", {
+      method: "POST",
+      body: JSON.stringify(config),
+    });
+    currentInitialPopulationRunId = run.runId;
+    setInitialPopulationRunning(true, Boolean(run.cancelRequested));
+    renderInitialPopulationRun(run);
+    initialPopulationPollTimer = window.setInterval(() => refreshInitialPopulationRun(currentInitialPopulationRunId), 2000);
+    await refreshInitialPopulationRun(currentInitialPopulationRunId);
+  } catch (error) {
+    currentInitialPopulationRunId = null;
+    dom.initialPopulationConnectionDot.classList.add("is-error");
+    dom.initialPopulationConnectionText.textContent = "Error";
+    setInitialPopulationRunning(false);
+    setStatus(dom.initialStatusTone, dom.initialStatusTitle, dom.initialStatusDetail, "Error al iniciar", error.message, "error");
+  }
+}
+
+async function refreshInitialPopulationRun(runId) {
+  if (!runId) {
+    return;
+  }
+
+  try {
+    const run = await requestInitialPopulationJson(`/runs/${encodeURIComponent(runId)}`);
+    renderInitialPopulationRun(run);
+    if (INITIAL_POPULATION_TERMINAL_STATUSES.has(run.status)) {
+      stopInitialPopulationPolling();
+      currentInitialPopulationRunId = run.runId;
+      setInitialPopulationRunning(false);
+    } else {
+      currentInitialPopulationRunId = run.runId;
+      setInitialPopulationRunning(true, Boolean(run.cancelRequested));
+    }
+  } catch (error) {
+    stopInitialPopulationPolling();
+    setInitialPopulationRunning(false);
+    dom.initialPopulationConnectionDot.classList.add("is-error");
+    setStatus(dom.initialStatusTone, dom.initialStatusTitle, dom.initialStatusDetail, "Error al consultar corrida", error.message, "error");
+  }
+}
+
+async function cancelInitialPopulationRun() {
+  if (!currentInitialPopulationRunId) {
+    return;
+  }
+  dom.cancelInitialPopulationButton.disabled = true;
+  dom.cancelInitialPopulationButton.textContent = "Cancelando...";
+  setStatus(dom.initialStatusTone, dom.initialStatusTitle, dom.initialStatusDetail, "Cancelando", "Se solicitara terminar el subproceso activo.", "busy");
+  try {
+    const run = await requestInitialPopulationJson(`/runs/${encodeURIComponent(currentInitialPopulationRunId)}/cancel`, {
+      method: "POST",
+      body: "{}",
+    });
+    renderInitialPopulationRun(run);
+    setInitialPopulationRunning(!INITIAL_POPULATION_TERMINAL_STATUSES.has(run.status), Boolean(run.cancelRequested));
+  } catch (error) {
+    setInitialPopulationRunning(true, false);
+    setStatus(dom.initialStatusTone, dom.initialStatusTitle, dom.initialStatusDetail, "No se pudo cancelar", error.message, "error");
+  }
+}
+
+function renderInitialProgress(progress) {
+  if (!progress) {
+    dom.initialProgressPercent.textContent = "--";
+    dom.initialProgressSummary.textContent = "Sin corrida activa.";
+    dom.initialProgressDetail.textContent = "Sin ejecucion.";
+    dom.initialProgressBar.style.width = "0%";
+    renderDefinitionList(dom.initialProgressDetails, [
+      ["Etapa", "--"],
+      ["Tiempo transcurrido", "--"],
+      ["Tiempo restante", "--"],
+      ["Avance etapa", "--"],
+    ]);
+    return;
+  }
+
+  const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  dom.initialProgressPercent.textContent = `${percent}%`;
+  dom.initialProgressSummary.textContent = progress.detail || "Ejecutando.";
+  dom.initialProgressDetail.textContent = progress.detail || "Ejecutando.";
+  dom.initialProgressBar.style.width = `${percent}%`;
+  const stageCounter = progress.stageIndex && progress.stageTotal
+    ? `${progress.stageIndex}/${progress.stageTotal}`
+    : "--";
+  const itemCounter = progress.total
+    ? `${progress.completed ?? 0}/${progress.total}`
+    : "--";
+  renderDefinitionList(dom.initialProgressDetails, [
+    ["Etapa", `${progress.stage || "--"} ${stageCounter}`],
+    ["Tiempo transcurrido", progress.elapsedLabel || "--"],
+    ["Tiempo restante estimado", progress.remainingLabel || "No disponible"],
+    ["Avance etapa", itemCounter],
+  ]);
+}
+
+function renderInitialCost(cost) {
+  if (!cost) {
+    dom.initialLlmCalls.textContent = "--";
+    dom.initialLlmCallsDetail.textContent = "Total de llamadas a LM Studio.";
+    dom.initialWallClock.textContent = "--";
+    dom.initialSequentialWallClock.textContent = "--";
+    dom.initialLlmTime.textContent = "--";
+    dom.initialEmbeddingTime.textContent = "--";
+    dom.initialCallsPerIndividual.textContent = "--";
+    return;
+  }
+
+  dom.initialLlmCalls.textContent = String(cost.llmCalls ?? 0);
+  dom.initialLlmCallsDetail.textContent = `${cost.llmSuccessfulCalls ?? 0} ok, ${cost.llmFailedCalls ?? 0} fallida(s), ${cost.totalTokens ?? 0} tokens reportados.`;
+  dom.initialWallClock.textContent = cost.wallClockLabel || cost.processWallClockLabel || "--";
+  dom.initialSequentialWallClock.textContent = cost.estimatedSequentialWallClockLabel || "--";
+  dom.initialLlmTime.textContent = cost.llmClientWallClockLabel || "--";
+  dom.initialEmbeddingTime.textContent = cost.embeddingWallClockLabel || "--";
+  dom.initialCallsPerIndividual.textContent = Number.isFinite(Number(cost.llmCallsPerFinalIndividual))
+    ? formatNumber(Number(cost.llmCallsPerFinalIndividual), 2)
+    : "--";
+}
+
+function renderInitialPopulationRun(run) {
+  const status = initialPopulationStatusLabel(run.status);
+  const rows = run.rows || [];
+  const metrics = run.metrics || {};
+
+  dom.initialRunStatus.textContent = status;
+  dom.initialRunId.textContent = run.runId || "--";
+  dom.initialPopulationConnectionText.textContent = status;
+  dom.initialPopulationConnectionDot.classList.toggle("is-busy", run.status === "queued" || run.status === "running");
+  dom.initialPopulationConnectionDot.classList.toggle("is-error", run.status === "failed");
+  dom.initialFinalIndividuals.textContent = String(metrics.completedRows ?? rows.length ?? 0);
+  dom.initialNonDominated.textContent = metrics.completedRows ? `${metrics.nonDominatedRows ?? 0}/${metrics.completedRows}` : "--";
+  dom.initialHypervolume.textContent = metrics.hypervolumeLabel || "No aplica";
+  dom.initialSpread.textContent = metrics.spreadLabel || "No aplica";
+
+  renderInitialProgress(run.progress || null);
+  renderInitialCost(run.cost || null);
+  renderInitialSemanticArtifacts(run.semanticArtifacts || null);
+  renderInitialRows(rows);
+  renderInitialLogs(run.logs || []);
+  renderInitialArtifacts(run);
+
+  const detail = run.error
+    ? initialPopulationErrorLabel(run.error)
+    : run.cancelRequested
+      ? "Cancelacion solicitada; esperando cierre del subproceso."
+      : run.progress?.detail || `${rows.length} individuo(s) visibles.`;
+  setStatus(
+    dom.initialStatusTone,
+    dom.initialStatusTitle,
+    dom.initialStatusDetail,
+    `Estrategia ${status}`,
+    detail,
+    run.status === "running" || run.status === "queued" ? "busy" : run.status === "failed" ? "error" : "ready",
+  );
+}
+
+function renderInitialSemanticArtifacts(artifacts) {
+  const anchors = artifacts?.anchors || {};
+  const pools = artifacts?.pools?.components || {};
+  renderInitialAnchors(anchors);
+  renderInitialPools(pools);
+}
+
+function renderInitialAnchors(anchors) {
+  const entries = Object.entries(anchors || {}).filter(([, values]) => Array.isArray(values) && values.length);
+  if (!entries.length) {
+    dom.initialAnchorsContent.textContent = "Sin anclas todavia.";
+    return;
+  }
+
+  dom.initialAnchorsContent.replaceChildren(
+    ...entries.map(([name, values]) => {
+      const group = document.createElement("div");
+      group.className = "semantic-artifact-group";
+      const title = document.createElement("h3");
+      title.textContent = `${semanticArtifactLabel(name)} (${values.length})`;
+      const list = document.createElement("div");
+      list.className = "chip-list";
+      values.forEach((value) => {
+        const chip = document.createElement("span");
+        chip.className = "semantic-chip";
+        chip.textContent = value;
+        list.append(chip);
+      });
+      group.append(title, list);
+      return group;
+    }),
+  );
+}
+
+function renderInitialPools(pools) {
+  const entries = ["roles", "topics", "actions"]
+    .map((name) => [name, pools?.[name]])
+    .filter(([, pool]) => pool && Array.isArray(pool.items) && pool.items.length);
+
+  if (!entries.length) {
+    dom.initialPoolsContent.textContent = "Sin pools todavia.";
+    return;
+  }
+
+  dom.initialPoolsContent.replaceChildren(
+    ...entries.map(([name, pool]) => {
+      const group = document.createElement("div");
+      group.className = "semantic-artifact-group";
+      const title = document.createElement("h3");
+      title.textContent = `${semanticArtifactLabel(name)} (${pool.items.length})`;
+      const meta = document.createElement("p");
+      meta.className = "artifact-meta";
+      meta.textContent = `Solicitados: ${pool.requested ?? "--"}; descartados: ${pool.discarded ?? "--"}.`;
+      const list = document.createElement("div");
+      list.className = "chip-list";
+      pool.items.forEach((value) => {
+        const chip = document.createElement("span");
+        chip.className = "semantic-chip";
+        chip.textContent = value;
+        list.append(chip);
+      });
+      group.append(title, meta, list);
+      return group;
+    }),
+  );
+}
+
+function semanticArtifactLabel(name) {
+  const labels = {
+    entities: "Entidades",
+    topics: "Topicos",
+    actions: "Acciones",
+    constraints: "Restricciones",
+    roles: "Roles",
+  };
+  return labels[name] || name;
+}
+
+function initialPopulationErrorLabel(error) {
+  if (!error) {
+    return "--";
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  const stage = error.stage ? `${error.stage}: ` : "";
+  const details = error.details && typeof error.details === "object" ? error.details : {};
+  const count = details.completed !== undefined && details.total !== undefined
+    ? ` Completado: ${details.completed}/${details.total}.`
+    : "";
+  const generated = details.generatedTexts !== undefined
+    ? ` Textos generados persistidos: ${details.generatedTexts}.`
+    : "";
+  const suggestion = details.suggestion ? ` ${details.suggestion}` : "";
+  return `${stage}${error.message || JSON.stringify(error)}${count}${generated}${suggestion}`;
+}
+
+function renderInitialRows(rows) {
+  if (!rows.length) {
+    dom.initialResultsBody.innerHTML = '<tr><td colspan="11">Sin resultados todavia.</td></tr>';
+    return;
+  }
+
+  const orderedRows = [...rows].sort((left, right) => {
+    const leftNonDominated = left.nonDominated ? 0 : 1;
+    const rightNonDominated = right.nonDominated ? 0 : 1;
+    if (leftNonDominated !== rightNonDominated) {
+      return leftNonDominated - rightNonDominated;
+    }
+    return Number(left.rank ?? left.selectionRank ?? Number.MAX_SAFE_INTEGER)
+      - Number(right.rank ?? right.selectionRank ?? Number.MAX_SAFE_INTEGER);
+  });
+
+  dom.initialResultsBody.replaceChildren(
+    ...orderedRows.map((row) => {
+      const tr = document.createElement("tr");
+      const isEvaluated = Array.isArray(row.objectiveVector) && row.objectiveVector.length > 1 && row.status === "ok";
+      if (isEvaluated && !row.nonDominated) {
+        tr.classList.add("is-dominated-row");
+      }
+      if (row.nonDominated) {
+        tr.classList.add("is-nondominated-row");
+      }
+      const dominanceCell = row.nonDominated
+        ? '<span class="valid">si</span>'
+        : isEvaluated
+          ? '<span class="invalid">no</span>'
+          : "--";
+      tr.innerHTML = `
+        <td>${escapeHtml(String(row.rank ?? "--"))}</td>
+        <td class="context-cell">${escapeHtml(row.role || "--")}</td>
+        <td class="context-cell">${escapeHtml(row.topic || "--")}</td>
+        <td class="context-cell">${escapeHtml(row.action || "--")}</td>
+        <td class="context-cell long-cell"><div class="scroll-cell">${escapeHtml(row.prompt || "--")}</div></td>
+        <td class="context-cell long-cell"><div class="scroll-cell">${escapeHtml(row.generatedText || "--")}</div></td>
+        <td>${escapeHtml(formatOptionalNumber(row.fidelity, 6))}</td>
+        <td>${escapeHtml(formatOptionalNumber(row.diversity, 6))}</td>
+        <td>${escapeHtml(row.objectiveLabel || "--")}</td>
+        <td>${dominanceCell}</td>
+        <td><span class="${row.status === "ok" ? "valid" : "invalid"}">${escapeHtml(row.status || "--")}</span></td>
+      `;
+      return tr;
+    }),
+  );
+}
+
+function renderInitialLogs(logs) {
+  if (!logs.length) {
+    dom.initialLogOutput.textContent = "Sin logs todavia.";
+    return;
+  }
+  dom.initialLogOutput.textContent = logs
+    .slice(-60)
+    .map((entry) => `[${entry.source || "runner"}] ${entry.message}`)
+    .join("\n");
+}
+
+function renderInitialArtifacts(run) {
+  const error = initialPopulationErrorLabel(run.error);
+  const outputDir = run.strategy?.outputDir || run.runDir || "--";
+  const cost = run.cost || {};
+  renderDefinitionList(dom.initialArtifactDetails, [
+    ["Estado", initialPopulationStatusLabel(run.status)],
+    ["Salida", outputDir],
+    ["Error", error === "--" ? "No aplica" : error],
+    ["Llamadas / texto generado", Number.isFinite(Number(cost.llmCallsPerGeneratedText)) ? formatNumber(Number(cost.llmCallsPerGeneratedText), 2) : "--"],
+    ["Wall-clock sin paralelismo", cost.estimatedSequentialWallClockLabel || "--"],
+    ["Ahorro por paralelismo", cost.parallelismSavingsLabel || "--"],
+    ["Embeddings", `${cost.embeddingBatches ?? 0} batch(es), ${cost.embeddingTexts ?? 0} texto(s)`],
+    ["Tokens", `${cost.promptTokens ?? 0} prompt, ${cost.completionTokens ?? 0} completion`],
+  ]);
+}
+
 function comparatorStatusLabel(status) {
   const labels = {
     queued: "en cola",
@@ -2666,6 +3298,10 @@ dom.solutionReferencePreset.addEventListener("change", applySolutionReferencePre
 dom.solutionCount.addEventListener("change", previewSolutions);
 dom.solutionPromptTemplate.addEventListener("input", previewSolutions);
 dom.solutionReferenceText.addEventListener("input", previewSolutions);
+dom.loadInitialModelsButton.addEventListener("click", loadInitialPopulationModels);
+dom.runInitialPopulationButton.addEventListener("click", runInitialPopulation);
+dom.cancelInitialPopulationButton.addEventListener("click", cancelInitialPopulationRun);
+dom.clearInitialPopulationButton.addEventListener("click", resetInitialPopulationUi);
 dom.runComparatorButton.addEventListener("click", runComparator);
 dom.cancelComparatorButton.addEventListener("click", cancelComparatorRun);
 dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
@@ -2728,6 +3364,8 @@ renderEmbeddingModelDetails();
 populateSolutionReferencePresets();
 applySolutionReferencePreset();
 resetSolutionMetrics();
+resetInitialPopulationUi();
+loadInitialPopulationStrategies();
 resetComparatorUi();
 loadComparatorProposals();
 dom.renderedPromptPreview.textContent = renderPrompt();

@@ -14,6 +14,7 @@ import urllib.request
 from pathlib import Path
 
 from baselines.comparator import ComparatorService
+from initial_population.service import InitialPopulationService
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -21,6 +22,7 @@ DEFAULT_PORT = 4173
 DEFAULT_LM_STUDIO = "http://127.0.0.1:1234"
 PROXY_PREFIX = "/lmstudio"
 COMPARATOR_PREFIX = "/api/comparator"
+INITIAL_POPULATION_PREFIX = "/api/initial-population"
 
 
 def release_existing_server_port(host: str, port: int) -> None:
@@ -37,14 +39,21 @@ def release_existing_server_port(host: str, port: int) -> None:
             f"Port {port} is already in use by a different process: PID {process_id}, {command_line}"
         )
 
+    target_process_id = process_id
+    parent_process_id = windows_process_parent_id(process_id)
+    if parent_process_id and parent_process_id != os.getpid():
+        parent_command_line = windows_process_command_line(parent_process_id).lower()
+        if "server.py" in parent_command_line and ("py.exe" in parent_command_line or "\\py " in parent_command_line):
+            target_process_id = parent_process_id
+
     subprocess.run(
-        ["taskkill", "/PID", str(process_id), "/F"],
+        ["taskkill", "/PID", str(target_process_id), "/T", "/F"],
         capture_output=True,
         text=True,
         timeout=15,
-        check=True,
+        check=False,
     )
-    time.sleep(1)
+    wait_for_port_release(host, port)
 
 
 def find_windows_listener_pid(host: str, port: int) -> int | None:
@@ -85,12 +94,45 @@ def windows_process_command_line(process_id: int) -> str:
     return result.stdout.strip()
 
 
+def windows_process_parent_id(process_id: int) -> int | None:
+    script = f"(Get-CimInstance Win32_Process -Filter \"ProcessId = {process_id}\").ParentProcessId"
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def wait_for_port_release(host: str, port: int) -> None:
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        if find_windows_listener_pid(host, port) is None:
+            return
+        time.sleep(0.2)
+    process_id = find_windows_listener_pid(host, port)
+    raise RuntimeError(f"Port {port} is still in use after terminating previous server process {process_id}.")
+
+
+def first_query_value(query: dict[str, list[str]], key: str) -> str | None:
+    values = query.get(key)
+    if not values:
+        return None
+    return values[0]
+
+
 class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
     lm_studio_base = DEFAULT_LM_STUDIO
     comparator_service: ComparatorService
+    initial_population_service: InitialPopulationService
 
     def do_OPTIONS(self) -> None:
-        if self.path.startswith(PROXY_PREFIX) or self.path.startswith(COMPARATOR_PREFIX):
+        if self.path.startswith(PROXY_PREFIX) or self.path.startswith(COMPARATOR_PREFIX) or self.path.startswith(INITIAL_POPULATION_PREFIX):
             self.send_response(204)
             self.send_cors_headers()
             self.end_headers()
@@ -98,6 +140,9 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         super().do_OPTIONS()
 
     def do_GET(self) -> None:
+        if self.path.startswith(INITIAL_POPULATION_PREFIX):
+            self.handle_initial_population_get()
+            return
         if self.path.startswith(COMPARATOR_PREFIX):
             self.handle_comparator_get()
             return
@@ -107,6 +152,9 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self) -> None:
+        if self.path.startswith(INITIAL_POPULATION_PREFIX):
+            self.handle_initial_population_post()
+            return
         if self.path.startswith(COMPARATOR_PREFIX):
             self.handle_comparator_post()
             return
@@ -116,7 +164,8 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         self.send_error(404, "Not found")
 
     def end_headers(self) -> None:
-        if self.path.startswith(PROXY_PREFIX) or self.path.startswith(COMPARATOR_PREFIX):
+        self.send_header("Cache-Control", "no-store")
+        if self.path.startswith(PROXY_PREFIX) or self.path.startswith(COMPARATOR_PREFIX) or self.path.startswith(INITIAL_POPULATION_PREFIX):
             self.send_cors_headers()
         super().end_headers()
 
@@ -214,9 +263,72 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as error:
             self.send_json(500, {"error": str(error)})
 
+    def handle_initial_population_get(self) -> None:
+        path_parts = self.initial_population_path_parts()
+        parsed = urllib.parse.urlsplit(self.path)
+        query = urllib.parse.parse_qs(parsed.query)
+
+        try:
+            if path_parts == ["strategies"]:
+                self.send_json(200, {
+                    "strategies": self.initial_population_service.list_strategies(),
+                    "defaults": self.initial_population_service.default_config(),
+                })
+                return
+
+            if path_parts == ["lm-studio", "models"]:
+                base_url = first_query_value(query, "baseUrl")
+                api_mode = first_query_value(query, "apiMode")
+                self.send_json(200, self.initial_population_service.list_lm_studio_models(base_url, api_mode))
+                return
+
+            if len(path_parts) == 2 and path_parts[0] == "runs":
+                run = self.initial_population_service.get_run(path_parts[1])
+                if not run:
+                    self.send_json(404, {"error": "Run not found."})
+                    return
+                self.send_json(200, run)
+                return
+
+            self.send_json(404, {"error": "Not found."})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+        except Exception as error:
+            self.send_json(500, {"error": str(error)})
+
+    def handle_initial_population_post(self) -> None:
+        path_parts = self.initial_population_path_parts()
+
+        try:
+            if path_parts == ["runs"]:
+                run = self.initial_population_service.start_run(self.read_json_body())
+                self.send_json(202, run)
+                return
+
+            if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "cancel":
+                run = self.initial_population_service.cancel_run(path_parts[1])
+                if not run:
+                    self.send_json(404, {"error": "Run not found."})
+                    return
+                self.send_json(200, run)
+                return
+
+            self.send_json(404, {"error": "Not found."})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+        except Exception as error:
+            self.send_json(500, {"error": str(error)})
+
     def comparator_path_parts(self) -> list[str]:
         parsed = urllib.parse.urlsplit(self.path)
         api_path = parsed.path.removeprefix(COMPARATOR_PREFIX).strip("/")
+        if not api_path:
+            return []
+        return [urllib.parse.unquote(part) for part in api_path.split("/") if part]
+
+    def initial_population_path_parts(self) -> list[str]:
+        parsed = urllib.parse.urlsplit(self.path)
+        api_path = parsed.path.removeprefix(INITIAL_POPULATION_PREFIX).strip("/")
         if not api_path:
             return []
         return [urllib.parse.unquote(part) for part in api_path.split("/") if part]
@@ -257,6 +369,7 @@ def main() -> None:
     )
     ToolPortalHandler.lm_studio_base = args.lm_studio.rstrip("/")
     ToolPortalHandler.comparator_service = ComparatorService(root)
+    ToolPortalHandler.initial_population_service = InitialPopulationService(root)
 
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     release_existing_server_port(args.host, args.port)
@@ -264,6 +377,7 @@ def main() -> None:
         print(f"Serving portal at http://{args.host}:{args.port}/LLM/")
         print(f"Proxying {PROXY_PREFIX}/* to {ToolPortalHandler.lm_studio_base}/*")
         print(f"Serving comparator API at http://{args.host}:{args.port}{COMPARATOR_PREFIX}/")
+        print(f"Serving initial population API at http://{args.host}:{args.port}{INITIAL_POPULATION_PREFIX}/")
         httpd.serve_forever()
 
 

@@ -279,6 +279,10 @@ label span,
   text-transform: none;
 }
 
+.separated-title {
+  margin-top: 22px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -512,8 +516,72 @@ label span {
   line-height: 1.45;
 }
 
+.collapsible-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.artifact-disclosure {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+}
+
+.artifact-disclosure summary {
+  cursor: pointer;
+  font-weight: 800;
+  padding: 12px 14px;
+}
+
+.semantic-artifact-content {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  padding: 14px;
+}
+
+.semantic-artifact-group {
+  display: grid;
+  gap: 8px;
+}
+
+.semantic-artifact-group h3 {
+  color: var(--text);
+  font-size: 0.92rem;
+  margin: 0;
+}
+
+.artifact-meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin: 0;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.semantic-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.25;
+  padding: 6px 9px;
+}
+
 .table-wrap {
   overflow-x: auto;
+}
+
+.initial-results-scroll {
+  height: min(704px, 70vh);
+  overflow-x: auto;
+  overflow-y: auto;
 }
 
 table {
@@ -559,6 +627,51 @@ td {
 
 .comparator-results-table {
   min-width: 1600px;
+}
+
+.wide-table.initial-results-table {
+  min-width: 1900px;
+}
+
+.initial-results-table tbody tr {
+  min-height: 104px;
+}
+
+.initial-results-table tbody td {
+  min-height: 104px;
+}
+
+.initial-results-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.initial-results-table .scroll-cell {
+  max-height: none;
+  overflow: visible;
+  white-space: pre-wrap;
+}
+
+.initial-results-table tr.is-dominated-row td {
+  background: #fff4d6;
+}
+
+.initial-results-table tr.is-dominated-row td:first-child {
+  border-left: 4px solid #d97706;
+}
+
+.initial-results-table tr.is-nondominated-row td:first-child {
+  border-left: 4px solid var(--accent);
+}
+
+#initialPopulationStrategy .code-textarea {
+  min-height: 180px;
+}
+
+#initialPromptTemplate {
+  min-height: 130px;
 }
 
 .proposal-card-grid {
