@@ -416,10 +416,32 @@ class InitialPopulationService:
             raise ValueError(f"Could not query LM Studio models: {error}") from error
 
         models: list[str] = []
+        native_models = payload.get("models") if isinstance(payload, dict) else None
+        if isinstance(native_models, list):
+            for item in native_models:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("type") or "").lower() == "embedding":
+                    continue
+                loaded_instances = item.get("loaded_instances")
+                if isinstance(loaded_instances, list) and loaded_instances:
+                    for instance in loaded_instances:
+                        if isinstance(instance, dict) and instance.get("id"):
+                            models.append(str(instance["id"]))
+                    continue
+                if item.get("loaded") is True and item.get("key"):
+                    models.append(str(item["key"]))
+
         data = payload.get("data") if isinstance(payload, dict) else None
         if isinstance(data, list):
             for item in data:
                 if isinstance(item, dict) and item.get("id"):
+                    item_type = str(item.get("type") or "").lower()
+                    if item_type in {"embedding", "embeddings"}:
+                        continue
+                    state = item.get("state")
+                    if state is not None and state != "loaded":
+                        continue
                     models.append(str(item["id"]))
                 elif isinstance(item, str):
                     models.append(item)

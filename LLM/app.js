@@ -265,6 +265,7 @@ let currentInitialPopulationRunId = null;
 let initialComparisonPollTimer = null;
 let currentInitialComparisonRunId = null;
 let referenceTextLibrary = [];
+let lmStudioModelOptions = [];
 
 const dom = {
   navItems: document.querySelectorAll(".nav-item"),
@@ -455,6 +456,7 @@ const dom = {
   initialComparisonTempGeneration: document.querySelector("#initialComparisonTempGeneration"),
   initialComparisonLmApiMode: document.querySelector("#initialComparisonLmApiMode"),
   initialComparisonLmStudioBase: document.querySelector("#initialComparisonLmStudioBase"),
+  loadInitialComparisonModelsButton: document.querySelector("#loadInitialComparisonModelsButton"),
   initialComparisonGenerationParallelism: document.querySelector("#initialComparisonGenerationParallelism"),
   initialComparisonHybridTimeout: document.querySelector("#initialComparisonHybridTimeout"),
   initialComparisonDomain: document.querySelector("#initialComparisonDomain"),
@@ -2083,31 +2085,83 @@ async function loadInitialPopulationStrategies() {
   }
 }
 
-async function loadInitialPopulationModels() {
-  const params = new URLSearchParams({
-    baseUrl: dom.initialLmStudioBase.value.trim(),
-    apiMode: dom.initialLmApiMode.value,
+function lmStudioModelSelects() {
+  return Array.from(document.querySelectorAll("[data-lm-studio-model-select]"));
+}
+
+function updateLmStudioModelSelectOptions(models) {
+  lmStudioModelOptions = [...new Set((models || []).map((model) => String(model).trim()).filter(Boolean))].sort();
+  lmStudioModelSelects().forEach((select) => {
+    const current = select.value;
+    if (!lmStudioModelOptions.length) {
+      if (current) {
+        select.replaceChildren(new Option(current, current));
+      }
+      return;
+    }
+    select.replaceChildren(...lmStudioModelOptions.map((model) => new Option(model, model)));
+    select.value = lmStudioModelOptions.includes(current) ? current : lmStudioModelOptions[0];
   });
-  dom.loadInitialModelsButton.disabled = true;
+}
+
+async function loadLmStudioModelsForInitialConfig({ baseUrl, apiMode, button, statusElements }) {
+  const params = new URLSearchParams({ baseUrl, apiMode });
+  if (button) button.disabled = true;
   try {
     const payload = await requestInitialPopulationJson(`/lm-studio/models?${params.toString()}`);
+    const models = payload.models || [];
     dom.initialPopulationLmModels.replaceChildren(
-      ...(payload.models || []).map((model) => {
+      ...models.map((model) => {
         const option = document.createElement("option");
         option.value = model;
         return option;
       }),
     );
-    dom.initialPopulationConnectionText.textContent = `${(payload.models || []).length} modelo(s)`;
-    dom.initialPopulationConnectionDot.classList.remove("is-error", "is-busy");
-    setStatus(dom.initialStatusTone, dom.initialStatusTitle, dom.initialStatusDetail, "Modelos cargados", `${(payload.models || []).length} modelo(s) disponibles desde LM Studio.`);
+    updateLmStudioModelSelectOptions(models);
+    if (statusElements) {
+      statusElements.connectionText.textContent = `${models.length} modelo(s)`;
+      statusElements.connectionDot.classList.remove("is-error", "is-busy");
+      setStatus(statusElements.tone, statusElements.title, statusElements.detail, "Modelos cargados", `${models.length} modelo(s) disponibles desde LM Studio.`);
+    }
   } catch (error) {
-    dom.initialPopulationConnectionText.textContent = "Error modelos";
-    dom.initialPopulationConnectionDot.classList.add("is-error");
-    setStatus(dom.initialStatusTone, dom.initialStatusTitle, dom.initialStatusDetail, "No se pudieron cargar modelos", error.message, "error");
+    if (statusElements) {
+      statusElements.connectionText.textContent = "Error modelos";
+      statusElements.connectionDot.classList.add("is-error");
+      setStatus(statusElements.tone, statusElements.title, statusElements.detail, "No se pudieron cargar modelos", error.message, "error");
+    }
   } finally {
-    dom.loadInitialModelsButton.disabled = false;
+    if (button) button.disabled = false;
   }
+}
+
+async function loadInitialPopulationModels() {
+  await loadLmStudioModelsForInitialConfig({
+    baseUrl: dom.initialLmStudioBase.value.trim(),
+    apiMode: dom.initialLmApiMode.value,
+    button: dom.loadInitialModelsButton,
+    statusElements: {
+      connectionText: dom.initialPopulationConnectionText,
+      connectionDot: dom.initialPopulationConnectionDot,
+      tone: dom.initialStatusTone,
+      title: dom.initialStatusTitle,
+      detail: dom.initialStatusDetail,
+    },
+  });
+}
+
+async function loadInitialComparisonModels() {
+  await loadLmStudioModelsForInitialConfig({
+    baseUrl: dom.initialComparisonLmStudioBase.value.trim(),
+    apiMode: dom.initialComparisonLmApiMode.value,
+    button: dom.loadInitialComparisonModelsButton,
+    statusElements: {
+      connectionText: dom.initialComparisonConnectionText,
+      connectionDot: dom.initialComparisonConnectionDot,
+      tone: dom.initialComparisonStatusTone,
+      title: dom.initialComparisonStatusTitle,
+      detail: dom.initialComparisonStatusDetail,
+    },
+  });
 }
 
 function setInitialPopulationRunning(isRunning, cancelRequested = false) {
@@ -2115,6 +2169,7 @@ function setInitialPopulationRunning(isRunning, cancelRequested = false) {
   dom.cancelInitialPopulationButton.disabled = !isRunning || !currentInitialPopulationRunId || cancelRequested;
   dom.cancelInitialPopulationButton.textContent = cancelRequested ? "Cancelando..." : "Cancelar";
   dom.clearInitialPopulationButton.disabled = isRunning;
+  dom.loadInitialModelsButton.disabled = isRunning;
   [
     dom.initialLmApiMode,
     dom.initialLmStudioBase,
@@ -2584,7 +2639,9 @@ function buildInitialComparisonStageEditors() {
         <div class="form-grid">
           <label>
             <span>Modelo</span>
-            <input data-comparison-stage-field="model" list="initialPopulationLmModels" type="text" value="${escapeHtml(stage.model || "")}">
+            <select data-comparison-stage-field="model" data-lm-studio-model-select>
+              <option value="${escapeHtml(stage.model || "")}">${escapeHtml(stage.model || "")}</option>
+            </select>
           </label>
           <label>
             <span>Temperatura</span>
@@ -2615,6 +2672,7 @@ function buildInitialComparisonStageEditors() {
       return article;
     }),
   );
+  updateLmStudioModelSelectOptions(lmStudioModelOptions);
 }
 
 function readInitialComparisonStageConfigs() {
@@ -2750,6 +2808,7 @@ function setInitialComparisonRunning(isRunning, cancelRequested = false) {
   dom.cancelInitialComparisonButton.disabled = !isRunning || !currentInitialComparisonRunId || cancelRequested;
   dom.cancelInitialComparisonButton.textContent = cancelRequested ? "Cancelando..." : "Cancelar";
   dom.clearInitialComparisonButton.disabled = isRunning;
+  dom.loadInitialComparisonModelsButton.disabled = isRunning;
   dom.saveInitialComparisonReferenceButton.disabled = isRunning;
   document.querySelectorAll("#initialPopulationComparison input, #initialPopulationComparison select, #initialPopulationComparison textarea").forEach((field) => {
     field.disabled = isRunning;
@@ -2969,31 +3028,95 @@ function renderInitialComparisonRun(run) {
   );
 }
 
+function finiteMetricValue(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function initialComparisonBestScalarIds(strategies, getter, direction = "max") {
+  const values = strategies
+    .filter((strategy) => strategy.status === "completed")
+    .map((strategy) => ({ id: strategy.strategyId, value: finiteMetricValue(getter(strategy)) }))
+    .filter((entry) => entry.id && entry.value !== null);
+  if (!values.length) return new Set();
+  const bestValue = direction === "min"
+    ? Math.min(...values.map((entry) => entry.value))
+    : Math.max(...values.map((entry) => entry.value));
+  return new Set(values
+    .filter((entry) => Math.abs(entry.value - bestValue) <= Number.EPSILON * 100)
+    .map((entry) => entry.id));
+}
+
+function initialComparisonDominatesVector(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length || !left.length) {
+    return false;
+  }
+  const leftValues = left.map(finiteMetricValue);
+  const rightValues = right.map(finiteMetricValue);
+  if (leftValues.some((value) => value === null) || rightValues.some((value) => value === null)) {
+    return false;
+  }
+  return leftValues.every((value, index) => value >= rightValues[index])
+    && leftValues.some((value, index) => value > rightValues[index]);
+}
+
+function initialComparisonBestObjectiveIds(strategies) {
+  const entries = strategies
+    .filter((strategy) => strategy.status === "completed")
+    .map((strategy) => ({ id: strategy.strategyId, vector: strategy.metrics?.bestObjectiveVector }))
+    .filter((entry) => entry.id && Array.isArray(entry.vector) && entry.vector.length);
+  return new Set(entries
+    .filter((entry) => !entries.some((other) => other !== entry && initialComparisonDominatesVector(other.vector, entry.vector)))
+    .map((entry) => entry.id));
+}
+
+function initialComparisonMetricCell(value, isBest) {
+  const escaped = escapeHtml(value);
+  return `<td>${isBest ? `<strong class="metric-best">${escaped}</strong>` : escaped}</td>`;
+}
+
+function initialComparisonMetricWinners(strategies) {
+  return {
+    individuals: initialComparisonBestScalarIds(strategies, (strategy) => strategy.metrics?.completedRows, "max"),
+    nonDominated: initialComparisonBestScalarIds(strategies, (strategy) => strategy.metrics?.nonDominatedRows, "max"),
+    objective: initialComparisonBestObjectiveIds(strategies),
+    hypervolume: initialComparisonBestScalarIds(strategies, (strategy) => strategy.metrics?.hypervolume, "max"),
+    spread: initialComparisonBestScalarIds(strategies, (strategy) => strategy.metrics?.spread, "min"),
+    wallClock: initialComparisonBestScalarIds(strategies, (strategy) => strategy.cost?.processWallClockSeconds ?? strategy.cost?.wallClockSeconds, "min"),
+    sequentialWallClock: initialComparisonBestScalarIds(strategies, (strategy) => strategy.cost?.estimatedSequentialWallClockSeconds, "min"),
+    llmCalls: initialComparisonBestScalarIds(strategies, (strategy) => strategy.cost?.llmCalls, "min"),
+    llmTime: initialComparisonBestScalarIds(strategies, (strategy) => strategy.cost?.llmClientWallClockSeconds, "min"),
+    commonEmbeddings: initialComparisonBestScalarIds(strategies, (strategy) => strategy.commonMetricCost?.embeddingWallClockSeconds, "min"),
+  };
+}
+
 function renderInitialComparisonMetrics(strategies) {
   if (!strategies.length) {
     dom.initialComparisonMetricsBody.innerHTML = '<tr><td colspan="13">Sin resultados todavia.</td></tr>';
     return;
   }
+  const winners = initialComparisonMetricWinners(strategies);
   dom.initialComparisonMetricsBody.replaceChildren(
     ...strategies.map((strategy) => {
       const metrics = strategy.metrics || {};
       const cost = strategy.cost || {};
       const commonCost = strategy.commonMetricCost || {};
+      const strategyId = strategy.strategyId;
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${escapeHtml(strategy.displayName || strategy.strategyId)}</td>
         <td><span class="${comparatorStatusClass(strategy.status)}">${escapeHtml(comparatorStatusLabel(strategy.status))}</span></td>
         <td>${escapeHtml(strategy.runtime || "--")}</td>
-        <td>${escapeHtml(String(metrics.completedRows ?? 0))}/${escapeHtml(String(metrics.totalRows ?? 0))}</td>
-        <td>${escapeHtml(String(metrics.nonDominatedRows ?? 0))}</td>
-        <td>${escapeHtml(metrics.bestObjectiveLabel || "--")}</td>
-        <td>${escapeHtml(metrics.hypervolumeLabel || "No aplica")}</td>
-        <td>${escapeHtml(metrics.spreadLabel || "No aplica")}</td>
-        <td>${escapeHtml(cost.processWallClockLabel || cost.wallClockLabel || "--")}</td>
-        <td>${escapeHtml(cost.estimatedSequentialWallClockLabel || "--")}</td>
-        <td>${escapeHtml(String(cost.llmCalls ?? 0))}</td>
-        <td>${escapeHtml(cost.llmClientWallClockLabel || "--")}</td>
-        <td>${escapeHtml(commonCost.embeddingWallClockLabel || "--")}</td>
+        ${initialComparisonMetricCell(`${metrics.completedRows ?? 0}/${metrics.totalRows ?? 0}`, winners.individuals.has(strategyId))}
+        ${initialComparisonMetricCell(String(metrics.nonDominatedRows ?? 0), winners.nonDominated.has(strategyId))}
+        ${initialComparisonMetricCell(metrics.bestObjectiveLabel || "--", winners.objective.has(strategyId))}
+        ${initialComparisonMetricCell(metrics.hypervolumeLabel || "No aplica", winners.hypervolume.has(strategyId))}
+        ${initialComparisonMetricCell(metrics.spreadLabel || "No aplica", winners.spread.has(strategyId))}
+        ${initialComparisonMetricCell(cost.processWallClockLabel || cost.wallClockLabel || "--", winners.wallClock.has(strategyId))}
+        ${initialComparisonMetricCell(cost.estimatedSequentialWallClockLabel || "--", winners.sequentialWallClock.has(strategyId))}
+        ${initialComparisonMetricCell(String(cost.llmCalls ?? 0), winners.llmCalls.has(strategyId))}
+        ${initialComparisonMetricCell(cost.llmClientWallClockLabel || "--", winners.llmTime.has(strategyId))}
+        ${initialComparisonMetricCell(commonCost.embeddingWallClockLabel || "--", winners.commonEmbeddings.has(strategyId))}
       `;
       return tr;
     }),
@@ -4174,6 +4297,7 @@ dom.loadInitialModelsButton.addEventListener("click", loadInitialPopulationModel
 dom.runInitialPopulationButton.addEventListener("click", runInitialPopulation);
 dom.cancelInitialPopulationButton.addEventListener("click", cancelInitialPopulationRun);
 dom.clearInitialPopulationButton.addEventListener("click", resetInitialPopulationUi);
+dom.loadInitialComparisonModelsButton.addEventListener("click", loadInitialComparisonModels);
 dom.runInitialComparisonButton.addEventListener("click", runInitialComparison);
 dom.cancelInitialComparisonButton.addEventListener("click", cancelInitialComparisonRun);
 dom.clearInitialComparisonButton.addEventListener("click", resetInitialComparisonUi);

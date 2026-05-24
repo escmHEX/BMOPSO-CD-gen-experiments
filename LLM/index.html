@@ -758,7 +758,9 @@ Each line must follow this format:
               <div class="form-grid">
                 <label>
                   <span>Modelo</span>
-                  <input data-stage-field="model" list="initialPopulationLmModels" type="text" value="meta-llama-3.1-8b-instruct">
+                  <select data-stage-field="model" data-lm-studio-model-select>
+                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                  </select>
                 </label>
                 <label>
                   <span>Temperatura</span>
@@ -818,7 +820,9 @@ General domain:
               <div class="form-grid">
                 <label>
                   <span>Modelo</span>
-                  <input data-stage-field="model" list="initialPopulationLmModels" type="text" value="meta-llama-3.1-8b-instruct">
+                  <select data-stage-field="model" data-lm-studio-model-select>
+                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                  </select>
                 </label>
                 <label>
                   <span>Temperatura</span>
@@ -882,7 +886,9 @@ Semantic anchors for support:
               <div class="form-grid">
                 <label>
                   <span>Modelo</span>
-                  <input data-stage-field="model" list="initialPopulationLmModels" type="text" value="meta-llama-3.1-8b-instruct">
+                  <select data-stage-field="model" data-lm-studio-model-select>
+                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                  </select>
                 </label>
                 <label>
                   <span>Temperatura</span>
@@ -946,7 +952,9 @@ Semantic anchors for support:
               <div class="form-grid">
                 <label>
                   <span>Modelo</span>
-                  <input data-stage-field="model" list="initialPopulationLmModels" type="text" value="meta-llama-3.1-8b-instruct">
+                  <select data-stage-field="model" data-lm-studio-model-select>
+                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                  </select>
                 </label>
                 <label>
                   <span>Temperatura</span>
@@ -1010,7 +1018,9 @@ Semantic anchors for support:
               <div class="form-grid">
                 <label>
                   <span>Modelo</span>
-                  <input data-stage-field="model" list="initialPopulationLmModels" type="text" value="meta-llama-3.1-8b-instruct">
+                  <select data-stage-field="model" data-lm-studio-model-select>
+                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                  </select>
                 </label>
                 <label>
                   <span>Temperatura</span>
@@ -1077,7 +1087,9 @@ Semantic anchors for support:
               <div class="form-grid">
                 <label>
                   <span>Modelo</span>
-                  <input data-stage-field="model" list="initialPopulationLmModels" type="text" value="meta-llama-3.1-8b-instruct">
+                  <select data-stage-field="model" data-lm-studio-model-select>
+                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                  </select>
                 </label>
                 <label>
                   <span>Temperatura</span>
@@ -1397,6 +1409,9 @@ Output rules:
                     <span>Base URL LM Studio</span>
                     <input id="initialComparisonLmStudioBase" type="text" value="http://127.0.0.1:1234" autocomplete="off">
                   </label>
+                  <div class="span-2 inline-actions">
+                    <button id="loadInitialComparisonModelsButton" class="secondary" type="button">Cargar modelos LM Studio</button>
+                  </div>
                   <label>
                     <span>Paralelismo generacion</span>
                     <input id="initialComparisonGenerationParallelism" type="number" min="1" max="16" value="1">

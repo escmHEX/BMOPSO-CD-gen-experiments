@@ -826,6 +826,11 @@ td {
   font-weight: 800;
 }
 
+.metric-best {
+  color: var(--text);
+  font-weight: 800;
+}
+
 .in-progress {
   color: var(--blue);
   font-weight: 800;
