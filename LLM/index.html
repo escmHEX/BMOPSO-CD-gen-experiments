@@ -17,6 +17,8 @@
         <nav class="tool-nav" aria-label="Herramientas disponibles">
           <button class="nav-item is-active" type="button" data-tool="templateChecker">Evaluador de plantillas</button>
           <button class="nav-item" type="button" data-tool="solutionEvaluator">Probar evaluación de soluciones</button>
+          <button class="nav-item" type="button" data-tool="initialPopulationStrategy">Estrategia de gen. de pob. inicial</button>
+          <button class="nav-item" type="button" data-tool="initialPopulationComparison">Comparación de estrategias de gen. de pob. inicial</button>
           <button class="nav-item" type="button" data-tool="proposalComparator">Comparador de propuestas</button>
           <button class="nav-item" type="button" data-tool="embeddingCalculator">Calculadora SBERT</button>
         </nav>
@@ -619,6 +621,962 @@ Each line must follow this format:
           </section>
         </section>
 
+        <section id="initialPopulationStrategy" class="tool-panel" aria-label="Estrategia de generacion de poblacion inicial">
+          <header class="tool-header">
+            <div>
+              <p class="eyebrow">LM Studio + SBERT + runner Python</p>
+              <h1>Estrategia de gen. de pob. inicial</h1>
+            </div>
+            <div class="header-status">
+              <span id="initialPopulationConnectionDot" class="status-dot" aria-hidden="true"></span>
+              <span id="initialPopulationConnectionText">Sin ejecucion</span>
+            </div>
+          </header>
+
+          <datalist id="initialPopulationLmModels"></datalist>
+
+          <section class="grid two-columns">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Referencia y ejecucion</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>API LM Studio</span>
+                  <select id="initialLmApiMode">
+                    <option value="native">REST v1 (/api/v1)</option>
+                    <option value="openai">OpenAI-compatible (/v1)</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Base URL LM Studio</span>
+                  <input id="initialLmStudioBase" type="text" value="http://127.0.0.1:1234" autocomplete="off">
+                </label>
+                <label>
+                  <span>N individuos</span>
+                  <input id="initialN" type="number" min="1" max="500" value="10">
+                </label>
+                <label class="is-hidden">
+                  <span>Top K tabla</span>
+                  <input id="initialTopK" type="number" min="1" max="500" value="10">
+                </label>
+                <label>
+                  <span>Paralelismo generacion</span>
+                  <input id="initialGenerationParallelism" type="number" min="1" max="16" value="1">
+                </label>
+                <label>
+                  <span>Timeout corrida (s)</span>
+                  <input id="initialTimeoutSeconds" type="number" min="5" max="3600" value="120">
+                </label>
+                <label>
+                  <span>Semilla</span>
+                  <input id="initialSeed" type="number" min="0" max="2147483647" value="42">
+                </label>
+                <label>
+                  <span>Modelo embeddings</span>
+                  <select id="initialEmbeddingModel">
+                    <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                    <option value="thenlper/gte-small">gte-small</option>
+                  </select>
+                </label>
+                <label class="span-2">
+                  <span>Texto de referencia guardado</span>
+                  <select id="initialReferencePreset"></select>
+                </label>
+                <div class="span-2 reference-library-actions">
+                  <label>
+                    <span>Nombre para guardar</span>
+                    <input id="initialReferenceSaveLabel" type="text" placeholder="Opcional; si queda vacio se usa el inicio del texto">
+                  </label>
+                  <button id="saveInitialReferenceButton" class="secondary" type="button">Guardar texto actual</button>
+                  <span id="initialReferenceLibraryStatus">BD de referencias no cargada.</span>
+                </div>
+                <label class="span-2">
+                  <span>Texto de referencia</span>
+                  <textarea id="initialReferenceText" rows="5">Our action center has been updated with more information about restaurant shutdowns and disaster financing options for SMBs.</textarea>
+                </label>
+                <label class="span-2">
+                  <span>Dominio general</span>
+                  <input id="initialDomain" type="text" value="Natural-disaster and emergency scenario messages.">
+                </label>
+              </div>
+              <div class="inline-actions">
+                <button id="loadInitialModelsButton" class="secondary" type="button">Cargar modelos</button>
+                <button id="runInitialPopulationButton" type="button">Ejecutar estrategia</button>
+                <button id="cancelInitialPopulationButton" class="danger" type="button" disabled>Cancelar</button>
+                <button id="clearInitialPopulationButton" class="secondary" type="button">Limpiar</button>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Validacion</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Max. palabras roles</span>
+                  <input id="initialRolesMaxWords" type="number" min="1" max="20" value="6">
+                </label>
+                <label>
+                  <span>Max. palabras topicos</span>
+                  <input id="initialTopicsMaxWords" type="number" min="1" max="30" value="8">
+                </label>
+                <label>
+                  <span>Max. palabras acciones</span>
+                  <input id="initialActionsMaxWords" type="number" min="1" max="20" value="6">
+                </label>
+                <label>
+                  <span>Min. palabras texto</span>
+                  <input id="initialGeneratedMinWords" type="number" min="1" max="500" value="1">
+                </label>
+                <label>
+                  <span>Max. palabras texto</span>
+                  <input id="initialGeneratedMaxWords" type="number" min="1" max="500" value="120">
+                </label>
+              </div>
+              <div class="panel-title separated-title">
+                <h2>Contrato</h2>
+                <span id="initialStrategySummary">Registro de estrategias pendiente.</span>
+              </div>
+              <dl id="initialIntegrationDetails" class="definition-grid compact-definition-grid"></dl>
+            </article>
+          </section>
+
+          <section class="panel template-panel">
+            <div class="panel-title">
+              <h2>Plantilla deterministica final</h2>
+              <span>Variables: {role}, {topic}, {action}, {component_list}, {reference_text}, {domain}</span>
+            </div>
+            <textarea id="initialPromptTemplate" class="code-textarea" rows="5">Generate a short natural-disaster scenario message using the following semantic components: role = {role}; topic = {topic}; action = {action}. The generated message must follow the role, address the topic, and satisfy the action.</textarea>
+          </section>
+
+          <section class="grid two-columns">
+            <article class="panel initial-stage-config" data-initial-stage="anchors">
+              <div class="panel-title">
+                <h2>Anclas</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Modelo</span>
+                  <select data-stage-field="model" data-lm-studio-model-select>
+                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Temperatura</span>
+                  <input data-stage-field="temperature" type="number" min="0" max="2" step="0.05" value="0.2">
+                </label>
+                <label>
+                  <span>Top p</span>
+                  <input data-stage-field="topP" type="number" min="0" max="1" step="0.01" value="0.95">
+                </label>
+                <label>
+                  <span>Top k</span>
+                  <input data-stage-field="topK" type="number" min="0" max="500" value="40">
+                </label>
+                <label>
+                  <span>Max. tokens</span>
+                  <input data-stage-field="maxTokens" type="number" min="8" max="4096" value="400">
+                </label>
+              </div>
+              <label>
+                <span>System prompt</span>
+                <textarea data-stage-field="systemPrompt" class="code-textarea" rows="10">You are an information extraction module for a prompt optimization algorithm.
+
+Task:
+Extract short semantic anchors from the reference text.
+
+Output format:
+Return only valid JSON with exactly these keys:
+{
+  "entities": ["..."],
+  "topics": ["..."],
+  "actions": ["..."],
+  "constraints": ["..."]
+}
+
+Rules:
+- Use the reference text as the main source.
+- Use the general domain only as context.
+- Do not invent specific facts that are not supported by the reference text.
+- Keep each item short.
+- Use 1 to 5 items per list.
+- Do not include explanations, markdown, numbering, or extra keys.</textarea>
+              </label>
+              <label>
+                <span>User prompt</span>
+                <textarea data-stage-field="userPrompt" class="code-textarea" rows="5">Reference text:
+"""{reference_text}"""
+
+General domain:
+{domain}</textarea>
+              </label>
+            </article>
+
+            <article class="panel initial-stage-config" data-initial-stage="roles">
+              <div class="panel-title">
+                <h2>Pool roles</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Modelo</span>
+                  <select data-stage-field="model" data-lm-studio-model-select>
+                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Temperatura</span>
+                  <input data-stage-field="temperature" type="number" min="0" max="2" step="0.05" value="0.6">
+                </label>
+                <label>
+                  <span>Top p</span>
+                  <input data-stage-field="topP" type="number" min="0" max="1" step="0.01" value="0.95">
+                </label>
+                <label>
+                  <span>Top k</span>
+                  <input data-stage-field="topK" type="number" min="0" max="500" value="40">
+                </label>
+                <label>
+                  <span>Max. tokens</span>
+                  <input data-stage-field="maxTokens" type="number" min="8" max="4096" value="500">
+                </label>
+              </div>
+              <label>
+                <span>System prompt</span>
+                <textarea data-stage-field="systemPrompt" class="code-textarea" rows="10">You generate one pool of semantic components for a prompt optimization algorithm.
+
+Task:
+Generate only the requested component type: roles, topics, or actions.
+
+Output format:
+Return only valid JSON with exactly this structure:
+{"items": ["...", "..."]}
+
+Rules:
+- The reference text and the general domain are the main source.
+- Semantic anchors are only supporting hints.
+- Every item must be associated with the reference text and the general domain.
+- Do not simply copy the semantic anchors.
+- Keep each item short.
+- Do not include explanations, markdown, numbering, or extra keys.</textarea>
+              </label>
+              <label>
+                <span>User prompt</span>
+                <textarea data-stage-field="userPrompt" class="code-textarea" rows="8">Reference text:
+"""{reference_text}"""
+
+General domain:
+{domain}
+
+Component to generate:
+{component_type}
+
+Required number of items:
+{q_component}
+
+Semantic anchors for support:
+{anchors}</textarea>
+              </label>
+            </article>
+
+            <article class="panel initial-stage-config" data-initial-stage="topics">
+              <div class="panel-title">
+                <h2>Pool topicos</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Modelo</span>
+                  <select data-stage-field="model" data-lm-studio-model-select>
+                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Temperatura</span>
+                  <input data-stage-field="temperature" type="number" min="0" max="2" step="0.05" value="0.35">
+                </label>
+                <label>
+                  <span>Top p</span>
+                  <input data-stage-field="topP" type="number" min="0" max="1" step="0.01" value="0.95">
+                </label>
+                <label>
+                  <span>Top k</span>
+                  <input data-stage-field="topK" type="number" min="0" max="500" value="40">
+                </label>
+                <label>
+                  <span>Max. tokens</span>
+                  <input data-stage-field="maxTokens" type="number" min="8" max="4096" value="500">
+                </label>
+              </div>
+              <label>
+                <span>System prompt</span>
+                <textarea data-stage-field="systemPrompt" class="code-textarea" rows="10">You generate one pool of semantic components for a prompt optimization algorithm.
+
+Task:
+Generate only the requested component type: roles, topics, or actions.
+
+Output format:
+Return only valid JSON with exactly this structure:
+{"items": ["...", "..."]}
+
+Rules:
+- The reference text and the general domain are the main source.
+- Semantic anchors are only supporting hints.
+- Every item must be associated with the reference text and the general domain.
+- Do not simply copy the semantic anchors.
+- Keep each item short.
+- Do not include explanations, markdown, numbering, or extra keys.</textarea>
+              </label>
+              <label>
+                <span>User prompt</span>
+                <textarea data-stage-field="userPrompt" class="code-textarea" rows="8">Reference text:
+"""{reference_text}"""
+
+General domain:
+{domain}
+
+Component to generate:
+{component_type}
+
+Required number of items:
+{q_component}
+
+Semantic anchors for support:
+{anchors}</textarea>
+              </label>
+            </article>
+
+            <article class="panel initial-stage-config" data-initial-stage="actions">
+              <div class="panel-title">
+                <h2>Pool acciones</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Modelo</span>
+                  <select data-stage-field="model" data-lm-studio-model-select>
+                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Temperatura</span>
+                  <input data-stage-field="temperature" type="number" min="0" max="2" step="0.05" value="0.5">
+                </label>
+                <label>
+                  <span>Top p</span>
+                  <input data-stage-field="topP" type="number" min="0" max="1" step="0.01" value="0.95">
+                </label>
+                <label>
+                  <span>Top k</span>
+                  <input data-stage-field="topK" type="number" min="0" max="500" value="40">
+                </label>
+                <label>
+                  <span>Max. tokens</span>
+                  <input data-stage-field="maxTokens" type="number" min="8" max="4096" value="500">
+                </label>
+              </div>
+              <label>
+                <span>System prompt</span>
+                <textarea data-stage-field="systemPrompt" class="code-textarea" rows="10">You generate one pool of semantic components for a prompt optimization algorithm.
+
+Task:
+Generate only the requested component type: roles, topics, or actions.
+
+Output format:
+Return only valid JSON with exactly this structure:
+{"items": ["...", "..."]}
+
+Rules:
+- The reference text and the general domain are the main source.
+- Semantic anchors are only supporting hints.
+- Every item must be associated with the reference text and the general domain.
+- Do not simply copy the semantic anchors.
+- Keep each item short.
+- Do not include explanations, markdown, numbering, or extra keys.</textarea>
+              </label>
+              <label>
+                <span>User prompt</span>
+                <textarea data-stage-field="userPrompt" class="code-textarea" rows="8">Reference text:
+"""{reference_text}"""
+
+General domain:
+{domain}
+
+Component to generate:
+{component_type}
+
+Required number of items:
+{q_component}
+
+Semantic anchors for support:
+{anchors}</textarea>
+              </label>
+            </article>
+
+            <article class="panel initial-stage-config" data-initial-stage="expansion">
+              <div class="panel-title">
+                <h2>Expansion</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Modelo</span>
+                  <select data-stage-field="model" data-lm-studio-model-select>
+                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Temperatura</span>
+                  <input data-stage-field="temperature" type="number" min="0" max="2" step="0.05" value="0.6">
+                </label>
+                <label>
+                  <span>Top p</span>
+                  <input data-stage-field="topP" type="number" min="0" max="1" step="0.01" value="0.95">
+                </label>
+                <label>
+                  <span>Top k</span>
+                  <input data-stage-field="topK" type="number" min="0" max="500" value="40">
+                </label>
+                <label>
+                  <span>Max. tokens</span>
+                  <input data-stage-field="maxTokens" type="number" min="8" max="4096" value="500">
+                </label>
+              </div>
+              <label>
+                <span>System prompt</span>
+                <textarea data-stage-field="systemPrompt" class="code-textarea" rows="10">You expand one existing pool of semantic components.
+
+Task:
+Generate additional items for the requested component type.
+
+Output format:
+Return only valid JSON with exactly this structure:
+{"items": ["...", "..."]}
+
+Rules:
+- The reference text and the general domain are the main source.
+- Semantic anchors are only supporting hints.
+- Do not repeat existing items.
+- Do not paraphrase existing items too closely.
+- Keep each item short.
+- Do not include explanations, markdown, numbering, or extra keys.</textarea>
+              </label>
+              <label>
+                <span>User prompt</span>
+                <textarea data-stage-field="userPrompt" class="code-textarea" rows="9">Reference text:
+"""{reference_text}"""
+
+General domain:
+{domain}
+
+Component to expand:
+{component_type}
+
+Required number of new items:
+{q_extra}
+
+Existing items to avoid:
+{existing_items}
+
+Semantic anchors for support:
+{anchors}</textarea>
+              </label>
+            </article>
+
+            <article class="panel initial-stage-config" data-initial-stage="generation">
+              <div class="panel-title">
+                <h2>Generacion</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Modelo</span>
+                  <select data-stage-field="model" data-lm-studio-model-select>
+                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Temperatura</span>
+                  <input data-stage-field="temperature" type="number" min="0" max="2" step="0.05" value="0.75">
+                </label>
+                <label>
+                  <span>Top p</span>
+                  <input data-stage-field="topP" type="number" min="0" max="1" step="0.01" value="0.95">
+                </label>
+                <label>
+                  <span>Top k</span>
+                  <input data-stage-field="topK" type="number" min="0" max="500" value="40">
+                </label>
+                <label>
+                  <span>Max. tokens</span>
+                  <input data-stage-field="maxTokens" type="number" min="8" max="4096" value="180">
+                </label>
+              </div>
+              <label>
+                <span>System prompt</span>
+                <textarea data-stage-field="systemPrompt" class="code-textarea" rows="10">You are a plain-text generator for natural-disaster scenario messages. You will receive one text-generation instruction from the user. Follow the instruction and generate exactly one final text message.
+
+Output rules:
+- Return plain text only.
+- Return the dataset content itself, not a prompt, explanation, title, label, list, code, or metadata.
+- Do not describe the task.
+- Do not add unsolicited safety advice.
+- Do not use quotation marks, hashtags, URLs, usernames, placeholders, tags, or special markers.
+- Limit the message to between 1 and 4 sentences.
+- Return only the final message.</textarea>
+              </label>
+              <label>
+                <span>User prompt</span>
+                <textarea data-stage-field="userPrompt" class="code-textarea" rows="5">{prompt}</textarea>
+              </label>
+            </article>
+          </section>
+
+          <section class="metrics-grid" aria-label="Resumen estrategia poblacion inicial">
+            <article class="metric">
+              <span>Estado</span>
+              <strong id="initialRunStatus">--</strong>
+              <p>Estado general de la corrida backend.</p>
+            </article>
+            <article class="metric">
+              <span>Progreso</span>
+              <strong id="initialProgressPercent">--</strong>
+              <p id="initialProgressSummary">Sin corrida activa.</p>
+            </article>
+            <article class="metric">
+              <span>Llamadas LLM</span>
+              <strong id="initialLlmCalls">--</strong>
+              <p id="initialLlmCallsDetail">Total de llamadas a LM Studio.</p>
+            </article>
+            <article class="metric">
+              <span>Wall-clock</span>
+              <strong id="initialWallClock">--</strong>
+              <p>Tiempo real de la corrida.</p>
+            </article>
+            <article class="metric">
+              <span>Sin paralelismo estim.</span>
+              <strong id="initialSequentialWallClock">--</strong>
+              <p>Estimacion con llamadas LLM en serie.</p>
+            </article>
+            <article class="metric">
+              <span>Tiempo LLM</span>
+              <strong id="initialLlmTime">--</strong>
+              <p>Suma de latencias cliente.</p>
+            </article>
+            <article class="metric">
+              <span>Tiempo embeddings</span>
+              <strong id="initialEmbeddingTime">--</strong>
+              <p>Tiempo de batches SBERT.</p>
+            </article>
+            <article class="metric">
+              <span>Individuos finales</span>
+              <strong id="initialFinalIndividuals">--</strong>
+              <p>Individuos aceptados y evaluados.</p>
+            </article>
+            <article class="metric">
+              <span>No dominadas</span>
+              <strong id="initialNonDominated">--</strong>
+              <p>Frente sobre [fidelidad, diversidad].</p>
+            </article>
+            <article class="metric">
+              <span>HV</span>
+              <strong id="initialHypervolume">--</strong>
+              <p>Referencia [0,0] con fidelidad normalizada.</p>
+            </article>
+            <article class="metric">
+              <span>Spread</span>
+              <strong id="initialSpread">--</strong>
+              <p>Menor es mejor.</p>
+            </article>
+            <article class="metric">
+              <span>Prom. LLM / individuo</span>
+              <strong id="initialCallsPerIndividual">--</strong>
+              <p>Costo computacional por individuo final.</p>
+            </article>
+            <article class="metric">
+              <span>Run ID</span>
+              <strong id="initialRunId">--</strong>
+              <p>Carpeta en runs/initial-population.</p>
+            </article>
+          </section>
+
+          <section class="status-panel" aria-live="polite">
+            <span id="initialStatusTone" class="status-dot" aria-hidden="true"></span>
+            <div>
+              <p id="initialStatusTitle">Listo</p>
+              <p id="initialStatusDetail">Ejecuta la estrategia hibrida v7 desde Python usando LM Studio local.</p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Progreso de corrida</h2>
+              <span id="initialProgressDetail">Sin ejecucion.</span>
+            </div>
+            <div class="progress-track" aria-hidden="true">
+              <span id="initialProgressBar"></span>
+            </div>
+            <dl id="initialProgressDetails" class="definition-grid compact-definition-grid"></dl>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Componentes semanticos</h2>
+            </div>
+            <div class="collapsible-grid">
+              <details class="artifact-disclosure">
+                <summary>Anclas semanticas</summary>
+                <div id="initialAnchorsContent" class="semantic-artifact-content">
+                  Sin anclas todavia.
+                </div>
+              </details>
+              <details class="artifact-disclosure">
+                <summary>Pools generados</summary>
+                <div id="initialPoolsContent" class="semantic-artifact-content">
+                  Sin pools todavia.
+                </div>
+              </details>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Poblacion inicial</h2>
+            </div>
+            <div class="table-wrap initial-results-scroll">
+              <table class="wide-table initial-results-table">
+                <thead>
+                  <tr>
+                    <th>Rank</th>
+                    <th>Rol</th>
+                    <th>Topico</th>
+                    <th>Accion</th>
+                    <th>Prompt</th>
+                    <th>Texto generado</th>
+                    <th>Fidelidad</th>
+                    <th>Diversidad</th>
+                    <th>Vector F.O.</th>
+                    <th>No dominada</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody id="initialResultsBody">
+                  <tr><td colspan="11">Sin resultados todavia.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="grid two-columns results-layout">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Errores y artefactos</h2>
+              </div>
+              <dl id="initialArtifactDetails" class="definition-grid"></dl>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Ultimos logs</h2>
+              </div>
+              <pre id="initialLogOutput" class="output-box">Sin logs todavia.</pre>
+            </article>
+          </section>
+        </section>
+
+        <section id="initialPopulationComparison" class="tool-panel" aria-label="Comparacion de estrategias de generacion de poblacion inicial">
+          <header class="tool-header">
+            <div>
+              <p class="eyebrow">Inicializacion + baselines + metricas comunes</p>
+              <h1>Comparación de estrategias de gen. de pob. inicial</h1>
+            </div>
+            <div class="header-status">
+              <span id="initialComparisonConnectionDot" class="status-dot" aria-hidden="true"></span>
+              <span id="initialComparisonConnectionText">Sin ejecucion</span>
+            </div>
+          </header>
+
+          <section class="grid two-columns">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Comparacion</h2>
+              </div>
+              <div class="form-grid">
+                <label class="span-2">
+                  <span>Texto de referencia guardado</span>
+                  <select id="initialComparisonReferencePreset"></select>
+                </label>
+                <div class="span-2 reference-library-actions">
+                  <label>
+                    <span>Nombre para guardar</span>
+                    <input id="initialComparisonReferenceSaveLabel" type="text" placeholder="Opcional; si queda vacio se usa el inicio del texto">
+                  </label>
+                  <button id="saveInitialComparisonReferenceButton" class="secondary" type="button">Guardar texto actual</button>
+                  <span id="initialComparisonReferenceLibraryStatus">BD de referencias no cargada.</span>
+                </div>
+                <label class="span-2">
+                  <span>Texto de referencia</span>
+                  <textarea id="initialComparisonReferenceText" rows="5">Our action center has been updated with more information about restaurant shutdowns and disaster financing options for SMBs.</textarea>
+                </label>
+                <label>
+                  <span>N individuos</span>
+                  <input id="initialComparisonN" type="number" min="1" max="500" value="10">
+                </label>
+                <label>
+                  <span>Top K tabla</span>
+                  <input id="initialComparisonTopK" type="number" min="1" max="500" value="10">
+                </label>
+                <label>
+                  <span>Semilla</span>
+                  <input id="initialComparisonSeed" type="number" min="0" max="2147483647" value="42">
+                </label>
+                <label>
+                  <span>Modelo embeddings comun</span>
+                  <select id="initialComparisonEmbeddingModel">
+                    <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                    <option value="thenlper/gte-small">gte-small</option>
+                  </select>
+                </label>
+              </div>
+              <div class="strategy-check-grid">
+                <label>
+                  <input id="compareHybridStrategy" type="checkbox" value="hybrid-semantic-v7" checked>
+                  <span>Mi estrategia v7</span>
+                </label>
+                <label>
+                  <input id="compareEvolmdStrategy" type="checkbox" value="evolmd-initial" checked>
+                  <span>EVOLMD inicial</span>
+                </label>
+                <label>
+                  <input id="compareEvolmdMoStrategy" type="checkbox" value="evolmd-mo-initial" checked>
+                  <span>EVOLMD-MO inicial</span>
+                </label>
+              </div>
+              <div class="inline-actions">
+                <button id="runInitialComparisonButton" type="button">Ejecutar comparacion</button>
+                <button id="cancelInitialComparisonButton" class="danger" type="button" disabled>Cancelar</button>
+                <button id="clearInitialComparisonButton" class="secondary" type="button">Limpiar</button>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Baselines</h2>
+              </div>
+              <details class="artifact-disclosure">
+                <summary>Config. EVOLMD y EVOLMD-MO</summary>
+                <div class="semantic-artifact-content">
+                  <div class="form-grid">
+                    <label>
+                      <span>Modelo Ollama</span>
+                      <input id="initialComparisonOllamaModel" type="text" value="llama3" autocomplete="off">
+                    </label>
+                    <label>
+                      <span>Modelo BERT EVOLMD</span>
+                      <input id="initialComparisonBertModel" type="text" value="bert-base-uncased" autocomplete="off">
+                    </label>
+                    <label>
+                      <span>Timeout baseline (min)</span>
+                      <input id="initialComparisonBaselineTimeout" type="number" min="1" max="1440" value="60">
+                    </label>
+                    <label>
+                      <span>Temp. prompts</span>
+                      <input id="initialComparisonTempPrompts" type="number" min="0" max="2" step="0.05" value="0.9">
+                    </label>
+                    <label>
+                      <span>Temp. keywords</span>
+                      <input id="initialComparisonTempKeywords" type="number" min="0" max="2" step="0.05" value="0.3">
+                    </label>
+                    <label>
+                      <span>Temp. generacion</span>
+                      <input id="initialComparisonTempGeneration" type="number" min="0" max="2" step="0.05" value="0.7">
+                    </label>
+                  </div>
+                </div>
+              </details>
+            </article>
+          </section>
+
+          <section class="panel">
+            <details class="artifact-disclosure">
+              <summary>Config. mi estrategia v7</summary>
+              <div class="semantic-artifact-content">
+                <div class="form-grid">
+                  <label>
+                    <span>API LM Studio</span>
+                    <select id="initialComparisonLmApiMode">
+                      <option value="native">REST v1 (/api/v1)</option>
+                      <option value="openai">OpenAI-compatible (/v1)</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Base URL LM Studio</span>
+                    <input id="initialComparisonLmStudioBase" type="text" value="http://127.0.0.1:1234" autocomplete="off">
+                  </label>
+                  <div class="span-2 inline-actions">
+                    <button id="loadInitialComparisonModelsButton" class="secondary" type="button">Cargar modelos LM Studio</button>
+                  </div>
+                  <label>
+                    <span>Paralelismo generacion</span>
+                    <input id="initialComparisonGenerationParallelism" type="number" min="1" max="16" value="1">
+                  </label>
+                  <label>
+                    <span>Timeout estrategia (s)</span>
+                    <input id="initialComparisonHybridTimeout" type="number" min="5" max="3600" value="120">
+                  </label>
+                  <label class="span-2">
+                    <span>Dominio general</span>
+                    <input id="initialComparisonDomain" type="text" value="Natural-disaster and emergency scenario messages.">
+                  </label>
+                  <label>
+                    <span>Max. palabras roles</span>
+                    <input id="initialComparisonRolesMaxWords" type="number" min="1" max="20" value="6">
+                  </label>
+                  <label>
+                    <span>Max. palabras topicos</span>
+                    <input id="initialComparisonTopicsMaxWords" type="number" min="1" max="30" value="8">
+                  </label>
+                  <label>
+                    <span>Max. palabras acciones</span>
+                    <input id="initialComparisonActionsMaxWords" type="number" min="1" max="20" value="6">
+                  </label>
+                  <label>
+                    <span>Min. palabras texto</span>
+                    <input id="initialComparisonGeneratedMinWords" type="number" min="1" max="500" value="1">
+                  </label>
+                  <label>
+                    <span>Max. palabras texto</span>
+                    <input id="initialComparisonGeneratedMaxWords" type="number" min="1" max="500" value="120">
+                  </label>
+                  <label class="span-2">
+                    <span>Plantilla deterministica final</span>
+                    <textarea id="initialComparisonPromptTemplate" class="code-textarea" rows="5">Generate a short natural-disaster scenario message using the following semantic components: role = {role}; topic = {topic}; action = {action}. The generated message must follow the role, address the topic, and satisfy the action.</textarea>
+                  </label>
+                </div>
+                <div id="initialComparisonHybridStageConfigs" class="grid two-columns"></div>
+              </div>
+            </details>
+          </section>
+
+          <section class="metrics-grid" aria-label="Resumen comparacion poblacion inicial">
+            <article class="metric">
+              <span>Estado</span>
+              <strong id="initialComparisonRunStatus">--</strong>
+              <p>Estado general de la corrida backend.</p>
+            </article>
+            <article class="metric">
+              <span>Progreso</span>
+              <strong id="initialComparisonProgressPercent">--</strong>
+              <p id="initialComparisonProgressSummary">Sin corrida activa.</p>
+            </article>
+            <article class="metric">
+              <span>Llamadas LLM</span>
+              <strong id="initialComparisonLlmCalls">--</strong>
+              <p id="initialComparisonLlmCallsDetail">LM Studio y Ollama, separados por estrategia.</p>
+            </article>
+            <article class="metric">
+              <span>Wall-clock</span>
+              <strong id="initialComparisonWallClock">--</strong>
+              <p>Tiempo real total de la comparacion.</p>
+            </article>
+            <article class="metric">
+              <span>Tiempo LLM</span>
+              <strong id="initialComparisonLlmTime">--</strong>
+              <p>Suma de latencias cliente.</p>
+            </article>
+            <article class="metric">
+              <span>Tiempo embeddings</span>
+              <strong id="initialComparisonEmbeddingTime">--</strong>
+              <p>Evaluacion nativa y metricas comunes.</p>
+            </article>
+            <article class="metric">
+              <span>Estrategias completadas</span>
+              <strong id="initialComparisonCompletedStrategies">--</strong>
+              <p>Estrategias seleccionadas con salida normalizada.</p>
+            </article>
+            <article class="metric">
+              <span>Run ID</span>
+              <strong id="initialComparisonRunId">--</strong>
+              <p>Carpeta en runs/initial-population-comparison.</p>
+            </article>
+          </section>
+
+          <section class="status-panel" aria-live="polite">
+            <span id="initialComparisonStatusTone" class="status-dot" aria-hidden="true"></span>
+            <div>
+              <p id="initialComparisonStatusTitle">Listo</p>
+              <p id="initialComparisonStatusDetail">Ejecuta estrategias de inicializacion en secuencia y calcula metricas comunes post-hoc.</p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Progreso de corrida</h2>
+              <span id="initialComparisonProgressDetail">Sin ejecucion.</span>
+            </div>
+            <div class="progress-track" aria-hidden="true">
+              <span id="initialComparisonProgressBar"></span>
+            </div>
+            <dl id="initialComparisonProgressDetails" class="definition-grid compact-definition-grid"></dl>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Tabla comparativa de metricas</h2>
+              <span>Metricas comunes post-hoc sobre los N textos finales.</span>
+            </div>
+            <div class="table-wrap">
+              <table class="wide-table comparison-metrics-table">
+                <thead>
+                  <tr>
+                    <th>Estrategia</th>
+                    <th>Estado</th>
+                    <th>Runtime</th>
+                    <th>Individuos</th>
+                    <th>No dominadas</th>
+                    <th>Mejor F.O. comun</th>
+                    <th>HV</th>
+                    <th>Spread</th>
+                    <th>Wall-clock</th>
+                    <th>Sin paralelismo estim.</th>
+                    <th>Llamadas LLM</th>
+                    <th>Tiempo LLM</th>
+                    <th>Embeddings comunes</th>
+                  </tr>
+                </thead>
+                <tbody id="initialComparisonMetricsBody">
+                  <tr><td colspan="13">Sin resultados todavia.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Resultados por estrategia</h2>
+              <span>Textos finales ordenados con no dominadas primero.</span>
+            </div>
+            <div id="initialComparisonStrategyDetails" class="collapsible-grid">
+              <details class="artifact-disclosure">
+                <summary>Sin corrida</summary>
+                <div class="semantic-artifact-content">Ejecuta una comparacion para ver textos, artefactos y metricas nativas.</div>
+              </details>
+            </div>
+          </section>
+
+          <section class="grid two-columns results-layout">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Ultimos logs</h2>
+              </div>
+              <pre id="initialComparisonLogOutput" class="output-box">Sin logs todavia.</pre>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Contrato de integracion</h2>
+              </div>
+              <dl id="initialComparisonIntegrationDetails" class="definition-grid"></dl>
+            </article>
+          </section>
+        </section>
+
         <section id="proposalComparator" class="tool-panel" aria-label="Comparador de propuestas">
           <header class="tool-header">
             <div>
@@ -637,6 +1595,18 @@ Each line must follow this format:
                 <h2>Referencia y ejecucion</h2>
               </div>
               <div class="form-grid">
+                <label class="span-2">
+                  <span>Texto de referencia guardado</span>
+                  <select id="comparatorReferencePreset"></select>
+                </label>
+                <div class="span-2 reference-library-actions">
+                  <label>
+                    <span>Nombre para guardar</span>
+                    <input id="comparatorReferenceSaveLabel" type="text" placeholder="Opcional; si queda vacio se usa el inicio del texto">
+                  </label>
+                  <button id="saveComparatorReferenceButton" class="secondary" type="button">Guardar texto actual</button>
+                  <span id="comparatorReferenceLibraryStatus">BD de referencias no cargada.</span>
+                </div>
                 <label class="span-2">
                   <span>Texto de referencia</span>
                   <textarea id="comparatorReferenceText" rows="5">Our action center has been updated with more information about restaurant shutdowns and disaster financing options for SMBs.</textarea>
@@ -706,6 +1676,21 @@ Each line must follow this format:
               <p id="comparatorProgressSummary">Sin corrida activa.</p>
             </article>
             <article class="metric">
+              <span>Llamadas LLM</span>
+              <strong id="comparatorLlmCalls">--</strong>
+              <p id="comparatorLlmCallsDetail">Total de llamadas reales a Ollama.</p>
+            </article>
+            <article class="metric">
+              <span>Wall-clock</span>
+              <strong id="comparatorWallClock">--</strong>
+              <p>Tiempo real de la corrida backend.</p>
+            </article>
+            <article class="metric">
+              <span>Tiempo LLM</span>
+              <strong id="comparatorLlmTime">--</strong>
+              <p>Suma de latencia cliente de llamadas a Ollama.</p>
+            </article>
+            <article class="metric">
               <span>Propuestas completadas</span>
               <strong id="comparatorCompletedProposals">--</strong>
               <p>Baselines clonados con salida normalizada.</p>
@@ -744,7 +1729,7 @@ Each line must follow this format:
           <section class="panel">
             <div class="panel-title">
               <h2>Resumen por propuesta</h2>
-              <span>HV y spread solo aplican a propuestas multiobjetivo.</span>
+              <span>EVOLMD reporta HV y spread post-hoc; EVOLMD-MO los reporta sobre su frente multiobjetivo.</span>
             </div>
             <div id="comparatorProposalCards" class="proposal-card-grid">
               <article class="proposal-card">
@@ -766,13 +1751,14 @@ Each line must follow this format:
                     <th>Rank</th>
                     <th>Texto generado</th>
                     <th>Vector F.O.</th>
+                    <th>Vector post-hoc</th>
                     <th>Prompt</th>
                     <th>Estado</th>
                     <th>No dominada</th>
                   </tr>
                 </thead>
                 <tbody id="comparatorResultsBody">
-                  <tr><td colspan="7">Sin resultados todavia.</td></tr>
+                  <tr><td colspan="8">Sin resultados todavia.</td></tr>
                 </tbody>
               </table>
             </div>
