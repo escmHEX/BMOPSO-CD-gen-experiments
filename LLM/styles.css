@@ -387,6 +387,19 @@ label span {
   line-height: 1.4;
 }
 
+.reference-library-actions {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.reference-library-actions > span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .inline-actions {
   display: flex;
   flex-wrap: wrap;
@@ -859,6 +872,7 @@ td {
   .two-columns,
   .three-columns,
   .form-grid,
+  .reference-library-actions,
   .input-pair {
     grid-template-columns: 1fr;
   }

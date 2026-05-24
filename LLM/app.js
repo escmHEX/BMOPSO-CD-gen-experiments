@@ -264,6 +264,7 @@ let initialPopulationPollTimer = null;
 let currentInitialPopulationRunId = null;
 let initialComparisonPollTimer = null;
 let currentInitialComparisonRunId = null;
+let referenceTextLibrary = [];
 
 const dom = {
   navItems: document.querySelectorAll(".nav-item"),
@@ -387,6 +388,10 @@ const dom = {
   initialTimeoutSeconds: document.querySelector("#initialTimeoutSeconds"),
   initialSeed: document.querySelector("#initialSeed"),
   initialEmbeddingModel: document.querySelector("#initialEmbeddingModel"),
+  initialReferencePreset: document.querySelector("#initialReferencePreset"),
+  initialReferenceSaveLabel: document.querySelector("#initialReferenceSaveLabel"),
+  saveInitialReferenceButton: document.querySelector("#saveInitialReferenceButton"),
+  initialReferenceLibraryStatus: document.querySelector("#initialReferenceLibraryStatus"),
   initialReferenceText: document.querySelector("#initialReferenceText"),
   initialDomain: document.querySelector("#initialDomain"),
   initialRolesMaxWords: document.querySelector("#initialRolesMaxWords"),
@@ -430,6 +435,10 @@ const dom = {
   initialResultsBody: document.querySelector("#initialResultsBody"),
   initialArtifactDetails: document.querySelector("#initialArtifactDetails"),
   initialLogOutput: document.querySelector("#initialLogOutput"),
+  initialComparisonReferencePreset: document.querySelector("#initialComparisonReferencePreset"),
+  initialComparisonReferenceSaveLabel: document.querySelector("#initialComparisonReferenceSaveLabel"),
+  saveInitialComparisonReferenceButton: document.querySelector("#saveInitialComparisonReferenceButton"),
+  initialComparisonReferenceLibraryStatus: document.querySelector("#initialComparisonReferenceLibraryStatus"),
   initialComparisonReferenceText: document.querySelector("#initialComparisonReferenceText"),
   initialComparisonN: document.querySelector("#initialComparisonN"),
   initialComparisonTopK: document.querySelector("#initialComparisonTopK"),
@@ -481,6 +490,10 @@ const dom = {
   initialComparisonStrategyDetails: document.querySelector("#initialComparisonStrategyDetails"),
   initialComparisonLogOutput: document.querySelector("#initialComparisonLogOutput"),
   initialComparisonIntegrationDetails: document.querySelector("#initialComparisonIntegrationDetails"),
+  comparatorReferencePreset: document.querySelector("#comparatorReferencePreset"),
+  comparatorReferenceSaveLabel: document.querySelector("#comparatorReferenceSaveLabel"),
+  saveComparatorReferenceButton: document.querySelector("#saveComparatorReferenceButton"),
+  comparatorReferenceLibraryStatus: document.querySelector("#comparatorReferenceLibraryStatus"),
   comparatorReferenceText: document.querySelector("#comparatorReferenceText"),
   comparatorModel: document.querySelector("#comparatorModel"),
   comparatorTopK: document.querySelector("#comparatorTopK"),
@@ -579,6 +592,7 @@ const INITIAL_POPULATION_API = "/api/initial-population";
 const INITIAL_POPULATION_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const INITIAL_POPULATION_COMPARISON_API = "/api/initial-population-comparison";
 const INITIAL_POPULATION_COMPARISON_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const REFERENCE_TEXTS_API = "/api/reference-texts";
 
 function setStatus(toneElement, titleElement, detailElement, title, detail, state = "ready") {
   titleElement.textContent = title;
@@ -1441,6 +1455,164 @@ function clearSolutionResults() {
   resetSolutionMetrics();
 }
 
+function referenceTextControls() {
+  return [
+    {
+      select: dom.initialReferencePreset,
+      textarea: dom.initialReferenceText,
+      labelInput: dom.initialReferenceSaveLabel,
+      saveButton: dom.saveInitialReferenceButton,
+      status: dom.initialReferenceLibraryStatus,
+    },
+    {
+      select: dom.initialComparisonReferencePreset,
+      textarea: dom.initialComparisonReferenceText,
+      labelInput: dom.initialComparisonReferenceSaveLabel,
+      saveButton: dom.saveInitialComparisonReferenceButton,
+      status: dom.initialComparisonReferenceLibraryStatus,
+    },
+    {
+      select: dom.comparatorReferencePreset,
+      textarea: dom.comparatorReferenceText,
+      labelInput: dom.comparatorReferenceSaveLabel,
+      saveButton: dom.saveComparatorReferenceButton,
+      status: dom.comparatorReferenceLibraryStatus,
+    },
+  ].filter((control) => control.select && control.textarea && control.labelInput && control.saveButton && control.status);
+}
+
+function referenceTextOptionLabel(item) {
+  if (item.label) return item.label;
+  const ref = item.ref ? ` - Ref. ${item.ref}` : "";
+  return `${item.paper || "Texto guardado"}${ref}`;
+}
+
+function referenceTextSourceLabel(item) {
+  const pieces = [item.paper, item.ref ? `Ref. ${item.ref}` : "", item.source].filter(Boolean);
+  return pieces.join(" | ") || "Texto guardado";
+}
+
+function selectedReferenceTextItem(control) {
+  return referenceTextLibrary.find((item) => item.id === control.select.value) || null;
+}
+
+function matchReferenceTextItem(text) {
+  const normalized = text.trim();
+  return referenceTextLibrary.find((item) => item.text.trim() === normalized) || null;
+}
+
+function setReferenceControlStatus(control, message, isError = false) {
+  control.status.textContent = message;
+  control.status.classList.toggle("invalid", isError);
+  control.status.classList.toggle("valid", !isError && Boolean(message));
+}
+
+function populateReferenceTextControls() {
+  referenceTextControls().forEach((control) => {
+    const currentText = control.textarea.value.trim();
+    control.select.replaceChildren(
+      new Option("Seleccionar texto guardado", ""),
+      ...referenceTextLibrary.map((item) => {
+        const option = new Option(referenceTextOptionLabel(item), item.id);
+        option.title = referenceTextSourceLabel(item);
+        return option;
+      }),
+    );
+    const match = matchReferenceTextItem(currentText);
+    control.select.value = match ? match.id : "";
+    setReferenceControlStatus(control, `${referenceTextLibrary.length} texto(s) disponibles.`);
+  });
+}
+
+async function requestReferenceTextsJson(options = {}) {
+  const response = await fetch(REFERENCE_TEXTS_API, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function loadReferenceTextLibrary() {
+  try {
+    const payload = await requestReferenceTextsJson();
+    referenceTextLibrary = Array.isArray(payload.items) ? payload.items : [];
+    populateReferenceTextControls();
+  } catch (error) {
+    referenceTextControls().forEach((control) => {
+      control.select.replaceChildren(new Option("No se pudo cargar la BD", ""));
+      setReferenceControlStatus(control, error.message, true);
+    });
+  }
+}
+
+function applyReferenceTextSelection(control) {
+  const item = selectedReferenceTextItem(control);
+  if (!item) return;
+  control.textarea.value = item.text;
+  setReferenceControlStatus(control, referenceTextSourceLabel(item));
+  if (control.textarea === dom.initialComparisonReferenceText) {
+    resetInitialComparisonUi();
+  } else if (control.textarea === dom.comparatorReferenceText) {
+    resetComparatorUi();
+  }
+}
+
+function syncReferenceTextSelection(control) {
+  const match = matchReferenceTextItem(control.textarea.value);
+  control.select.value = match ? match.id : "";
+  setReferenceControlStatus(
+    control,
+    match ? referenceTextSourceLabel(match) : `${referenceTextLibrary.length} texto(s) disponibles.`,
+  );
+}
+
+async function saveReferenceTextFromControl(control) {
+  const text = control.textarea.value.trim();
+  if (!text) {
+    setReferenceControlStatus(control, "No hay texto de referencia para guardar.", true);
+    return;
+  }
+  control.saveButton.disabled = true;
+  setReferenceControlStatus(control, "Guardando texto de referencia...");
+  try {
+    const payload = await requestReferenceTextsJson({
+      method: "POST",
+      body: JSON.stringify({
+        label: control.labelInput.value.trim(),
+        paper: "Usuario",
+        source: "Guardado desde la web",
+        text,
+      }),
+    });
+    referenceTextLibrary = Array.isArray(payload.items) ? payload.items : referenceTextLibrary;
+    populateReferenceTextControls();
+    if (payload.item?.id) {
+      control.select.value = payload.item.id;
+      setReferenceControlStatus(control, `Guardado: ${referenceTextOptionLabel(payload.item)}`);
+    }
+    control.labelInput.value = "";
+  } catch (error) {
+    setReferenceControlStatus(control, error.message, true);
+  } finally {
+    control.saveButton.disabled = false;
+  }
+}
+
+function setupReferenceTextLibraryControls() {
+  referenceTextControls().forEach((control) => {
+    control.select.addEventListener("change", () => applyReferenceTextSelection(control));
+    control.textarea.addEventListener("input", () => syncReferenceTextSelection(control));
+    control.saveButton.addEventListener("click", () => saveReferenceTextFromControl(control));
+  });
+}
+
 function setSolutionRunning(isRunning) {
   dom.runSolutionsButton.disabled = isRunning;
   dom.stopSolutionsButton.disabled = !isRunning;
@@ -1952,6 +2124,9 @@ function setInitialPopulationRunning(isRunning, cancelRequested = false) {
     dom.initialTimeoutSeconds,
     dom.initialSeed,
     dom.initialEmbeddingModel,
+    dom.initialReferencePreset,
+    dom.initialReferenceSaveLabel,
+    dom.saveInitialReferenceButton,
     dom.initialReferenceText,
     dom.initialDomain,
     dom.initialRolesMaxWords,
@@ -2575,6 +2750,7 @@ function setInitialComparisonRunning(isRunning, cancelRequested = false) {
   dom.cancelInitialComparisonButton.disabled = !isRunning || !currentInitialComparisonRunId || cancelRequested;
   dom.cancelInitialComparisonButton.textContent = cancelRequested ? "Cancelando..." : "Cancelar";
   dom.clearInitialComparisonButton.disabled = isRunning;
+  dom.saveInitialComparisonReferenceButton.disabled = isRunning;
   document.querySelectorAll("#initialPopulationComparison input, #initialPopulationComparison select, #initialPopulationComparison textarea").forEach((field) => {
     field.disabled = isRunning;
   });
@@ -3032,6 +3208,9 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
   dom.cancelComparatorButton.textContent = cancelRequested ? "Cancelando..." : "Cancelar";
   dom.clearComparatorButton.disabled = isRunning;
   [
+    dom.comparatorReferencePreset,
+    dom.comparatorReferenceSaveLabel,
+    dom.saveComparatorReferenceButton,
     dom.comparatorReferenceText,
     dom.comparatorModel,
     dom.comparatorTopK,
@@ -4057,6 +4236,8 @@ dom.copyEmbeddingBButton.addEventListener("click", () => {
 });
 
 renderEmbeddingModelDetails();
+setupReferenceTextLibraryControls();
+loadReferenceTextLibrary();
 populateSolutionReferencePresets();
 applySolutionReferencePreset();
 resetSolutionMetrics();

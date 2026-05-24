@@ -16,6 +16,7 @@ from pathlib import Path
 from baselines.comparator import ComparatorService
 from initial_population.comparison import InitialPopulationComparisonService
 from initial_population.service import InitialPopulationService
+from reference_text_store import ReferenceTextStore
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -25,6 +26,7 @@ PROXY_PREFIX = "/lmstudio"
 COMPARATOR_PREFIX = "/api/comparator"
 INITIAL_POPULATION_PREFIX = "/api/initial-population"
 INITIAL_POPULATION_COMPARISON_PREFIX = "/api/initial-population-comparison"
+REFERENCE_TEXTS_PREFIX = "/api/reference-texts"
 
 
 def release_existing_server_port(host: str, port: int) -> None:
@@ -133,6 +135,7 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
     comparator_service: ComparatorService
     initial_population_service: InitialPopulationService
     initial_population_comparison_service: InitialPopulationComparisonService
+    reference_text_store: ReferenceTextStore
 
     def do_OPTIONS(self) -> None:
         if self.is_api_or_proxy_path():
@@ -143,6 +146,9 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         super().do_OPTIONS()
 
     def do_GET(self) -> None:
+        if self.path.startswith(REFERENCE_TEXTS_PREFIX):
+            self.handle_reference_texts_get()
+            return
         if self.path.startswith(INITIAL_POPULATION_COMPARISON_PREFIX):
             self.handle_initial_population_comparison_get()
             return
@@ -158,6 +164,9 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self) -> None:
+        if self.path.startswith(REFERENCE_TEXTS_PREFIX):
+            self.handle_reference_texts_post()
+            return
         if self.path.startswith(INITIAL_POPULATION_COMPARISON_PREFIX):
             self.handle_initial_population_comparison_post()
             return
@@ -184,6 +193,7 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             or self.path.startswith(COMPARATOR_PREFIX)
             or self.path.startswith(INITIAL_POPULATION_PREFIX)
             or self.path.startswith(INITIAL_POPULATION_COMPARISON_PREFIX)
+            or self.path.startswith(REFERENCE_TEXTS_PREFIX)
         )
 
     def send_cors_headers(self) -> None:
@@ -384,6 +394,31 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as error:
             self.send_json(500, {"error": str(error)})
 
+    def handle_reference_texts_get(self) -> None:
+        path_parts = self.reference_texts_path_parts()
+        try:
+            if not path_parts:
+                self.send_json(200, {"items": self.reference_text_store.list_texts()})
+                return
+            self.send_json(404, {"error": "Not found."})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+        except Exception as error:
+            self.send_json(500, {"error": str(error)})
+
+    def handle_reference_texts_post(self) -> None:
+        path_parts = self.reference_texts_path_parts()
+        try:
+            if not path_parts:
+                item = self.reference_text_store.save_text(self.read_json_body())
+                self.send_json(201, {"item": item, "items": self.reference_text_store.list_texts()})
+                return
+            self.send_json(404, {"error": "Not found."})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+        except Exception as error:
+            self.send_json(500, {"error": str(error)})
+
     def comparator_path_parts(self) -> list[str]:
         parsed = urllib.parse.urlsplit(self.path)
         api_path = parsed.path.removeprefix(COMPARATOR_PREFIX).strip("/")
@@ -401,6 +436,13 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
     def initial_population_comparison_path_parts(self) -> list[str]:
         parsed = urllib.parse.urlsplit(self.path)
         api_path = parsed.path.removeprefix(INITIAL_POPULATION_COMPARISON_PREFIX).strip("/")
+        if not api_path:
+            return []
+        return [urllib.parse.unquote(part) for part in api_path.split("/") if part]
+
+    def reference_texts_path_parts(self) -> list[str]:
+        parsed = urllib.parse.urlsplit(self.path)
+        api_path = parsed.path.removeprefix(REFERENCE_TEXTS_PREFIX).strip("/")
         if not api_path:
             return []
         return [urllib.parse.unquote(part) for part in api_path.split("/") if part]
@@ -443,6 +485,7 @@ def main() -> None:
     ToolPortalHandler.comparator_service = ComparatorService(root)
     ToolPortalHandler.initial_population_service = InitialPopulationService(root)
     ToolPortalHandler.initial_population_comparison_service = InitialPopulationComparisonService(root)
+    ToolPortalHandler.reference_text_store = ReferenceTextStore(root)
 
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     release_existing_server_port(args.host, args.port)
@@ -452,6 +495,7 @@ def main() -> None:
         print(f"Serving comparator API at http://{args.host}:{args.port}{COMPARATOR_PREFIX}/")
         print(f"Serving initial population API at http://{args.host}:{args.port}{INITIAL_POPULATION_PREFIX}/")
         print(f"Serving initial population comparison API at http://{args.host}:{args.port}{INITIAL_POPULATION_COMPARISON_PREFIX}/")
+        print(f"Serving reference texts API at http://{args.host}:{args.port}{REFERENCE_TEXTS_PREFIX}/")
         httpd.serve_forever()
 
 

@@ -1,0 +1,76 @@
+{
+  "items": [
+    {
+      "id": "diego-evolmd-mo-ref-1",
+      "label": "Diego, EVOLMD-MO - Ref. 1",
+      "paper": "Diego, EVOLMD-MO",
+      "ref": "1",
+      "source": "Paper Diego - multiobjetivo",
+      "text": "brother just look italy case first few case came 31st jan now italy top the death list corona viruse cases boom very fast medical facility is also not good in south east asia and you have neighbor worst conditions your government be very careful",
+      "createdAt": "2026-05-23T00:00:00Z"
+    },
+    {
+      "id": "diego-evolmd-mo-ref-2",
+      "label": "Diego, EVOLMD-MO - Ref. 2",
+      "paper": "Diego, EVOLMD-MO",
+      "ref": "2",
+      "source": "Paper Diego - multiobjetivo",
+      "text": "this quarantine has kicked my depression up a couple notches thanks to my work and routine being void now and im effectively avoiding my phone now bc everyone is nuts sending corona stuff dont blame them but christ the anxiety is driving me up the Wall",
+      "createdAt": "2026-05-23T00:00:00Z"
+    },
+    {
+      "id": "diego-evolmd-mo-ref-3",
+      "label": "Diego, EVOLMD-MO - Ref. 3",
+      "paper": "Diego, EVOLMD-MO",
+      "ref": "3",
+      "source": "Paper Diego - multiobjetivo",
+      "text": "update our action center has been udpated with more information about restaurant shutdowns and disaster financing options for smbs",
+      "createdAt": "2026-05-23T00:00:00Z"
+    },
+    {
+      "id": "diego-evolmd-mo-ref-4",
+      "label": "Diego, EVOLMD-MO - Ref. 4",
+      "paper": "Diego, EVOLMD-MO",
+      "ref": "4",
+      "source": "Paper Diego - multiobjetivo",
+      "text": "why dont youwake me up when corona ends",
+      "createdAt": "2026-05-23T00:00:00Z"
+    },
+    {
+      "id": "nicolas-evolmd-ref-1",
+      "label": "Nicolas, EVOLMD - Ref. 1",
+      "paper": "Nicolas, EVOLMD",
+      "ref": "1",
+      "source": "Paper Nico - uniobjetivo",
+      "text": "We're rationing food. Only one store open and it's chaos",
+      "createdAt": "2026-05-23T00:00:00Z"
+    },
+    {
+      "id": "nicolas-evolmd-ref-2",
+      "label": "Nicolas, EVOLMD - Ref. 2",
+      "paper": "Nicolas, EVOLMD",
+      "ref": "2",
+      "source": "Paper Nico - uniobjetivo",
+      "text": "We're organizing a cleanup drive in the park at 9 AM",
+      "createdAt": "2026-05-23T00:00:00Z"
+    },
+    {
+      "id": "nicolas-evolmd-ref-3",
+      "label": "Nicolas, EVOLMD - Ref. 3",
+      "paper": "Nicolas, EVOLMD",
+      "ref": "3",
+      "source": "Paper Nico - uniobjetivo",
+      "text": "Please conserve water as our treatment facilities are still offline",
+      "createdAt": "2026-05-23T00:00:00Z"
+    },
+    {
+      "id": "default-action-center-smb",
+      "label": "Default - action center SMB",
+      "paper": "Default web",
+      "ref": "default",
+      "source": "Default usado por la web",
+      "text": "Our action center has been updated with more information about restaurant shutdowns and disaster financing options for SMBs.",
+      "createdAt": "2026-05-23T00:00:00Z"
+    }
+  ]
+}

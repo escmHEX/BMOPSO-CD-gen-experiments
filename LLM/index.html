@@ -680,6 +680,18 @@ Each line must follow this format:
                   </select>
                 </label>
                 <label class="span-2">
+                  <span>Texto de referencia guardado</span>
+                  <select id="initialReferencePreset"></select>
+                </label>
+                <div class="span-2 reference-library-actions">
+                  <label>
+                    <span>Nombre para guardar</span>
+                    <input id="initialReferenceSaveLabel" type="text" placeholder="Opcional; si queda vacio se usa el inicio del texto">
+                  </label>
+                  <button id="saveInitialReferenceButton" class="secondary" type="button">Guardar texto actual</button>
+                  <span id="initialReferenceLibraryStatus">BD de referencias no cargada.</span>
+                </div>
+                <label class="span-2">
                   <span>Texto de referencia</span>
                   <textarea id="initialReferenceText" rows="5">Our action center has been updated with more information about restaurant shutdowns and disaster financing options for SMBs.</textarea>
                 </label>
@@ -1275,6 +1287,18 @@ Output rules:
               </div>
               <div class="form-grid">
                 <label class="span-2">
+                  <span>Texto de referencia guardado</span>
+                  <select id="initialComparisonReferencePreset"></select>
+                </label>
+                <div class="span-2 reference-library-actions">
+                  <label>
+                    <span>Nombre para guardar</span>
+                    <input id="initialComparisonReferenceSaveLabel" type="text" placeholder="Opcional; si queda vacio se usa el inicio del texto">
+                  </label>
+                  <button id="saveInitialComparisonReferenceButton" class="secondary" type="button">Guardar texto actual</button>
+                  <span id="initialComparisonReferenceLibraryStatus">BD de referencias no cargada.</span>
+                </div>
+                <label class="span-2">
                   <span>Texto de referencia</span>
                   <textarea id="initialComparisonReferenceText" rows="5">Our action center has been updated with more information about restaurant shutdowns and disaster financing options for SMBs.</textarea>
                 </label>
@@ -1556,6 +1580,18 @@ Output rules:
                 <h2>Referencia y ejecucion</h2>
               </div>
               <div class="form-grid">
+                <label class="span-2">
+                  <span>Texto de referencia guardado</span>
+                  <select id="comparatorReferencePreset"></select>
+                </label>
+                <div class="span-2 reference-library-actions">
+                  <label>
+                    <span>Nombre para guardar</span>
+                    <input id="comparatorReferenceSaveLabel" type="text" placeholder="Opcional; si queda vacio se usa el inicio del texto">
+                  </label>
+                  <button id="saveComparatorReferenceButton" class="secondary" type="button">Guardar texto actual</button>
+                  <span id="comparatorReferenceLibraryStatus">BD de referencias no cargada.</span>
+                </div>
                 <label class="span-2">
                   <span>Texto de referencia</span>
                   <textarea id="comparatorReferenceText" rows="5">Our action center has been updated with more information about restaurant shutdowns and disaster financing options for SMBs.</textarea>
