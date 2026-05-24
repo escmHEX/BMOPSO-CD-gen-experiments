@@ -1,4 +1,14 @@
-runs/comparator/
+# Runtime outputs
+runs/
+.server-*.log
+*.tmp
+
+# Python cache and test cache
 __pycache__/
+*.py[cod]
 .pytest_cache/
+
+# Browser/test artifacts
 .playwright-mcp/
+playwright-report/
+test-results/
