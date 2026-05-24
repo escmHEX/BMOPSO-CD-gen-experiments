@@ -1,5 +1,7 @@
 runs/comparator/
 runs/initial-population/
+runs/initial-population-comparison/
+runs/server/
 __pycache__/
 .pytest_cache/
 .playwright-mcp/

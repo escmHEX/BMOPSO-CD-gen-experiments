@@ -262,6 +262,8 @@ let comparatorPollTimer = null;
 let currentComparatorRunId = null;
 let initialPopulationPollTimer = null;
 let currentInitialPopulationRunId = null;
+let initialComparisonPollTimer = null;
+let currentInitialComparisonRunId = null;
 
 const dom = {
   navItems: document.querySelectorAll(".nav-item"),
@@ -428,6 +430,57 @@ const dom = {
   initialResultsBody: document.querySelector("#initialResultsBody"),
   initialArtifactDetails: document.querySelector("#initialArtifactDetails"),
   initialLogOutput: document.querySelector("#initialLogOutput"),
+  initialComparisonReferenceText: document.querySelector("#initialComparisonReferenceText"),
+  initialComparisonN: document.querySelector("#initialComparisonN"),
+  initialComparisonTopK: document.querySelector("#initialComparisonTopK"),
+  initialComparisonSeed: document.querySelector("#initialComparisonSeed"),
+  initialComparisonEmbeddingModel: document.querySelector("#initialComparisonEmbeddingModel"),
+  compareHybridStrategy: document.querySelector("#compareHybridStrategy"),
+  compareEvolmdStrategy: document.querySelector("#compareEvolmdStrategy"),
+  compareEvolmdMoStrategy: document.querySelector("#compareEvolmdMoStrategy"),
+  initialComparisonOllamaModel: document.querySelector("#initialComparisonOllamaModel"),
+  initialComparisonBertModel: document.querySelector("#initialComparisonBertModel"),
+  initialComparisonBaselineTimeout: document.querySelector("#initialComparisonBaselineTimeout"),
+  initialComparisonTempPrompts: document.querySelector("#initialComparisonTempPrompts"),
+  initialComparisonTempKeywords: document.querySelector("#initialComparisonTempKeywords"),
+  initialComparisonTempGeneration: document.querySelector("#initialComparisonTempGeneration"),
+  initialComparisonLmApiMode: document.querySelector("#initialComparisonLmApiMode"),
+  initialComparisonLmStudioBase: document.querySelector("#initialComparisonLmStudioBase"),
+  initialComparisonGenerationParallelism: document.querySelector("#initialComparisonGenerationParallelism"),
+  initialComparisonHybridTimeout: document.querySelector("#initialComparisonHybridTimeout"),
+  initialComparisonDomain: document.querySelector("#initialComparisonDomain"),
+  initialComparisonRolesMaxWords: document.querySelector("#initialComparisonRolesMaxWords"),
+  initialComparisonTopicsMaxWords: document.querySelector("#initialComparisonTopicsMaxWords"),
+  initialComparisonActionsMaxWords: document.querySelector("#initialComparisonActionsMaxWords"),
+  initialComparisonGeneratedMinWords: document.querySelector("#initialComparisonGeneratedMinWords"),
+  initialComparisonGeneratedMaxWords: document.querySelector("#initialComparisonGeneratedMaxWords"),
+  initialComparisonPromptTemplate: document.querySelector("#initialComparisonPromptTemplate"),
+  initialComparisonHybridStageConfigs: document.querySelector("#initialComparisonHybridStageConfigs"),
+  runInitialComparisonButton: document.querySelector("#runInitialComparisonButton"),
+  cancelInitialComparisonButton: document.querySelector("#cancelInitialComparisonButton"),
+  clearInitialComparisonButton: document.querySelector("#clearInitialComparisonButton"),
+  initialComparisonConnectionDot: document.querySelector("#initialComparisonConnectionDot"),
+  initialComparisonConnectionText: document.querySelector("#initialComparisonConnectionText"),
+  initialComparisonRunStatus: document.querySelector("#initialComparisonRunStatus"),
+  initialComparisonProgressPercent: document.querySelector("#initialComparisonProgressPercent"),
+  initialComparisonProgressSummary: document.querySelector("#initialComparisonProgressSummary"),
+  initialComparisonLlmCalls: document.querySelector("#initialComparisonLlmCalls"),
+  initialComparisonLlmCallsDetail: document.querySelector("#initialComparisonLlmCallsDetail"),
+  initialComparisonWallClock: document.querySelector("#initialComparisonWallClock"),
+  initialComparisonLlmTime: document.querySelector("#initialComparisonLlmTime"),
+  initialComparisonEmbeddingTime: document.querySelector("#initialComparisonEmbeddingTime"),
+  initialComparisonCompletedStrategies: document.querySelector("#initialComparisonCompletedStrategies"),
+  initialComparisonRunId: document.querySelector("#initialComparisonRunId"),
+  initialComparisonStatusTone: document.querySelector("#initialComparisonStatusTone"),
+  initialComparisonStatusTitle: document.querySelector("#initialComparisonStatusTitle"),
+  initialComparisonStatusDetail: document.querySelector("#initialComparisonStatusDetail"),
+  initialComparisonProgressDetail: document.querySelector("#initialComparisonProgressDetail"),
+  initialComparisonProgressBar: document.querySelector("#initialComparisonProgressBar"),
+  initialComparisonProgressDetails: document.querySelector("#initialComparisonProgressDetails"),
+  initialComparisonMetricsBody: document.querySelector("#initialComparisonMetricsBody"),
+  initialComparisonStrategyDetails: document.querySelector("#initialComparisonStrategyDetails"),
+  initialComparisonLogOutput: document.querySelector("#initialComparisonLogOutput"),
+  initialComparisonIntegrationDetails: document.querySelector("#initialComparisonIntegrationDetails"),
   comparatorReferenceText: document.querySelector("#comparatorReferenceText"),
   comparatorModel: document.querySelector("#comparatorModel"),
   comparatorTopK: document.querySelector("#comparatorTopK"),
@@ -524,6 +577,8 @@ const COMPARATOR_API = "/api/comparator";
 const COMPARATOR_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const INITIAL_POPULATION_API = "/api/initial-population";
 const INITIAL_POPULATION_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const INITIAL_POPULATION_COMPARISON_API = "/api/initial-population-comparison";
+const INITIAL_POPULATION_COMPARISON_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 function setStatus(toneElement, titleElement, detailElement, title, detail, state = "ready") {
   titleElement.textContent = title;
@@ -1794,7 +1849,7 @@ function readInitialPopulationConfig() {
   }
 
   return {
-    strategyId: "hybrid-semantic-v6",
+    strategyId: "hybrid-semantic-v7",
     referenceText,
     domain,
     n: Math.floor(readClampedNumber(dom.initialN, "N individuos", 1, 500)),
@@ -1953,7 +2008,7 @@ function resetInitialPopulationUi() {
     dom.initialStatusTitle,
     dom.initialStatusDetail,
     "Listo",
-    "Ejecuta la estrategia hibrida v6 desde Python usando LM Studio local.",
+    "Ejecuta la estrategia hibrida v7 desde Python usando LM Studio local.",
   );
 }
 
@@ -2310,6 +2365,644 @@ function renderInitialArtifacts(run) {
     ["Embeddings", `${cost.embeddingBatches ?? 0} batch(es), ${cost.embeddingTexts ?? 0} texto(s)`],
     ["Tokens", `${cost.promptTokens ?? 0} prompt, ${cost.completionTokens ?? 0} completion`],
   ]);
+}
+
+function initialComparisonStageLabel(stageName) {
+  const labels = {
+    anchors: "Anclas",
+    roles: "Pool roles",
+    topics: "Pool topicos",
+    actions: "Pool acciones",
+    expansion: "Expansion",
+    generation: "Generacion",
+  };
+  return labels[stageName] || stageName;
+}
+
+function initialComparisonStageDefaults() {
+  const defaults = {};
+  dom.initialStageConfigs.forEach((panel) => {
+    const stageName = panel.dataset.initialStage;
+    if (!stageName) return;
+    defaults[stageName] = {};
+    panel.querySelectorAll("[data-stage-field]").forEach((field) => {
+      defaults[stageName][field.dataset.stageField] = field.value;
+    });
+  });
+  return defaults;
+}
+
+function buildInitialComparisonStageEditors() {
+  if (!dom.initialComparisonHybridStageConfigs || dom.initialComparisonHybridStageConfigs.children.length) {
+    return;
+  }
+  const defaults = initialComparisonStageDefaults();
+  dom.initialComparisonHybridStageConfigs.replaceChildren(
+    ...Object.entries(defaults).map(([stageName, stage]) => {
+      const article = document.createElement("article");
+      article.className = "panel comparison-stage-config";
+      article.dataset.comparisonStage = stageName;
+      article.innerHTML = `
+        <div class="panel-title">
+          <h2>${escapeHtml(initialComparisonStageLabel(stageName))}</h2>
+        </div>
+        <div class="form-grid">
+          <label>
+            <span>Modelo</span>
+            <input data-comparison-stage-field="model" list="initialPopulationLmModels" type="text" value="${escapeHtml(stage.model || "")}">
+          </label>
+          <label>
+            <span>Temperatura</span>
+            <input data-comparison-stage-field="temperature" type="number" min="0" max="2" step="0.05" value="${escapeHtml(stage.temperature || "0.7")}">
+          </label>
+          <label>
+            <span>Top p</span>
+            <input data-comparison-stage-field="topP" type="number" min="0" max="1" step="0.01" value="${escapeHtml(stage.topP || "0.95")}">
+          </label>
+          <label>
+            <span>Top k</span>
+            <input data-comparison-stage-field="topK" type="number" min="0" max="500" value="${escapeHtml(stage.topK || "40")}">
+          </label>
+          <label>
+            <span>Max. tokens</span>
+            <input data-comparison-stage-field="maxTokens" type="number" min="8" max="4096" value="${escapeHtml(stage.maxTokens || "500")}">
+          </label>
+        </div>
+        <label>
+          <span>System prompt</span>
+          <textarea data-comparison-stage-field="systemPrompt" class="code-textarea" rows="10">${escapeHtml(stage.systemPrompt || "")}</textarea>
+        </label>
+        <label>
+          <span>User prompt</span>
+          <textarea data-comparison-stage-field="userPrompt" class="code-textarea" rows="6">${escapeHtml(stage.userPrompt || "")}</textarea>
+        </label>
+      `;
+      return article;
+    }),
+  );
+}
+
+function readInitialComparisonStageConfigs() {
+  const stages = {};
+  document.querySelectorAll(".comparison-stage-config").forEach((panel) => {
+    const stageName = panel.dataset.comparisonStage;
+    const stage = {};
+    panel.querySelectorAll("[data-comparison-stage-field]").forEach((field) => {
+      const key = field.dataset.comparisonStageField;
+      if (["temperature", "topP"].includes(key)) {
+        stage[key] = readClampedNumber(field, `comparacion.${stageName}.${key}`, 0, key === "topP" ? 1 : 2);
+      } else if (["topK", "maxTokens"].includes(key)) {
+        stage[key] = Math.floor(readClampedNumber(field, `comparacion.${stageName}.${key}`, key === "topK" ? 0 : 8, key === "topK" ? 500 : 4096));
+      } else {
+        const value = field.value.trim();
+        if (!value) {
+          throw new Error(`comparacion.${stageName}.${key} no puede estar vacio.`);
+        }
+        stage[key] = value;
+      }
+    });
+    stages[stageName] = stage;
+  });
+  return stages;
+}
+
+function selectedInitialComparisonStrategies() {
+  return [
+    dom.compareHybridStrategy,
+    dom.compareEvolmdStrategy,
+    dom.compareEvolmdMoStrategy,
+  ].filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.value);
+}
+
+function readInitialComparisonConfig() {
+  const referenceText = dom.initialComparisonReferenceText.value.trim();
+  const selectedStrategies = selectedInitialComparisonStrategies();
+  const generatedMinWords = Math.floor(readClampedNumber(dom.initialComparisonGeneratedMinWords, "Min. palabras texto", 1, 500));
+  const generatedMaxWords = Math.floor(readClampedNumber(dom.initialComparisonGeneratedMaxWords, "Max. palabras texto", 1, 500));
+  const promptTemplate = dom.initialComparisonPromptTemplate.value.trim();
+  const domain = dom.initialComparisonDomain.value.trim();
+  const baseUrl = dom.initialComparisonLmStudioBase.value.trim();
+
+  if (!referenceText) throw new Error("Define el texto de referencia.");
+  if (!selectedStrategies.length) throw new Error("Selecciona al menos una estrategia.");
+  if (!promptTemplate) throw new Error("Define la plantilla deterministica final.");
+  if (!domain) throw new Error("Define el dominio general.");
+  if (!baseUrl) throw new Error("Define la Base URL de LM Studio.");
+  if (generatedMinWords > generatedMaxWords) {
+    throw new Error("Min. palabras texto no puede ser mayor que Max. palabras texto.");
+  }
+
+  const n = Math.floor(readClampedNumber(dom.initialComparisonN, "N individuos", 1, 500));
+  const topK = Math.floor(readClampedNumber(dom.initialComparisonTopK, "Top K tabla", 1, 500));
+  const seed = Math.floor(readClampedNumber(dom.initialComparisonSeed, "Semilla", 0, 2147483647));
+  return {
+    referenceText,
+    selectedStrategies,
+    n,
+    topK,
+    seed,
+    commonEmbeddingModel: dom.initialComparisonEmbeddingModel.value,
+    hybrid: {
+      strategyId: "hybrid-semantic-v7",
+      referenceText,
+      domain,
+      n,
+      topK,
+      timeoutSeconds: Math.floor(readClampedNumber(dom.initialComparisonHybridTimeout, "Timeout estrategia", 5, 3600)),
+      generationParallelism: Math.floor(readClampedNumber(dom.initialComparisonGenerationParallelism, "Paralelismo generacion", 1, 16)),
+      seed,
+      embeddingModel: dom.initialComparisonEmbeddingModel.value,
+      lmStudio: {
+        baseUrl,
+        apiMode: dom.initialComparisonLmApiMode.value,
+      },
+      stages: readInitialComparisonStageConfigs(),
+      promptTemplate,
+      validation: {
+        rolesMaxWords: Math.floor(readClampedNumber(dom.initialComparisonRolesMaxWords, "Max. palabras roles", 1, 20)),
+        topicsMaxWords: Math.floor(readClampedNumber(dom.initialComparisonTopicsMaxWords, "Max. palabras topicos", 1, 30)),
+        actionsMaxWords: Math.floor(readClampedNumber(dom.initialComparisonActionsMaxWords, "Max. palabras acciones", 1, 20)),
+        generatedMinWords,
+        generatedMaxWords,
+      },
+    },
+    baselines: {
+      model: dom.initialComparisonOllamaModel.value.trim(),
+      bertModel: dom.initialComparisonBertModel.value.trim(),
+      timeoutMinutes: Math.floor(readClampedNumber(dom.initialComparisonBaselineTimeout, "Timeout baseline", 1, 1440)),
+      tempPrompts: readClampedNumber(dom.initialComparisonTempPrompts, "Temp. prompts", 0, 2),
+      tempKeywords: readClampedNumber(dom.initialComparisonTempKeywords, "Temp. keywords", 0, 2),
+      tempGeneration: readClampedNumber(dom.initialComparisonTempGeneration, "Temp. generacion", 0, 2),
+    },
+  };
+}
+
+async function requestInitialComparisonJson(path, options = {}) {
+  const response = await fetch(`${INITIAL_POPULATION_COMPARISON_API}${path}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function loadInitialComparisonStrategies() {
+  try {
+    const payload = await requestInitialComparisonJson("/strategies");
+    const strategies = payload.strategies || [];
+    renderDefinitionList(dom.initialComparisonIntegrationDetails, [
+      ["Contrato", "{strategyId, displayName, rows, metrics, nativeMetrics, cost, commonMetricCost, artifacts, status}"],
+      ["Estrategias", strategies.map((strategy) => `${strategy.strategyId}: ${strategy.available ? "disponible" : "faltante"}`).join("; ") || "--"],
+      ["Ejecucion", "Secuencial entre estrategias; paralelismo solo dentro de cada estrategia."],
+      ["Metricas comunes", "[semantic_fidelity, semantic_diversity] post-hoc sobre textos finales N."],
+      ["Salida", "runs/initial-population-comparison/<runId>/summary.json"],
+    ]);
+  } catch (error) {
+    renderDefinitionList(dom.initialComparisonIntegrationDetails, [
+      ["API", `No se pudo consultar el backend: ${error.message}`],
+    ]);
+  }
+}
+
+function setInitialComparisonRunning(isRunning, cancelRequested = false) {
+  dom.runInitialComparisonButton.disabled = isRunning;
+  dom.cancelInitialComparisonButton.disabled = !isRunning || !currentInitialComparisonRunId || cancelRequested;
+  dom.cancelInitialComparisonButton.textContent = cancelRequested ? "Cancelando..." : "Cancelar";
+  dom.clearInitialComparisonButton.disabled = isRunning;
+  document.querySelectorAll("#initialPopulationComparison input, #initialPopulationComparison select, #initialPopulationComparison textarea").forEach((field) => {
+    field.disabled = isRunning;
+  });
+}
+
+function stopInitialComparisonPolling() {
+  if (initialComparisonPollTimer) {
+    window.clearInterval(initialComparisonPollTimer);
+    initialComparisonPollTimer = null;
+  }
+}
+
+function resetInitialComparisonUi() {
+  stopInitialComparisonPolling();
+  currentInitialComparisonRunId = null;
+  dom.initialComparisonRunStatus.textContent = "--";
+  dom.initialComparisonProgressPercent.textContent = "--";
+  dom.initialComparisonProgressSummary.textContent = "Sin corrida activa.";
+  dom.initialComparisonLlmCalls.textContent = "--";
+  dom.initialComparisonLlmCallsDetail.textContent = "LM Studio y Ollama, separados por estrategia.";
+  dom.initialComparisonWallClock.textContent = "--";
+  dom.initialComparisonLlmTime.textContent = "--";
+  dom.initialComparisonEmbeddingTime.textContent = "--";
+  dom.initialComparisonCompletedStrategies.textContent = "--";
+  dom.initialComparisonRunId.textContent = "--";
+  dom.initialComparisonConnectionText.textContent = "Sin ejecucion";
+  dom.initialComparisonConnectionDot.classList.remove("is-busy", "is-error");
+  dom.initialComparisonMetricsBody.innerHTML = '<tr><td colspan="13">Sin resultados todavia.</td></tr>';
+  dom.initialComparisonStrategyDetails.innerHTML = `
+    <details class="artifact-disclosure">
+      <summary>Sin corrida</summary>
+      <div class="semantic-artifact-content">Ejecuta una comparacion para ver textos, artefactos y metricas nativas.</div>
+    </details>
+  `;
+  dom.initialComparisonLogOutput.textContent = "Sin logs todavia.";
+  renderInitialComparisonProgress(null);
+  setInitialComparisonRunning(false);
+  setStatus(
+    dom.initialComparisonStatusTone,
+    dom.initialComparisonStatusTitle,
+    dom.initialComparisonStatusDetail,
+    "Listo",
+    "Ejecuta estrategias de inicializacion en secuencia y calcula metricas comunes post-hoc.",
+  );
+}
+
+async function runInitialComparison() {
+  let config;
+  try {
+    config = readInitialComparisonConfig();
+  } catch (error) {
+    setStatus(dom.initialComparisonStatusTone, dom.initialComparisonStatusTitle, dom.initialComparisonStatusDetail, "Configuracion incompleta", error.message, "error");
+    return;
+  }
+
+  stopInitialComparisonPolling();
+  setInitialComparisonRunning(true);
+  dom.initialComparisonMetricsBody.innerHTML = '<tr><td colspan="13">Esperando resultados.</td></tr>';
+  dom.initialComparisonStrategyDetails.innerHTML = "";
+  dom.initialComparisonLogOutput.textContent = "Iniciando corrida...";
+  dom.initialComparisonConnectionDot.classList.add("is-busy");
+  dom.initialComparisonConnectionDot.classList.remove("is-error");
+  dom.initialComparisonConnectionText.textContent = "Ejecutando";
+  setStatus(
+    dom.initialComparisonStatusTone,
+    dom.initialComparisonStatusTitle,
+    dom.initialComparisonStatusDetail,
+    "Iniciando comparacion",
+    "El backend ejecutara las estrategias seleccionadas una por una.",
+    "busy",
+  );
+
+  try {
+    const run = await requestInitialComparisonJson("/runs", {
+      method: "POST",
+      body: JSON.stringify(config),
+    });
+    currentInitialComparisonRunId = run.runId;
+    setInitialComparisonRunning(true, Boolean(run.cancelRequested));
+    renderInitialComparisonRun(run);
+    initialComparisonPollTimer = window.setInterval(() => refreshInitialComparisonRun(currentInitialComparisonRunId), 2000);
+    await refreshInitialComparisonRun(currentInitialComparisonRunId);
+  } catch (error) {
+    currentInitialComparisonRunId = null;
+    dom.initialComparisonConnectionDot.classList.add("is-error");
+    dom.initialComparisonConnectionText.textContent = "Error";
+    setInitialComparisonRunning(false);
+    setStatus(dom.initialComparisonStatusTone, dom.initialComparisonStatusTitle, dom.initialComparisonStatusDetail, "Error al iniciar", error.message, "error");
+  }
+}
+
+async function refreshInitialComparisonRun(runId) {
+  if (!runId) return;
+  try {
+    const run = await requestInitialComparisonJson(`/runs/${encodeURIComponent(runId)}`);
+    renderInitialComparisonRun(run);
+    if (INITIAL_POPULATION_COMPARISON_TERMINAL_STATUSES.has(run.status)) {
+      stopInitialComparisonPolling();
+      currentInitialComparisonRunId = run.runId;
+      setInitialComparisonRunning(false);
+    } else {
+      currentInitialComparisonRunId = run.runId;
+      setInitialComparisonRunning(true, Boolean(run.cancelRequested));
+    }
+  } catch (error) {
+    stopInitialComparisonPolling();
+    setInitialComparisonRunning(false);
+    dom.initialComparisonConnectionDot.classList.add("is-error");
+    setStatus(dom.initialComparisonStatusTone, dom.initialComparisonStatusTitle, dom.initialComparisonStatusDetail, "Error al consultar corrida", error.message, "error");
+  }
+}
+
+async function cancelInitialComparisonRun() {
+  if (!currentInitialComparisonRunId) return;
+  dom.cancelInitialComparisonButton.disabled = true;
+  dom.cancelInitialComparisonButton.textContent = "Cancelando...";
+  setStatus(dom.initialComparisonStatusTone, dom.initialComparisonStatusTitle, dom.initialComparisonStatusDetail, "Cancelando", "Se solicitara terminar el proceso activo.", "busy");
+  try {
+    const run = await requestInitialComparisonJson(`/runs/${encodeURIComponent(currentInitialComparisonRunId)}/cancel`, {
+      method: "POST",
+      body: "{}",
+    });
+    renderInitialComparisonRun(run);
+    setInitialComparisonRunning(!INITIAL_POPULATION_COMPARISON_TERMINAL_STATUSES.has(run.status), Boolean(run.cancelRequested));
+  } catch (error) {
+    setInitialComparisonRunning(true, false);
+    setStatus(dom.initialComparisonStatusTone, dom.initialComparisonStatusTitle, dom.initialComparisonStatusDetail, "No se pudo cancelar", error.message, "error");
+  }
+}
+
+function initialComparisonStrategyViews(run) {
+  const finalById = new Map((run.strategies || []).map((strategy) => [strategy.strategyId, strategy]));
+  return Object.values(run.strategyStates || {}).map((state) => ({
+    ...state,
+    ...(finalById.get(state.strategyId) || {}),
+    progressState: state,
+  }));
+}
+
+function renderInitialComparisonProgress(progress) {
+  if (!progress) {
+    dom.initialComparisonProgressPercent.textContent = "--";
+    dom.initialComparisonProgressSummary.textContent = "Sin corrida activa.";
+    dom.initialComparisonProgressDetail.textContent = "Sin ejecucion.";
+    dom.initialComparisonProgressBar.style.width = "0%";
+    renderDefinitionList(dom.initialComparisonProgressDetails, [
+      ["Tiempo transcurrido", "--"],
+      ["Tiempo restante", "--"],
+      ["Estrategia activa", "--"],
+      ["Cola", "--"],
+    ]);
+    return;
+  }
+  const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  dom.initialComparisonProgressPercent.textContent = `${percent}%`;
+  dom.initialComparisonProgressSummary.textContent = progress.detail || "Ejecutando.";
+  dom.initialComparisonProgressDetail.textContent = progress.detail || "Ejecutando.";
+  dom.initialComparisonProgressBar.style.width = `${percent}%`;
+  renderDefinitionList(dom.initialComparisonProgressDetails, [
+    ["Tiempo transcurrido", progress.elapsedLabel || "--"],
+    ["Tiempo restante estimado", progress.remainingLabel || "No disponible"],
+    ["Estrategia activa", progress.activeStrategyName || "--"],
+    ["Cola", `${progress.queuedStrategies ?? 0}/${progress.totalStrategies ?? 0}`],
+  ]);
+}
+
+function renderInitialComparisonCostSummary(costSummary) {
+  if (!costSummary) {
+    dom.initialComparisonLlmCalls.textContent = "--";
+    dom.initialComparisonLlmCallsDetail.textContent = "LM Studio y Ollama, separados por estrategia.";
+    dom.initialComparisonWallClock.textContent = "--";
+    dom.initialComparisonLlmTime.textContent = "--";
+    dom.initialComparisonEmbeddingTime.textContent = "--";
+    return;
+  }
+  dom.initialComparisonLlmCalls.textContent = String(costSummary.llmCalls ?? 0);
+  dom.initialComparisonLlmCallsDetail.textContent = `${costSummary.llmSuccessfulCalls ?? 0} ok, ${costSummary.llmFailedCalls ?? 0} fallida(s), ${costSummary.totalTokens ?? 0} tokens reportados.`;
+  dom.initialComparisonWallClock.textContent = costSummary.runWallClockLabel || "--";
+  dom.initialComparisonLlmTime.textContent = costSummary.llmClientWallClockLabel || "--";
+  const native = costSummary.embeddingWallClockLabel || "0s";
+  const common = costSummary.commonEmbeddingWallClockLabel || "0s";
+  dom.initialComparisonEmbeddingTime.textContent = `${native} + ${common}`;
+}
+
+function renderInitialComparisonRun(run) {
+  const status = comparatorStatusLabel(run.status);
+  const progress = run.progress || {};
+  const completed = progress.completedStrategies ?? (run.strategies || []).filter((strategy) => strategy.status === "completed").length;
+  const total = progress.totalStrategies ?? Object.keys(run.strategyStates || {}).length;
+  dom.initialComparisonRunStatus.textContent = status;
+  dom.initialComparisonCompletedStrategies.textContent = `${completed}/${total}`;
+  dom.initialComparisonRunId.textContent = run.runId || "--";
+  dom.initialComparisonConnectionText.textContent = status;
+  dom.initialComparisonConnectionDot.classList.toggle("is-busy", run.status === "queued" || run.status === "running");
+  dom.initialComparisonConnectionDot.classList.toggle("is-error", run.status === "failed");
+
+  const strategies = initialComparisonStrategyViews(run);
+  renderInitialComparisonProgress(run.progress || null);
+  renderInitialComparisonCostSummary(run.costSummary || null);
+  renderInitialComparisonMetrics(strategies);
+  renderInitialComparisonStrategyDetails(strategies);
+  renderInitialComparisonLogs(run.logs || []);
+
+  const detail = run.error
+    ? run.error
+    : run.cancelRequested
+      ? "Cancelacion solicitada; esperando cierre del proceso activo."
+      : progress.detail || `${completed} estrategia(s) completada(s).`;
+  setStatus(
+    dom.initialComparisonStatusTone,
+    dom.initialComparisonStatusTitle,
+    dom.initialComparisonStatusDetail,
+    `Comparacion ${status}`,
+    detail,
+    run.status === "running" || run.status === "queued" ? "busy" : run.status === "failed" ? "error" : "ready",
+  );
+}
+
+function renderInitialComparisonMetrics(strategies) {
+  if (!strategies.length) {
+    dom.initialComparisonMetricsBody.innerHTML = '<tr><td colspan="13">Sin resultados todavia.</td></tr>';
+    return;
+  }
+  dom.initialComparisonMetricsBody.replaceChildren(
+    ...strategies.map((strategy) => {
+      const metrics = strategy.metrics || {};
+      const cost = strategy.cost || {};
+      const commonCost = strategy.commonMetricCost || {};
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(strategy.displayName || strategy.strategyId)}</td>
+        <td><span class="${comparatorStatusClass(strategy.status)}">${escapeHtml(comparatorStatusLabel(strategy.status))}</span></td>
+        <td>${escapeHtml(strategy.runtime || "--")}</td>
+        <td>${escapeHtml(String(metrics.completedRows ?? 0))}/${escapeHtml(String(metrics.totalRows ?? 0))}</td>
+        <td>${escapeHtml(String(metrics.nonDominatedRows ?? 0))}</td>
+        <td>${escapeHtml(metrics.bestObjectiveLabel || "--")}</td>
+        <td>${escapeHtml(metrics.hypervolumeLabel || "No aplica")}</td>
+        <td>${escapeHtml(metrics.spreadLabel || "No aplica")}</td>
+        <td>${escapeHtml(cost.processWallClockLabel || cost.wallClockLabel || "--")}</td>
+        <td>${escapeHtml(cost.estimatedSequentialWallClockLabel || "--")}</td>
+        <td>${escapeHtml(String(cost.llmCalls ?? 0))}</td>
+        <td>${escapeHtml(cost.llmClientWallClockLabel || "--")}</td>
+        <td>${escapeHtml(commonCost.embeddingWallClockLabel || "--")}</td>
+      `;
+      return tr;
+    }),
+  );
+}
+
+function renderInitialComparisonStrategyDetails(strategies) {
+  if (!strategies.length) {
+    dom.initialComparisonStrategyDetails.innerHTML = `
+      <details class="artifact-disclosure">
+        <summary>Sin corrida</summary>
+        <div class="semantic-artifact-content">Ejecuta una comparacion para ver textos, artefactos y metricas nativas.</div>
+      </details>
+    `;
+    return;
+  }
+  dom.initialComparisonStrategyDetails.replaceChildren(
+    ...strategies.map((strategy) => {
+      const details = document.createElement("details");
+      details.className = "artifact-disclosure";
+      const summary = document.createElement("summary");
+      summary.textContent = `${strategy.displayName || strategy.strategyId} - ${comparatorStatusLabel(strategy.status)}`;
+      const content = document.createElement("div");
+      content.className = "semantic-artifact-content";
+      content.append(
+        initialComparisonDefinitionBlock("Metricas comunes", [
+          ["F.O.", strategy.metrics?.bestObjectiveLabel || "--"],
+          ["No dominadas", String(strategy.metrics?.nonDominatedRows ?? 0)],
+          ["HV", strategy.metrics?.hypervolumeLabel || "No aplica"],
+          ["Spread", strategy.metrics?.spreadLabel || "No aplica"],
+        ]),
+        initialComparisonDefinitionBlock("Metricas nativas", [
+          ["Objetivos", (strategy.nativeMetrics?.objectiveNames || []).join(", ") || "--"],
+          ["Mejor F.O.", strategy.nativeMetrics?.bestObjectiveLabel || "--"],
+          ["No dominadas nativas", String(strategy.nativeMetrics?.nonDominatedRows ?? 0)],
+        ]),
+        initialComparisonDisclosure("Peculiaridades y artefactos", renderInitialComparisonArtifacts(strategy)),
+        initialComparisonDisclosure(`Textos finales (${(strategy.rows || []).length})`, renderInitialComparisonRowsTable(strategy.rows || [])),
+      );
+      details.append(summary, content);
+      return details;
+    }),
+  );
+}
+
+function initialComparisonDisclosure(title, contentNode) {
+  const details = document.createElement("details");
+  details.className = "artifact-disclosure nested-artifact-disclosure";
+  const summary = document.createElement("summary");
+  summary.textContent = title;
+  details.append(summary, contentNode);
+  return details;
+}
+
+function initialComparisonDefinitionBlock(title, entries) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "semantic-artifact-group";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const dl = document.createElement("dl");
+  dl.className = "definition-grid compact-definition-grid";
+  renderDefinitionList(dl, entries);
+  wrapper.append(heading, dl);
+  return wrapper;
+}
+
+function renderInitialComparisonArtifacts(strategy) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "semantic-artifact-group";
+  const heading = document.createElement("h3");
+  heading.textContent = "Peculiaridades y artefactos";
+  wrapper.append(heading);
+  const artifacts = strategy.artifacts || {};
+  if (strategy.strategyId === "hybrid-semantic-v7") {
+    const semantic = artifacts.semanticArtifacts || {};
+    wrapper.append(renderInitialComparisonChipGroup("Anclas", semantic.anchors || {}));
+    wrapper.append(renderInitialComparisonPools(semantic.pools || {}));
+  } else {
+    const rolesTopics = artifacts.rolesTopics || {};
+    wrapper.append(renderInitialComparisonChipGroup("Roles/topicos upstream", rolesTopics));
+    const pre = document.createElement("pre");
+    pre.className = "output-box strategy-artifact-json";
+    pre.textContent = JSON.stringify(artifacts.upstreamPrompts || {}, null, 2);
+    wrapper.append(pre);
+  }
+  return wrapper;
+}
+
+function renderInitialComparisonChipGroup(title, groups) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "semantic-artifact-group";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  wrapper.append(heading);
+  Object.entries(groups || {}).forEach(([groupName, values]) => {
+    const listValues = Array.isArray(values) ? values : [];
+    if (!listValues.length) return;
+    const meta = document.createElement("p");
+    meta.className = "artifact-meta";
+    meta.textContent = `${semanticArtifactLabel(groupName)} (${listValues.length})`;
+    const chips = document.createElement("div");
+    chips.className = "chip-list";
+    listValues.forEach((value) => {
+      const chip = document.createElement("span");
+      chip.className = "semantic-chip";
+      chip.textContent = String(value);
+      chips.append(chip);
+    });
+    wrapper.append(meta, chips);
+  });
+  return wrapper;
+}
+
+function renderInitialComparisonPools(pools) {
+  const components = pools.components || {};
+  const normalized = {};
+  Object.entries(components).forEach(([name, payload]) => {
+    normalized[name] = Array.isArray(payload?.items) ? payload.items : [];
+  });
+  return renderInitialComparisonChipGroup("Pools generados", normalized);
+}
+
+function renderInitialComparisonRowsTable(rows) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "table-wrap comparison-population-scroll";
+  const table = document.createElement("table");
+  table.className = "wide-table initial-results-table comparison-results-table";
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>Rank</th>
+        <th>Rol</th>
+        <th>Topico</th>
+        <th>Accion</th>
+        <th>Prompt</th>
+        <th>Texto generado</th>
+        <th>Fidelidad comun</th>
+        <th>Diversidad comun</th>
+        <th>F.O. comun</th>
+        <th>F.O. nativa</th>
+        <th>No dominada</th>
+        <th>Estado</th>
+      </tr>
+    </thead>
+  `;
+  const tbody = document.createElement("tbody");
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="12">Sin resultados todavia.</td></tr>';
+  } else {
+    rows.forEach((row) => {
+      const tr = document.createElement("tr");
+      const evaluated = Array.isArray(row.commonObjectiveVector) && row.commonObjectiveVector.length > 1 && row.status === "ok";
+      if (evaluated && !row.commonNonDominated) tr.classList.add("is-dominated-row");
+      if (row.commonNonDominated) tr.classList.add("is-nondominated-row");
+      tr.innerHTML = `
+        <td>${escapeHtml(String(row.comparisonRank ?? row.rank ?? "--"))}</td>
+        <td class="context-cell">${escapeHtml(row.role || "--")}</td>
+        <td class="context-cell">${escapeHtml(row.topic || "--")}</td>
+        <td class="context-cell">${escapeHtml(row.action || "--")}</td>
+        <td class="context-cell long-cell"><div class="scroll-cell">${escapeHtml(row.prompt || "--")}</div></td>
+        <td class="context-cell long-cell"><div class="scroll-cell">${escapeHtml(row.generatedText || "--")}</div></td>
+        <td>${escapeHtml(formatOptionalNumber(row.commonFidelity, 6))}</td>
+        <td>${escapeHtml(formatOptionalNumber(row.commonDiversity, 6))}</td>
+        <td>${escapeHtml(row.commonObjectiveLabel || "--")}</td>
+        <td>${escapeHtml(row.nativeObjectiveLabel || "--")}</td>
+        <td>${row.commonNonDominated ? '<span class="valid">si</span>' : evaluated ? '<span class="invalid">no</span>' : "--"}</td>
+        <td><span class="${row.status === "ok" ? "valid" : "invalid"}">${escapeHtml(row.status || "--")}</span></td>
+      `;
+      tbody.append(tr);
+    });
+  }
+  table.append(tbody);
+  wrapper.append(table);
+  return wrapper;
+}
+
+function renderInitialComparisonLogs(logs) {
+  if (!logs.length) {
+    dom.initialComparisonLogOutput.textContent = "Sin logs todavia.";
+    return;
+  }
+  dom.initialComparisonLogOutput.textContent = logs
+    .slice(-60)
+    .map((entry) => `[${entry.strategyId}] ${entry.message}`)
+    .join("\n");
 }
 
 function comparatorStatusLabel(status) {
@@ -3302,6 +3995,9 @@ dom.loadInitialModelsButton.addEventListener("click", loadInitialPopulationModel
 dom.runInitialPopulationButton.addEventListener("click", runInitialPopulation);
 dom.cancelInitialPopulationButton.addEventListener("click", cancelInitialPopulationRun);
 dom.clearInitialPopulationButton.addEventListener("click", resetInitialPopulationUi);
+dom.runInitialComparisonButton.addEventListener("click", runInitialComparison);
+dom.cancelInitialComparisonButton.addEventListener("click", cancelInitialComparisonRun);
+dom.clearInitialComparisonButton.addEventListener("click", resetInitialComparisonUi);
 dom.runComparatorButton.addEventListener("click", runComparator);
 dom.cancelComparatorButton.addEventListener("click", cancelComparatorRun);
 dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
@@ -3366,6 +4062,9 @@ applySolutionReferencePreset();
 resetSolutionMetrics();
 resetInitialPopulationUi();
 loadInitialPopulationStrategies();
+buildInitialComparisonStageEditors();
+resetInitialComparisonUi();
+loadInitialComparisonStrategies();
 resetComparatorUi();
 loadComparatorProposals();
 dom.renderedPromptPreview.textContent = renderPrompt();

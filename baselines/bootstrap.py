@@ -46,6 +46,7 @@ class OllamaMetrics:
         self.path = path
         self.lock = threading.Lock()
         self.started_at = utc_now()
+        self.started_perf = time.perf_counter()
         self.calls: list[dict[str, Any]] = []
         self.write()
 
@@ -151,6 +152,8 @@ def build_call_record(
     kwargs: dict[str, Any],
     elapsed: float,
     status: str,
+    started_seconds: float,
+    finished_seconds: float,
     response: Any = None,
     error: BaseException | None = None,
 ) -> dict[str, Any]:
@@ -160,6 +163,9 @@ def build_call_record(
         "model": model_from_call(args, kwargs),
         "format": str(kwargs.get("format")) if kwargs.get("format") is not None else None,
         "clientWallClockSeconds": elapsed,
+        "elapsedSeconds": elapsed,
+        "startedSeconds": started_seconds,
+        "finishedSeconds": finished_seconds,
         "promptChars": message_chars(messages_from_call(args, kwargs)),
         "responseChars": response_chars(response),
         "startedAt": utc_now(),
@@ -209,12 +215,15 @@ def wrap_ollama_method(metrics: OllamaMetrics, method_label: str, original: Any)
     if method_label.startswith("AsyncClient."):
         async def async_wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
             started = time.perf_counter()
+            started_seconds = started - metrics.started_perf
             try:
                 response = await original(self, *args, **kwargs)
             except Exception as error:
-                metrics.add_call(build_call_record(method_label, args, kwargs, time.perf_counter() - started, "error", error=error))
+                finished = time.perf_counter()
+                metrics.add_call(build_call_record(method_label, args, kwargs, finished - started, "error", started_seconds, finished - metrics.started_perf, error=error))
                 raise
-            metrics.add_call(build_call_record(method_label, args, kwargs, time.perf_counter() - started, "ok", response=response))
+            finished = time.perf_counter()
+            metrics.add_call(build_call_record(method_label, args, kwargs, finished - started, "ok", started_seconds, finished - metrics.started_perf, response=response))
             return response
 
         async_wrapper._baseline_metrics_wrapped = True
@@ -222,12 +231,15 @@ def wrap_ollama_method(metrics: OllamaMetrics, method_label: str, original: Any)
 
     def sync_wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
         started = time.perf_counter()
+        started_seconds = started - metrics.started_perf
         try:
             response = original(self, *args, **kwargs)
         except Exception as error:
-            metrics.add_call(build_call_record(method_label, args, kwargs, time.perf_counter() - started, "error", error=error))
+            finished = time.perf_counter()
+            metrics.add_call(build_call_record(method_label, args, kwargs, finished - started, "error", started_seconds, finished - metrics.started_perf, error=error))
             raise
-        metrics.add_call(build_call_record(method_label, args, kwargs, time.perf_counter() - started, "ok", response=response))
+        finished = time.perf_counter()
+        metrics.add_call(build_call_record(method_label, args, kwargs, finished - started, "ok", started_seconds, finished - metrics.started_perf, response=response))
         return response
 
     sync_wrapper._baseline_metrics_wrapped = True
@@ -240,6 +252,9 @@ def main() -> None:
 
     script_path = Path(sys.argv[1]).resolve()
     sys.path.insert(0, str(script_path.parent))
+    project_root = script_path.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)

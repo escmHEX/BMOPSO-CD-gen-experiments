@@ -220,8 +220,8 @@ class InitialPopulationStrategy:
 
 STRATEGIES: tuple[InitialPopulationStrategy, ...] = (
     InitialPopulationStrategy(
-        strategy_id="hybrid-semantic-v6",
-        display_name="Hybrid semantic initialization v6",
+        strategy_id="hybrid-semantic-v7",
+        display_name="Hybrid semantic initialization v7",
         description="Anchors, semantic pools, stratified prompts, SBERT diversity, real generated-text fidelity.",
         objective_names=("semantic_fidelity", "semantic_diversity"),
     ),
@@ -378,7 +378,7 @@ class InitialPopulationService:
 
     def default_config(self) -> dict[str, Any]:
         return {
-            "strategyId": "hybrid-semantic-v6",
+            "strategyId": "hybrid-semantic-v7",
             "referenceText": DEFAULT_REFERENCE_TEXT,
             "domain": DOMAIN_DEFAULT,
             "n": 10,
@@ -534,8 +534,9 @@ class InitialPopulationService:
     def _read_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         defaults = self.default_config()
         strategy_id = str(payload.get("strategyId") or defaults["strategyId"]).strip()
-        if strategy_id != "hybrid-semantic-v6":
+        if strategy_id not in {"hybrid-semantic-v6", "hybrid-semantic-v7"}:
             raise ValueError("Unsupported initial population strategy.")
+        strategy_id = "hybrid-semantic-v7"
 
         reference_text = str(payload.get("referenceText", defaults["referenceText"])).strip()
         if not reference_text:

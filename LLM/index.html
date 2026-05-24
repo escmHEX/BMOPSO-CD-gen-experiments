@@ -18,6 +18,7 @@
           <button class="nav-item is-active" type="button" data-tool="templateChecker">Evaluador de plantillas</button>
           <button class="nav-item" type="button" data-tool="solutionEvaluator">Probar evaluación de soluciones</button>
           <button class="nav-item" type="button" data-tool="initialPopulationStrategy">Estrategia de gen. de pob. inicial</button>
+          <button class="nav-item" type="button" data-tool="initialPopulationComparison">Comparación de estrategias de gen. de pob. inicial</button>
           <button class="nav-item" type="button" data-tool="proposalComparator">Comparador de propuestas</button>
           <button class="nav-item" type="button" data-tool="embeddingCalculator">Calculadora SBERT</button>
         </nav>
@@ -1175,7 +1176,7 @@ Output rules:
             <span id="initialStatusTone" class="status-dot" aria-hidden="true"></span>
             <div>
               <p id="initialStatusTitle">Listo</p>
-              <p id="initialStatusDetail">Ejecuta la estrategia hibrida v6 desde Python usando LM Studio local.</p>
+              <p id="initialStatusDetail">Ejecuta la estrategia hibrida v7 desde Python usando LM Studio local.</p>
             </div>
           </section>
 
@@ -1251,6 +1252,288 @@ Output rules:
                 <h2>Ultimos logs</h2>
               </div>
               <pre id="initialLogOutput" class="output-box">Sin logs todavia.</pre>
+            </article>
+          </section>
+        </section>
+
+        <section id="initialPopulationComparison" class="tool-panel" aria-label="Comparacion de estrategias de generacion de poblacion inicial">
+          <header class="tool-header">
+            <div>
+              <p class="eyebrow">Inicializacion + baselines + metricas comunes</p>
+              <h1>Comparación de estrategias de gen. de pob. inicial</h1>
+            </div>
+            <div class="header-status">
+              <span id="initialComparisonConnectionDot" class="status-dot" aria-hidden="true"></span>
+              <span id="initialComparisonConnectionText">Sin ejecucion</span>
+            </div>
+          </header>
+
+          <section class="grid two-columns">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Comparacion</h2>
+              </div>
+              <div class="form-grid">
+                <label class="span-2">
+                  <span>Texto de referencia</span>
+                  <textarea id="initialComparisonReferenceText" rows="5">Our action center has been updated with more information about restaurant shutdowns and disaster financing options for SMBs.</textarea>
+                </label>
+                <label>
+                  <span>N individuos</span>
+                  <input id="initialComparisonN" type="number" min="1" max="500" value="10">
+                </label>
+                <label>
+                  <span>Top K tabla</span>
+                  <input id="initialComparisonTopK" type="number" min="1" max="500" value="10">
+                </label>
+                <label>
+                  <span>Semilla</span>
+                  <input id="initialComparisonSeed" type="number" min="0" max="2147483647" value="42">
+                </label>
+                <label>
+                  <span>Modelo embeddings comun</span>
+                  <select id="initialComparisonEmbeddingModel">
+                    <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                    <option value="thenlper/gte-small">gte-small</option>
+                  </select>
+                </label>
+              </div>
+              <div class="strategy-check-grid">
+                <label>
+                  <input id="compareHybridStrategy" type="checkbox" value="hybrid-semantic-v7" checked>
+                  <span>Mi estrategia v7</span>
+                </label>
+                <label>
+                  <input id="compareEvolmdStrategy" type="checkbox" value="evolmd-initial" checked>
+                  <span>EVOLMD inicial</span>
+                </label>
+                <label>
+                  <input id="compareEvolmdMoStrategy" type="checkbox" value="evolmd-mo-initial" checked>
+                  <span>EVOLMD-MO inicial</span>
+                </label>
+              </div>
+              <div class="inline-actions">
+                <button id="runInitialComparisonButton" type="button">Ejecutar comparacion</button>
+                <button id="cancelInitialComparisonButton" class="danger" type="button" disabled>Cancelar</button>
+                <button id="clearInitialComparisonButton" class="secondary" type="button">Limpiar</button>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Baselines</h2>
+              </div>
+              <details class="artifact-disclosure">
+                <summary>Config. EVOLMD y EVOLMD-MO</summary>
+                <div class="semantic-artifact-content">
+                  <div class="form-grid">
+                    <label>
+                      <span>Modelo Ollama</span>
+                      <input id="initialComparisonOllamaModel" type="text" value="llama3" autocomplete="off">
+                    </label>
+                    <label>
+                      <span>Modelo BERT EVOLMD</span>
+                      <input id="initialComparisonBertModel" type="text" value="bert-base-uncased" autocomplete="off">
+                    </label>
+                    <label>
+                      <span>Timeout baseline (min)</span>
+                      <input id="initialComparisonBaselineTimeout" type="number" min="1" max="1440" value="60">
+                    </label>
+                    <label>
+                      <span>Temp. prompts</span>
+                      <input id="initialComparisonTempPrompts" type="number" min="0" max="2" step="0.05" value="0.9">
+                    </label>
+                    <label>
+                      <span>Temp. keywords</span>
+                      <input id="initialComparisonTempKeywords" type="number" min="0" max="2" step="0.05" value="0.3">
+                    </label>
+                    <label>
+                      <span>Temp. generacion</span>
+                      <input id="initialComparisonTempGeneration" type="number" min="0" max="2" step="0.05" value="0.7">
+                    </label>
+                  </div>
+                </div>
+              </details>
+            </article>
+          </section>
+
+          <section class="panel">
+            <details class="artifact-disclosure">
+              <summary>Config. mi estrategia v7</summary>
+              <div class="semantic-artifact-content">
+                <div class="form-grid">
+                  <label>
+                    <span>API LM Studio</span>
+                    <select id="initialComparisonLmApiMode">
+                      <option value="native">REST v1 (/api/v1)</option>
+                      <option value="openai">OpenAI-compatible (/v1)</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Base URL LM Studio</span>
+                    <input id="initialComparisonLmStudioBase" type="text" value="http://127.0.0.1:1234" autocomplete="off">
+                  </label>
+                  <label>
+                    <span>Paralelismo generacion</span>
+                    <input id="initialComparisonGenerationParallelism" type="number" min="1" max="16" value="1">
+                  </label>
+                  <label>
+                    <span>Timeout estrategia (s)</span>
+                    <input id="initialComparisonHybridTimeout" type="number" min="5" max="3600" value="120">
+                  </label>
+                  <label class="span-2">
+                    <span>Dominio general</span>
+                    <input id="initialComparisonDomain" type="text" value="Natural-disaster and emergency scenario messages.">
+                  </label>
+                  <label>
+                    <span>Max. palabras roles</span>
+                    <input id="initialComparisonRolesMaxWords" type="number" min="1" max="20" value="6">
+                  </label>
+                  <label>
+                    <span>Max. palabras topicos</span>
+                    <input id="initialComparisonTopicsMaxWords" type="number" min="1" max="30" value="8">
+                  </label>
+                  <label>
+                    <span>Max. palabras acciones</span>
+                    <input id="initialComparisonActionsMaxWords" type="number" min="1" max="20" value="6">
+                  </label>
+                  <label>
+                    <span>Min. palabras texto</span>
+                    <input id="initialComparisonGeneratedMinWords" type="number" min="1" max="500" value="1">
+                  </label>
+                  <label>
+                    <span>Max. palabras texto</span>
+                    <input id="initialComparisonGeneratedMaxWords" type="number" min="1" max="500" value="120">
+                  </label>
+                  <label class="span-2">
+                    <span>Plantilla deterministica final</span>
+                    <textarea id="initialComparisonPromptTemplate" class="code-textarea" rows="5">Generate a short natural-disaster scenario message using the following semantic components: role = {role}; topic = {topic}; action = {action}. The generated message must follow the role, address the topic, and satisfy the action.</textarea>
+                  </label>
+                </div>
+                <div id="initialComparisonHybridStageConfigs" class="grid two-columns"></div>
+              </div>
+            </details>
+          </section>
+
+          <section class="metrics-grid" aria-label="Resumen comparacion poblacion inicial">
+            <article class="metric">
+              <span>Estado</span>
+              <strong id="initialComparisonRunStatus">--</strong>
+              <p>Estado general de la corrida backend.</p>
+            </article>
+            <article class="metric">
+              <span>Progreso</span>
+              <strong id="initialComparisonProgressPercent">--</strong>
+              <p id="initialComparisonProgressSummary">Sin corrida activa.</p>
+            </article>
+            <article class="metric">
+              <span>Llamadas LLM</span>
+              <strong id="initialComparisonLlmCalls">--</strong>
+              <p id="initialComparisonLlmCallsDetail">LM Studio y Ollama, separados por estrategia.</p>
+            </article>
+            <article class="metric">
+              <span>Wall-clock</span>
+              <strong id="initialComparisonWallClock">--</strong>
+              <p>Tiempo real total de la comparacion.</p>
+            </article>
+            <article class="metric">
+              <span>Tiempo LLM</span>
+              <strong id="initialComparisonLlmTime">--</strong>
+              <p>Suma de latencias cliente.</p>
+            </article>
+            <article class="metric">
+              <span>Tiempo embeddings</span>
+              <strong id="initialComparisonEmbeddingTime">--</strong>
+              <p>Evaluacion nativa y metricas comunes.</p>
+            </article>
+            <article class="metric">
+              <span>Estrategias completadas</span>
+              <strong id="initialComparisonCompletedStrategies">--</strong>
+              <p>Estrategias seleccionadas con salida normalizada.</p>
+            </article>
+            <article class="metric">
+              <span>Run ID</span>
+              <strong id="initialComparisonRunId">--</strong>
+              <p>Carpeta en runs/initial-population-comparison.</p>
+            </article>
+          </section>
+
+          <section class="status-panel" aria-live="polite">
+            <span id="initialComparisonStatusTone" class="status-dot" aria-hidden="true"></span>
+            <div>
+              <p id="initialComparisonStatusTitle">Listo</p>
+              <p id="initialComparisonStatusDetail">Ejecuta estrategias de inicializacion en secuencia y calcula metricas comunes post-hoc.</p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Progreso de corrida</h2>
+              <span id="initialComparisonProgressDetail">Sin ejecucion.</span>
+            </div>
+            <div class="progress-track" aria-hidden="true">
+              <span id="initialComparisonProgressBar"></span>
+            </div>
+            <dl id="initialComparisonProgressDetails" class="definition-grid compact-definition-grid"></dl>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Tabla comparativa de metricas</h2>
+              <span>Metricas comunes post-hoc sobre los N textos finales.</span>
+            </div>
+            <div class="table-wrap">
+              <table class="wide-table comparison-metrics-table">
+                <thead>
+                  <tr>
+                    <th>Estrategia</th>
+                    <th>Estado</th>
+                    <th>Runtime</th>
+                    <th>Individuos</th>
+                    <th>No dominadas</th>
+                    <th>Mejor F.O. comun</th>
+                    <th>HV</th>
+                    <th>Spread</th>
+                    <th>Wall-clock</th>
+                    <th>Sin paralelismo estim.</th>
+                    <th>Llamadas LLM</th>
+                    <th>Tiempo LLM</th>
+                    <th>Embeddings comunes</th>
+                  </tr>
+                </thead>
+                <tbody id="initialComparisonMetricsBody">
+                  <tr><td colspan="13">Sin resultados todavia.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Resultados por estrategia</h2>
+              <span>Textos finales ordenados con no dominadas primero.</span>
+            </div>
+            <div id="initialComparisonStrategyDetails" class="collapsible-grid">
+              <details class="artifact-disclosure">
+                <summary>Sin corrida</summary>
+                <div class="semantic-artifact-content">Ejecuta una comparacion para ver textos, artefactos y metricas nativas.</div>
+              </details>
+            </div>
+          </section>
+
+          <section class="grid two-columns results-layout">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Ultimos logs</h2>
+              </div>
+              <pre id="initialComparisonLogOutput" class="output-box">Sin logs todavia.</pre>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Contrato de integracion</h2>
+              </div>
+              <dl id="initialComparisonIntegrationDetails" class="definition-grid"></dl>
             </article>
           </section>
         </section>

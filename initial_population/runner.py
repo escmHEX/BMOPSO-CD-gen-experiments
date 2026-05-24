@@ -880,7 +880,7 @@ def summarize_population(population: list[dict[str, Any]], config: dict[str, Any
     }
     return {
         "strategyId": config["strategyId"],
-        "displayName": "Hybrid semantic initialization v6",
+        "displayName": "Hybrid semantic initialization v7",
         "status": "completed",
         "rows": population,
         "metrics": metrics,
@@ -1005,8 +1005,8 @@ def main() -> int:
     except StrategyExecutionError as error:
         recorder = RunRecorder(output_dir, config) if not (output_dir / "config.json").exists() else None
         failure = {
-            "strategyId": config.get("strategyId", "hybrid-semantic-v6"),
-            "displayName": "Hybrid semantic initialization v6",
+            "strategyId": config.get("strategyId", "hybrid-semantic-v7"),
+            "displayName": "Hybrid semantic initialization v7",
             "status": "failed",
             "rows": [],
             "metrics": {},
@@ -1024,8 +1024,8 @@ def main() -> int:
     except Exception as error:
         stage = latest_logged_stage(output_dir, "unexpected")
         failure = {
-            "strategyId": config.get("strategyId", "hybrid-semantic-v6"),
-            "displayName": "Hybrid semantic initialization v6",
+            "strategyId": config.get("strategyId", "hybrid-semantic-v7"),
+            "displayName": "Hybrid semantic initialization v7",
             "status": "failed",
             "rows": [],
             "metrics": {},

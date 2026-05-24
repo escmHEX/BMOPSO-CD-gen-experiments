@@ -564,6 +564,28 @@ label span {
   gap: 8px;
 }
 
+.strategy-check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.strategy-check-grid label {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+  padding: 10px 12px;
+}
+
+.strategy-check-grid input {
+  width: auto;
+}
+
 .semantic-chip {
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -629,6 +651,29 @@ td {
   min-width: 1600px;
 }
 
+.comparison-metrics-table {
+  min-width: 1900px;
+}
+
+.comparison-results-table {
+  min-width: 2100px;
+}
+
+.comparison-population-scroll {
+  height: min(704px, 70vh);
+  overflow-x: auto;
+  overflow-y: auto;
+}
+
+.strategy-artifact-json {
+  min-height: 120px;
+  max-height: 320px;
+}
+
+.nested-artifact-disclosure {
+  margin-top: 12px;
+}
+
 .wide-table.initial-results-table {
   min-width: 1900px;
 }
@@ -667,6 +712,10 @@ td {
 }
 
 #initialPopulationStrategy .code-textarea {
+  min-height: 180px;
+}
+
+#initialPopulationComparison .code-textarea {
   min-height: 180px;
 }
 
