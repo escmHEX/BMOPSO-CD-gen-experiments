@@ -4015,7 +4015,7 @@ function showTurbulenceMetricBreakdown(event, strategy, key, config) {
   `;
   popover.hidden = false;
   const rect = event.currentTarget.getBoundingClientRect();
-  const width = Math.min(520, window.innerWidth - 24);
+  const width = Math.max(160, Math.min(560, window.innerWidth - 24));
   popover.style.width = `${width}px`;
   const top = Math.min(window.innerHeight - popover.offsetHeight - 12, rect.bottom + 8);
   const left = Math.min(window.innerWidth - width - 12, Math.max(12, rect.left));

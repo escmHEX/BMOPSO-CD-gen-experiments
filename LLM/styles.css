@@ -1114,11 +1114,16 @@ td.metric-best {
 .metric-breakdown-popover {
   position: fixed;
   z-index: 70;
+  box-sizing: border-box;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow);
   padding: 14px;
+  overflow-wrap: anywhere;
 }
 
 .metric-breakdown-popover[hidden] {
@@ -1127,21 +1132,26 @@ td.metric-best {
 
 .metric-breakdown-title {
   font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
 .metric-breakdown-subtitle {
   color: var(--muted);
   font-size: 0.85rem;
   margin-top: 2px;
+  overflow-wrap: anywhere;
 }
 
 .metric-breakdown-popover p {
   margin: 10px 0;
+  overflow-wrap: anywhere;
 }
 
 .metric-breakdown-popover table {
   width: 100%;
+  min-width: 0;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 0.86rem;
 }
 
@@ -1154,7 +1164,18 @@ td.metric-best {
 }
 
 .metric-breakdown-popover td:last-child {
+  overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.metric-breakdown-popover th:first-child,
+.metric-breakdown-popover td:first-child {
+  width: 44px;
+}
+
+.metric-breakdown-popover th:nth-child(2),
+.metric-breakdown-popover td:nth-child(2) {
+  width: 90px;
 }
 
 .metric-explainer {
