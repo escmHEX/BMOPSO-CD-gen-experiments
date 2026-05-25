@@ -286,6 +286,7 @@ class TurbulenceComparisonService:
             "strategies": ["llm", "wordnet-ppdb-sbert", "distilbert-sbert"],
             "individualCount": 5,
             "seed": 42,
+            "repetitionsK": 1,
             "kCandidates": 5,
             "turbulenceMinSimilarity": 0.55,
             "turbulenceMaxSimilarity": 0.9,
@@ -396,11 +397,44 @@ class TurbulenceComparisonService:
 
     def _execute(self, run: dict[str, Any]) -> dict[str, Any]:
         config = run["config"]
+        repetitions_k = int(config.get("repetitionsK") or 1)
+        if repetitions_k <= 1:
+            return self._execute_single(run, config, 1, config["seed"])
+
+        repetitions: list[dict[str, Any]] = []
+        for repetition_index in range(repetitions_k):
+            if self._is_cancelled(run):
+                break
+            repetition_seed = (int(config["seed"]) + repetition_index) % 2_147_483_648
+            repetition_config = {**config, "seed": repetition_seed}
+            self._set_progress(
+                run,
+                "repetition",
+                f"Ejecutando repeticion {repetition_index + 1}/{repetitions_k} con semilla {repetition_seed}.",
+                100 * repetition_index / repetitions_k,
+                repetition_index,
+                repetitions_k,
+            )
+            repetition = self._execute_single(run, repetition_config, repetition_index + 1, repetition_seed)
+            repetitions.append(repetition)
+            write_json(Path(run["runDir"]) / f"repetition-{repetition_index + 1:03d}.json", repetition)
+
+        result = aggregate_turbulence_repetitions(repetitions, config)
+        write_json(Path(run["runDir"]) / "result.json", result)
+        return result
+
+    def _execute_single(
+        self,
+        run: dict[str, Any],
+        config: dict[str, Any],
+        repetition_index: int,
+        repetition_seed: int,
+    ) -> dict[str, Any]:
         individuals = self._load_individuals(config["individualCount"])
         movements = create_movement_plan(individuals, config["seed"])
         self._log(
             run,
-            f"Plan compartido: {len(movements)} movimiento(s), un componente equiprobable por individuo.",
+            f"Repeticion {repetition_index}: {len(movements)} movimiento(s), semilla {repetition_seed}.",
         )
         self._set_progress(run, "baseline_generation", "Generando baseline sin turbulencia.", 8, 0, max(1, len(movements)))
 
@@ -467,6 +501,7 @@ class TurbulenceComparisonService:
             "warnings": warnings,
             "configSummary": {
                 "seed": config["seed"],
+                "repetitionIndex": repetition_index,
                 "movementPolicy": "one_uniform_component_per_individual",
                 "kCandidates": config["kCandidates"],
                 "operatorParallelism": config["operatorParallelism"],
@@ -690,6 +725,7 @@ class TurbulenceComparisonService:
             "strategies": selected,
             "individualCount": int(clamp_number(payload.get("individualCount", defaults["individualCount"]), 1, 200)),
             "seed": int(clamp_number(payload.get("seed", defaults["seed"]), 0, 2_147_483_647)),
+            "repetitionsK": int(clamp_number(payload.get("repetitionsK", defaults["repetitionsK"]), 1, 30)),
             "kCandidates": int(clamp_number(payload.get("kCandidates", defaults["kCandidates"]), 1, 30)),
             "turbulenceMinSimilarity": min_similarity,
             "turbulenceMaxSimilarity": max_similarity,
@@ -929,6 +965,191 @@ def comparison_warnings(
     if recommendation.get("strategyId") is None:
         warnings.append(str(recommendation.get("message") or "Sin recomendacion disponible."))
     return warnings
+
+
+def weighted_average(items: list[dict[str, Any]], value_key: str, weight_key: str = "completedRows") -> float | None:
+    weighted = [
+        (finite_float(item.get(value_key)), finite_float(item.get(weight_key)))
+        for item in items
+        if item.get(value_key) is not None and finite_float(item.get(weight_key)) > 0
+    ]
+    if not weighted:
+        values = [finite_float(item.get(value_key)) for item in items if item.get(value_key) is not None]
+        return sum(values) / len(values) if values else None
+    total_weight = sum(weight for _, weight in weighted)
+    return sum(value * weight for value, weight in weighted) / total_weight if total_weight else None
+
+
+def aggregate_final_summaries(summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    completed_rows = sum(int(finite_float(summary.get("completedRows"))) for summary in summaries)
+    all_rows = [
+        row
+        for summary in summaries
+        for row in (summary.get("rows") or [])
+        if isinstance(row, dict)
+    ]
+    hypervolume = weighted_average(summaries, "hypervolume")
+    spread = weighted_average(summaries, "spread")
+    return {
+        "completedRows": completed_rows,
+        "averageFidelity": weighted_average(summaries, "averageFidelity"),
+        "averageDiversity": weighted_average(summaries, "averageDiversity"),
+        "bestFidelity": max((finite_float(summary.get("bestFidelity"), -2.0) for summary in summaries if summary.get("bestFidelity") is not None), default=None),
+        "bestDiversity": max((finite_float(summary.get("bestDiversity"), -2.0) for summary in summaries if summary.get("bestDiversity") is not None), default=None),
+        "hypervolume": hypervolume,
+        "spread": spread,
+        "rows": all_rows,
+        "repetitions": len(summaries),
+    }
+
+
+def aggregate_generation_costs(costs: list[dict[str, Any]]) -> dict[str, Any]:
+    result = {
+        "llmCalls": sum(int(finite_float(cost.get("llmCalls"))) for cost in costs),
+        "llmClientWallClockSeconds": sum(finite_float(cost.get("llmClientWallClockSeconds")) for cost in costs),
+        "wallClockSeconds": sum(finite_float(cost.get("wallClockSeconds")) for cost in costs),
+        "promptTokens": sum(int(finite_float(cost.get("promptTokens"))) for cost in costs),
+        "completionTokens": sum(int(finite_float(cost.get("completionTokens"))) for cost in costs),
+        "totalTokens": sum(int(finite_float(cost.get("totalTokens"))) for cost in costs),
+    }
+    result["wallClockLabel"] = format_duration(result["wallClockSeconds"])
+    return result
+
+
+def aggregate_embedding_costs(costs: list[dict[str, Any]]) -> dict[str, Any]:
+    seconds = sum(finite_float(cost.get("embeddingWallClockSeconds")) for cost in costs)
+    texts = sum(int(finite_float(cost.get("embeddingTexts"))) for cost in costs)
+    return {
+        "embeddingModel": next((cost.get("embeddingModel") for cost in costs if cost.get("embeddingModel")), None),
+        "embeddingTexts": texts,
+        "embeddingWallClockSeconds": seconds,
+        "embeddingWallClockLabel": format_duration(seconds),
+    }
+
+
+def aggregate_operator_metrics(metrics_list: list[dict[str, Any]]) -> dict[str, Any]:
+    moves = sum(int(finite_float(metrics.get("moves"))) for metrics in metrics_list)
+    successes = sum(int(finite_float(metrics.get("successes"))) for metrics in metrics_list)
+    coverage = sum(int(finite_float(metrics.get("coverageCount"))) for metrics in metrics_list)
+    cumulative = sum(finite_float(metrics.get("operatorCumulativeSeconds")) for metrics in metrics_list)
+    wall = sum(finite_float(metrics.get("operatorWallClockSeconds")) for metrics in metrics_list)
+    cost = aggregate_costs([metrics.get("cost") or {} for metrics in metrics_list])
+    average = cumulative / moves if moves else None
+    return {
+        "moves": moves,
+        "successes": successes,
+        "successRate": successes / moves if moves else 0.0,
+        "coverageCount": coverage,
+        "coverageRate": coverage / moves if moves else 0.0,
+        "operatorParallelism": max((int(finite_float(metrics.get("operatorParallelism"))) for metrics in metrics_list), default=1),
+        "operatorCumulativeSeconds": cumulative,
+        "operatorCumulativeLabel": format_duration(cumulative),
+        "operatorWallClockSeconds": wall,
+        "operatorWallClockLabel": format_duration(wall),
+        "operatorAverageSeconds": average,
+        "operatorAverageLabel": format_duration(average),
+        "cost": cost,
+    }
+
+
+def aggregate_turbulence_repetitions(repetitions: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
+    completed = [repetition for repetition in repetitions if repetition.get("strategies")]
+    if not completed:
+        return {
+            "movementCount": 0,
+            "individualCount": config["individualCount"],
+            "ppdb": {},
+            "baseline": {"completedRows": 0, "averageFidelity": None, "averageDiversity": None, "rows": []},
+            "strategies": [],
+            "recommendation": {"strategyId": None, "message": "Sin repeticiones completadas."},
+            "warnings": ["Sin repeticiones completadas."],
+            "repetitionsK": config.get("repetitionsK", 1),
+            "completedRepetitions": 0,
+            "repetitions": repetitions,
+        }
+
+    baseline = aggregate_final_summaries([repetition.get("baseline") or {} for repetition in completed])
+    baseline["generationCost"] = aggregate_generation_costs([
+        (repetition.get("baseline") or {}).get("generationCost") or {}
+        for repetition in completed
+    ])
+    baseline["embeddingCost"] = aggregate_embedding_costs([
+        (repetition.get("baseline") or {}).get("embeddingCost") or {}
+        for repetition in completed
+    ])
+
+    strategy_results: list[dict[str, Any]] = []
+    for strategy_id in config["strategies"]:
+        per_repetition = [
+            strategy
+            for repetition in completed
+            for strategy in repetition.get("strategies", [])
+            if strategy.get("strategyId") == strategy_id
+        ]
+        if not per_repetition:
+            continue
+        movement_rows = []
+        final_rows = []
+        warnings = []
+        for repetition, strategy in [
+            (repetition, strategy)
+            for repetition in completed
+            for strategy in repetition.get("strategies", [])
+            if strategy.get("strategyId") == strategy_id
+        ]:
+            repetition_meta = repetition.get("configSummary") or {}
+            for row in strategy.get("movementRows") or []:
+                movement_rows.append({**row, "repetitionIndex": repetition_meta.get("repetitionIndex"), "repetitionSeed": repetition_meta.get("seed")})
+            for row in strategy.get("finalRows") or []:
+                final_rows.append({**row, "repetitionIndex": repetition_meta.get("repetitionIndex"), "repetitionSeed": repetition_meta.get("seed")})
+            warnings.extend(str(warning) for warning in strategy.get("warnings") or [])
+
+        final_metrics = aggregate_final_summaries([strategy.get("finalMetrics") or {} for strategy in per_repetition])
+        strategy_result = {
+            "strategyId": strategy_id,
+            "displayName": STRATEGIES[strategy_id],
+            "status": "completed",
+            "operatorMetrics": aggregate_operator_metrics([strategy.get("operatorMetrics") or {} for strategy in per_repetition]),
+            "finalMetrics": final_metrics,
+            "generationCost": aggregate_generation_costs([strategy.get("generationCost") or {} for strategy in per_repetition]),
+            "finalEmbeddingCost": aggregate_embedding_costs([strategy.get("finalEmbeddingCost") or {} for strategy in per_repetition]),
+            "movementRows": movement_rows[:300],
+            "finalRows": final_rows,
+            "warnings": warnings,
+            "repetitionsK": config.get("repetitionsK", 1),
+            "completedRepetitions": len(per_repetition),
+            "repetitions": per_repetition,
+        }
+        strategy_result["deltas"] = final_metric_deltas(baseline, final_metrics)
+        strategy_result["relativeOperatorCost"] = relative_operator_cost(strategy_result["operatorMetrics"])
+        strategy_results.append(strategy_result)
+
+    recommendation = recommend_strategy(strategy_results, config)
+    warnings = comparison_warnings(baseline, strategy_results, recommendation)
+    return {
+        "movementCount": sum(int(repetition.get("movementCount") or 0) for repetition in completed),
+        "individualCount": config["individualCount"],
+        "ppdb": completed[-1].get("ppdb") or {},
+        "baseline": baseline,
+        "strategies": strategy_results,
+        "recommendation": recommendation,
+        "warnings": warnings,
+        "repetitionsK": config.get("repetitionsK", 1),
+        "completedRepetitions": len(completed),
+        "repetitions": repetitions,
+        "configSummary": {
+            "seed": config["seed"],
+            "repetitionsK": config.get("repetitionsK", 1),
+            "seeds": [(int(config["seed"]) + index) % 2_147_483_648 for index in range(int(config.get("repetitionsK") or 1))],
+            "movementPolicy": "one_uniform_component_per_individual",
+            "kCandidates": config["kCandidates"],
+            "operatorParallelism": config["operatorParallelism"],
+            "generationParallelism": config["generationParallelism"],
+            "turbulenceRange": [config["turbulenceMinSimilarity"], config["turbulenceMaxSimilarity"]],
+            "embeddingModel": config["embeddingModel"],
+            "distilbertModel": config["distilbertModel"],
+        },
+    }
 
 
 def summarize_operator_rows(

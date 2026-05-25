@@ -268,6 +268,25 @@ def main() -> None:
     for module_name in preload_modules:
         importlib.import_module(module_name)
 
+    seed = os.environ.get("BASELINE_RANDOM_SEED")
+    if seed:
+        seed_value = int(seed)
+        import random
+
+        random.seed(seed_value)
+        try:
+            import numpy as np
+
+            np.random.seed(seed_value % (2**32 - 1))
+        except Exception:
+            pass
+        try:
+            import torch
+
+            torch.manual_seed(seed_value)
+        except Exception:
+            pass
+
     install_ollama_metrics()
 
     sys.argv = [str(script_path), *sys.argv[2:]]

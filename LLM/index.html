@@ -1335,6 +1335,10 @@ Output rules:
                   <input id="initialComparisonSeed" type="number" min="0" max="2147483647" value="42">
                 </label>
                 <label>
+                  <span>K repeticiones</span>
+                  <input id="initialComparisonRepetitions" type="number" min="1" max="30" value="1">
+                </label>
+                <label>
                   <span>Modelo embeddings comun</span>
                   <select id="initialComparisonEmbeddingModel">
                     <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
@@ -1622,6 +1626,10 @@ Output rules:
                 <label>
                   <span>Semilla</span>
                   <input id="turbulenceSeed" type="number" min="0" max="2147483647" value="42">
+                </label>
+                <label>
+                  <span>K repeticiones</span>
+                  <input id="turbulenceRepetitions" type="number" min="1" max="30" value="1">
                 </label>
                 <label>
                   <span>Selección componente</span>
@@ -1967,6 +1975,14 @@ Context:
                 <label>
                   <span>Top K tabla</span>
                   <input id="comparatorTopK" type="number" min="1" max="200" value="10">
+                </label>
+                <label>
+                  <span>Semilla</span>
+                  <input id="comparatorSeed" type="number" min="0" max="2147483647" value="42">
+                </label>
+                <label>
+                  <span>K repeticiones</span>
+                  <input id="comparatorRepetitions" type="number" min="1" max="30" value="1">
                 </label>
                 <label>
                   <span>Propuestas paralelas</span>

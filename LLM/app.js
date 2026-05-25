@@ -539,6 +539,7 @@ const dom = {
   initialComparisonN: document.querySelector("#initialComparisonN"),
   initialComparisonTopK: document.querySelector("#initialComparisonTopK"),
   initialComparisonSeed: document.querySelector("#initialComparisonSeed"),
+  initialComparisonRepetitions: document.querySelector("#initialComparisonRepetitions"),
   initialComparisonEmbeddingModel: document.querySelector("#initialComparisonEmbeddingModel"),
   compareHybridStrategy: document.querySelector("#compareHybridStrategy"),
   compareEvolmdStrategy: document.querySelector("#compareEvolmdStrategy"),
@@ -592,6 +593,7 @@ const dom = {
   turbulenceStrategyDistilbert: document.querySelector("#turbulenceStrategyDistilbert"),
   turbulenceIndividualCount: document.querySelector("#turbulenceIndividualCount"),
   turbulenceSeed: document.querySelector("#turbulenceSeed"),
+  turbulenceRepetitions: document.querySelector("#turbulenceRepetitions"),
   turbulenceChangeThreshold: document.querySelector("#turbulenceChangeThreshold"),
   turbulenceCandidateCount: document.querySelector("#turbulenceCandidateCount"),
   turbulenceComparisonMinSimilarity: document.querySelector("#turbulenceComparisonMinSimilarity"),
@@ -650,6 +652,8 @@ const dom = {
   comparatorReferenceText: document.querySelector("#comparatorReferenceText"),
   comparatorModel: document.querySelector("#comparatorModel"),
   comparatorTopK: document.querySelector("#comparatorTopK"),
+  comparatorSeed: document.querySelector("#comparatorSeed"),
+  comparatorRepetitions: document.querySelector("#comparatorRepetitions"),
   comparatorProposalParallelism: document.querySelector("#comparatorProposalParallelism"),
   comparatorTimeoutMinutes: document.querySelector("#comparatorTimeoutMinutes"),
   comparatorN: document.querySelector("#comparatorN"),
@@ -2956,12 +2960,14 @@ function readInitialComparisonConfig() {
   const n = Math.floor(readClampedNumber(dom.initialComparisonN, "N individuos", 1, 500));
   const topK = Math.floor(readClampedNumber(dom.initialComparisonTopK, "Top K tabla", 1, 500));
   const seed = Math.floor(readClampedNumber(dom.initialComparisonSeed, "Semilla", 0, 2147483647));
+  const repetitionsK = Math.floor(readClampedNumber(dom.initialComparisonRepetitions, "K repeticiones", 1, 30));
   return {
     referenceText,
     selectedStrategies,
     n,
     topK,
     seed,
+    repetitionsK,
     commonEmbeddingModel: dom.initialComparisonEmbeddingModel.value,
     hybrid: {
       strategyId: "hybrid-semantic-v7",
@@ -3177,7 +3183,7 @@ function initialComparisonStrategyViews(run) {
   }));
 }
 
-function renderInitialComparisonProgress(progress) {
+function renderInitialComparisonProgress(progress, config = null) {
   if (!progress) {
     dom.initialComparisonProgressPercent.textContent = "--";
     dom.initialComparisonProgressSummary.textContent = "Sin corrida activa.";
@@ -3200,6 +3206,7 @@ function renderInitialComparisonProgress(progress) {
     ["Tiempo transcurrido", progress.elapsedLabel || "--"],
     ["Tiempo restante estimado", progress.remainingLabel || "No disponible"],
     ["Estrategia activa", progress.activeStrategyName || "--"],
+    ["K repeticiones", config?.repetitionsK ?? 1],
     ["Cola", `${progress.queuedStrategies ?? 0}/${progress.totalStrategies ?? 0}`],
   ]);
 }
@@ -3235,7 +3242,7 @@ function renderInitialComparisonRun(run) {
   dom.initialComparisonConnectionDot.classList.toggle("is-error", run.status === "failed");
 
   const strategies = initialComparisonStrategyViews(run);
-  renderInitialComparisonProgress(run.progress || null);
+  renderInitialComparisonProgress(run.progress || null, run.config || null);
   renderInitialComparisonCostSummary(run.costSummary || null);
   renderInitialComparisonMetrics(strategies);
   renderInitialComparisonStrategyDetails(strategies);
@@ -3595,6 +3602,7 @@ function readTurbulenceComparisonConfig() {
     strategies,
     individualCount: Math.floor(readClampedNumber(dom.turbulenceIndividualCount, "N individuos", 1, 200)),
     seed: Math.floor(readClampedNumber(dom.turbulenceSeed, "Semilla", 0, 2147483647)),
+    repetitionsK: Math.floor(readClampedNumber(dom.turbulenceRepetitions, "K repeticiones", 1, 30)),
     kCandidates: Math.floor(readClampedNumber(dom.turbulenceCandidateCount, "K candidatos", 1, 30)),
     turbulenceMinSimilarity: minSimilarity,
     turbulenceMaxSimilarity: maxSimilarity,
@@ -3748,13 +3756,14 @@ function renderTurbulenceComparisonRun(run) {
   const result = run.result || {};
   const baseline = result.baseline || {};
   const ppdb = result.ppdb || {};
+  const repetitionsK = result.repetitionsK ?? run.config?.repetitionsK ?? 1;
   const percent = Number.isFinite(Number(progress.percent)) ? Math.round(Number(progress.percent)) : 0;
   const statusLabel = turbulenceStatusLabel(run.status);
 
   dom.turbulenceRunStatus.textContent = statusLabel;
   dom.turbulenceRunStatusDetail.textContent = progress.message || run.error || "Sin detalle.";
   dom.turbulenceProgressPercent.textContent = `${percent}%`;
-  dom.turbulenceProgressSummary.textContent = `${progress.completed ?? 0}/${progress.total ?? 0} - ${progress.stage || "--"}`;
+  dom.turbulenceProgressSummary.textContent = `${progress.completed ?? 0}/${progress.total ?? 0} - ${progress.stage || "--"} | K ${repetitionsK}`;
   dom.turbulenceMovementCount.textContent = result.movementCount ?? "--";
   dom.turbulenceRunId.textContent = run.runId || "--";
   dom.turbulenceBaselineFidelity.textContent = formatOptionalNumber(baseline.averageFidelity, 6);
@@ -4120,6 +4129,8 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
     dom.comparatorReferenceText,
     dom.comparatorModel,
     dom.comparatorTopK,
+    dom.comparatorSeed,
+    dom.comparatorRepetitions,
     dom.comparatorProposalParallelism,
     dom.comparatorTimeoutMinutes,
     dom.comparatorN,
@@ -4187,6 +4198,8 @@ function readComparatorConfig() {
     referenceText,
     model,
     topK: Math.floor(readClampedNumber(dom.comparatorTopK, "Top K tabla", 1, 200)),
+    seed: Math.floor(readClampedNumber(dom.comparatorSeed, "Semilla", 0, 2147483647)),
+    repetitionsK: Math.floor(readClampedNumber(dom.comparatorRepetitions, "K repeticiones", 1, 30)),
     n: Math.floor(readClampedNumber(dom.comparatorN, "N individuos", 1, 500)),
     generaciones: Math.floor(readClampedNumber(dom.comparatorGeneraciones, "Generaciones", 0, 500)),
     k: Math.floor(readClampedNumber(dom.comparatorK, "K torneo", 1, 100)),
@@ -4350,7 +4363,7 @@ function comparatorProposalViews(run) {
   return merged;
 }
 
-function renderComparatorProgress(progress) {
+function renderComparatorProgress(progress, config = null) {
   if (!progress) {
     dom.comparatorProgressPercent.textContent = "--";
     dom.comparatorProgressSummary.textContent = "Sin corrida activa.";
@@ -4374,6 +4387,7 @@ function renderComparatorProgress(progress) {
     ["Tiempo transcurrido", progress.elapsedLabel || "--"],
     ["Tiempo restante estimado", progress.remainingLabel || "No disponible"],
     ["Propuesta activa", progress.activeProposalName || "--"],
+    ["K repeticiones", config?.repetitionsK ?? 1],
     ["Cola", `${progress.queuedProposals ?? 0}/${progress.totalProposals ?? 0}`],
   ]);
 }
@@ -4411,7 +4425,7 @@ function renderComparatorRun(run) {
   dom.comparatorConnectionDot.classList.toggle("is-busy", run.status === "queued" || run.status === "running");
   dom.comparatorConnectionDot.classList.toggle("is-error", run.status === "failed");
 
-  renderComparatorProgress(run.progress || null);
+  renderComparatorProgress(run.progress || null, run.config || null);
   renderComparatorCostSummary(run.costSummary || null);
   renderComparatorCards(comparatorProposalViews(run));
   renderComparatorRows(rows);
