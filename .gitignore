@@ -2,6 +2,7 @@
 runs/
 .server-*.log
 *.tmp
+data/external/ppdb/
 
 # External datasets
 data/external/ppdb/

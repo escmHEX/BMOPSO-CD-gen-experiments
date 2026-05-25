@@ -16,7 +16,10 @@ from pathlib import Path
 from baselines.comparator import ComparatorService
 from initial_population.comparison import InitialPopulationComparisonService
 from initial_population.service import InitialPopulationService
+from llm_studio import LmStudioClient, LmStudioHttpError
 from reference_text_store import ReferenceTextStore
+from sbert_service import SbertSimilarityService
+from turbulence_comparison.service import TurbulenceComparisonService
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -27,6 +30,9 @@ COMPARATOR_PREFIX = "/api/comparator"
 INITIAL_POPULATION_PREFIX = "/api/initial-population"
 INITIAL_POPULATION_COMPARISON_PREFIX = "/api/initial-population-comparison"
 REFERENCE_TEXTS_PREFIX = "/api/reference-texts"
+TURBULENCE_COMPARISON_PREFIX = "/api/turbulence-comparison"
+SBERT_PREFIX = "/api/sbert"
+LM_STUDIO_API_PREFIX = "/api/lm-studio"
 
 
 def release_existing_server_port(host: str, port: int) -> None:
@@ -136,6 +142,8 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
     initial_population_service: InitialPopulationService
     initial_population_comparison_service: InitialPopulationComparisonService
     reference_text_store: ReferenceTextStore
+    turbulence_comparison_service: TurbulenceComparisonService
+    sbert_service: SbertSimilarityService
 
     def do_OPTIONS(self) -> None:
         if self.is_api_or_proxy_path():
@@ -148,6 +156,9 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path.startswith(REFERENCE_TEXTS_PREFIX):
             self.handle_reference_texts_get()
+            return
+        if self.path.startswith(TURBULENCE_COMPARISON_PREFIX):
+            self.handle_turbulence_comparison_get()
             return
         if self.path.startswith(INITIAL_POPULATION_COMPARISON_PREFIX):
             self.handle_initial_population_comparison_get()
@@ -166,6 +177,15 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.path.startswith(REFERENCE_TEXTS_PREFIX):
             self.handle_reference_texts_post()
+            return
+        if self.path.startswith(TURBULENCE_COMPARISON_PREFIX):
+            self.handle_turbulence_comparison_post()
+            return
+        if self.path.startswith(SBERT_PREFIX):
+            self.handle_sbert_post()
+            return
+        if self.path.startswith(LM_STUDIO_API_PREFIX):
+            self.handle_lm_studio_api_post()
             return
         if self.path.startswith(INITIAL_POPULATION_COMPARISON_PREFIX):
             self.handle_initial_population_comparison_post()
@@ -194,6 +214,9 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             or self.path.startswith(INITIAL_POPULATION_PREFIX)
             or self.path.startswith(INITIAL_POPULATION_COMPARISON_PREFIX)
             or self.path.startswith(REFERENCE_TEXTS_PREFIX)
+            or self.path.startswith(TURBULENCE_COMPARISON_PREFIX)
+            or self.path.startswith(SBERT_PREFIX)
+            or self.path.startswith(LM_STUDIO_API_PREFIX)
         )
 
     def send_cors_headers(self) -> None:
@@ -419,6 +442,104 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as error:
             self.send_json(500, {"error": str(error)})
 
+    def handle_turbulence_comparison_get(self) -> None:
+        path_parts = self.turbulence_comparison_path_parts()
+        try:
+            if len(path_parts) == 2 and path_parts[0] == "runs":
+                run = self.turbulence_comparison_service.get_run(path_parts[1])
+                if not run:
+                    self.send_json(404, {"error": "Run not found."})
+                    return
+                self.send_json(200, run)
+                return
+
+            self.send_json(404, {"error": "Not found."})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+        except Exception as error:
+            self.send_json(500, {"error": str(error)})
+
+    def handle_turbulence_comparison_post(self) -> None:
+        path_parts = self.turbulence_comparison_path_parts()
+        try:
+            if path_parts == ["ppdb", "status"]:
+                self.send_json(200, self.turbulence_comparison_service.ppdb_status(self.read_json_body()))
+                return
+
+            if path_parts == ["ppdb", "prepare"]:
+                self.send_json(200, self.turbulence_comparison_service.prepare_ppdb(self.read_json_body()))
+                return
+
+            if path_parts == ["runs"]:
+                run = self.turbulence_comparison_service.start_run(self.read_json_body())
+                self.send_json(202, run)
+                return
+
+            if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "cancel":
+                run = self.turbulence_comparison_service.cancel_run(path_parts[1])
+                if not run:
+                    self.send_json(404, {"error": "Run not found."})
+                    return
+                self.send_json(200, run)
+                return
+
+            self.send_json(404, {"error": "Not found."})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+        except Exception as error:
+            self.send_json(500, {"error": str(error)})
+
+    def handle_sbert_post(self) -> None:
+        parsed = urllib.parse.urlsplit(self.path)
+        try:
+            if parsed.path == f"{SBERT_PREFIX}/pair":
+                self.send_json(200, self.sbert_service.calculate_pair(self.read_json_body()))
+                return
+            if parsed.path == f"{SBERT_PREFIX}/embeddings":
+                self.send_json(200, self.sbert_service.calculate_embeddings(self.read_json_body()))
+                return
+            self.send_json(404, {"error": "Not found."})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+        except Exception as error:
+            self.send_json(500, {"error": str(error)})
+
+    def handle_lm_studio_api_post(self) -> None:
+        parsed = urllib.parse.urlsplit(self.path)
+        try:
+            payload = self.read_json_body()
+            client = self.build_lm_studio_client(payload)
+            if parsed.path == f"{LM_STUDIO_API_PREFIX}/models":
+                self.send_json(200, {"models": client.list_models()})
+                return
+            if parsed.path == f"{LM_STUDIO_API_PREFIX}/chat":
+                result = client.call(
+                    str(payload.get("userPrompt") or payload.get("prompt") or ""),
+                    system_prompt=str(payload.get("systemPrompt") or ""),
+                    temperature=float(payload.get("temperature", 0.4)),
+                    top_p=float(payload.get("topP", 0.95)),
+                    top_k=int(payload["topK"]) if payload.get("topK") is not None else None,
+                    max_tokens=int(payload.get("maxTokens", 180)),
+                )
+                self.send_json(200, result)
+                return
+            self.send_json(404, {"error": "Not found."})
+        except LmStudioHttpError as error:
+            self.send_json(502, {"error": str(error), "statusCode": error.status_code, "response": error.response_text[:1000]})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+        except Exception as error:
+            self.send_json(500, {"error": str(error)})
+
+    def build_lm_studio_client(self, payload: dict) -> LmStudioClient:
+        base_url = str(payload.get("baseUrl") or self.lm_studio_base).strip().rstrip("/")
+        api_mode = str(payload.get("apiMode") or "native").strip()
+        model = str(payload.get("model") or "").strip()
+        timeout_seconds = float(payload.get("timeoutSeconds") or 120)
+        if not base_url.startswith(("http://", "https://")):
+            raise ValueError("baseUrl de LM Studio debe ser http(s).")
+        return LmStudioClient(base_url, api_mode, model, timeout_seconds)
+
     def comparator_path_parts(self) -> list[str]:
         parsed = urllib.parse.urlsplit(self.path)
         api_path = parsed.path.removeprefix(COMPARATOR_PREFIX).strip("/")
@@ -443,6 +564,13 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
     def reference_texts_path_parts(self) -> list[str]:
         parsed = urllib.parse.urlsplit(self.path)
         api_path = parsed.path.removeprefix(REFERENCE_TEXTS_PREFIX).strip("/")
+        if not api_path:
+            return []
+        return [urllib.parse.unquote(part) for part in api_path.split("/") if part]
+
+    def turbulence_comparison_path_parts(self) -> list[str]:
+        parsed = urllib.parse.urlsplit(self.path)
+        api_path = parsed.path.removeprefix(TURBULENCE_COMPARISON_PREFIX).strip("/")
         if not api_path:
             return []
         return [urllib.parse.unquote(part) for part in api_path.split("/") if part]
@@ -486,6 +614,8 @@ def main() -> None:
     ToolPortalHandler.initial_population_service = InitialPopulationService(root)
     ToolPortalHandler.initial_population_comparison_service = InitialPopulationComparisonService(root)
     ToolPortalHandler.reference_text_store = ReferenceTextStore(root)
+    ToolPortalHandler.turbulence_comparison_service = TurbulenceComparisonService(root)
+    ToolPortalHandler.sbert_service = SbertSimilarityService()
 
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     release_existing_server_port(args.host, args.port)
@@ -496,6 +626,9 @@ def main() -> None:
         print(f"Serving initial population API at http://{args.host}:{args.port}{INITIAL_POPULATION_PREFIX}/")
         print(f"Serving initial population comparison API at http://{args.host}:{args.port}{INITIAL_POPULATION_COMPARISON_PREFIX}/")
         print(f"Serving reference texts API at http://{args.host}:{args.port}{REFERENCE_TEXTS_PREFIX}/")
+        print(f"Serving turbulence comparison API at http://{args.host}:{args.port}{TURBULENCE_COMPARISON_PREFIX}/")
+        print(f"Serving SBERT API at http://{args.host}:{args.port}{SBERT_PREFIX}/")
+        print(f"Serving LM Studio API at http://{args.host}:{args.port}{LM_STUDIO_API_PREFIX}/")
         httpd.serve_forever()
 
 

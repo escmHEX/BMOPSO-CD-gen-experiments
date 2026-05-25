@@ -201,6 +201,142 @@ def empty_cost() -> dict[str, Any]:
     }
 
 
+def average_present(values: list[Any]) -> float | None:
+    numbers = [finite_float(value) for value in values if value is not None]
+    return sum(numbers) / len(numbers) if numbers else None
+
+
+def average_vector(vectors: list[Any]) -> list[float]:
+    normalized = [
+        [finite_float(value) for value in vector]
+        for vector in vectors
+        if isinstance(vector, list) and vector
+    ]
+    if not normalized:
+        return []
+    width = min(len(vector) for vector in normalized)
+    return [sum(vector[index] for vector in normalized) / len(normalized) for index in range(width)]
+
+
+def vector_label(vector: list[float]) -> str:
+    return "[" + ", ".join(f"{value:.6f}" for value in vector) + "]" if vector else "--"
+
+
+def aggregate_initial_costs(results: list[dict[str, Any]]) -> dict[str, Any]:
+    totals: dict[str, Any] = empty_cost()
+    for result in results:
+        cost = result.get("cost") or {}
+        for key, value in cost.items():
+            if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                totals[key] = finite_float(totals.get(key)) + float(value)
+    return summarize_cost(totals)
+
+
+def aggregate_common_metric_costs(results: list[dict[str, Any]]) -> dict[str, Any]:
+    costs = [result.get("commonMetricCost") or {} for result in results]
+    seconds = sum(finite_float(cost.get("embeddingWallClockSeconds")) for cost in costs)
+    texts = sum(int(finite_float(cost.get("embeddingTexts"))) for cost in costs)
+    return {
+        "embeddingModel": next((cost.get("embeddingModel") for cost in costs if cost.get("embeddingModel")), None),
+        "embeddingTexts": texts,
+        "embeddingWallClockSeconds": seconds,
+        "embeddingWallClockLabel": format_duration(seconds),
+    }
+
+
+def aggregate_initial_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
+    metrics_list = [result.get("metrics") or {} for result in results]
+    vector = average_vector([metrics.get("bestObjectiveVector") for metrics in metrics_list])
+    hypervolume = average_present([metrics.get("hypervolume") for metrics in metrics_list])
+    spread = average_present([metrics.get("spread") for metrics in metrics_list])
+    return {
+        "commonObjectiveNames": next((metrics.get("commonObjectiveNames") for metrics in metrics_list if metrics.get("commonObjectiveNames")), []),
+        "completedRows": average_present([metrics.get("completedRows") for metrics in metrics_list]),
+        "totalRows": average_present([metrics.get("totalRows") for metrics in metrics_list]),
+        "nonDominatedRows": average_present([metrics.get("nonDominatedRows") for metrics in metrics_list]),
+        "bestObjectiveVector": vector,
+        "bestObjectiveLabel": vector_label(vector),
+        "bestFidelity": average_present([metrics.get("bestFidelity") for metrics in metrics_list]),
+        "bestDiversity": average_present([metrics.get("bestDiversity") for metrics in metrics_list]),
+        "hypervolume": hypervolume,
+        "hypervolumeLabel": f"{hypervolume:.6f}" if hypervolume is not None else "No aplica",
+        "spread": spread,
+        "spreadLabel": f"{spread:.6f}" if spread is not None else "No aplica",
+        "moConvention": "Metricas ponderadas como promedio sobre repeticiones K con semillas distintas.",
+    }
+
+
+def aggregate_initial_strategy_repetitions(
+    strategy: StrategyDefinition,
+    results: list[dict[str, Any]],
+    repetitions_k: int,
+) -> dict[str, Any]:
+    completed = [result for result in results if result.get("status") == STATUS_COMPLETED]
+    if results:
+        first_dir = Path(str(results[0].get("outputDir") or "."))
+        base_dir = str(first_dir.parent if first_dir.name.startswith("rep-") else first_dir)
+    else:
+        base_dir = ""
+    if not completed:
+        failure = results[-1] if results else {}
+        return {
+            "strategyId": strategy.strategy_id,
+            "displayName": strategy.display_name,
+            "runtime": strategy.runtime,
+            "status": STATUS_FAILED,
+            "outputDir": base_dir,
+            "rows": [],
+            "metrics": {
+                "totalRows": 0,
+                "completedRows": 0,
+                "nonDominatedRows": 0,
+                "bestObjectiveVector": [],
+                "bestObjectiveLabel": "--",
+                "hypervolumeLabel": "No aplica",
+                "spreadLabel": "No aplica",
+            },
+            "nativeMetrics": {},
+            "cost": aggregate_initial_costs(results),
+            "commonMetricCost": aggregate_common_metric_costs(results),
+            "artifacts": {},
+            "repetitionsK": repetitions_k,
+            "completedRepetitions": 0,
+            "repetitions": results,
+            "error": failure.get("error") or "Todas las repeticiones fallaron.",
+        }
+
+    rows: list[dict[str, Any]] = []
+    for result in completed:
+        repetition_index = result.get("repetitionIndex")
+        repetition_seed = result.get("repetitionSeed")
+        for row in result.get("rows") or []:
+            if isinstance(row, dict):
+                rows.append({**row, "repetitionIndex": repetition_index, "repetitionSeed": repetition_seed})
+
+    metrics = aggregate_initial_metrics(completed)
+    metrics["outputDir"] = base_dir
+    return {
+        "strategyId": strategy.strategy_id,
+        "displayName": strategy.display_name,
+        "runtime": strategy.runtime,
+        "status": STATUS_COMPLETED,
+        "outputDir": base_dir,
+        "rows": rows,
+        "metrics": metrics,
+        "nativeMetrics": aggregate_initial_metrics([
+            {"metrics": result.get("nativeMetrics") or {}}
+            for result in completed
+        ]),
+        "cost": aggregate_initial_costs(completed),
+        "commonMetricCost": aggregate_common_metric_costs(completed),
+        "artifacts": completed[-1].get("artifacts") or {},
+        "repetitionsK": repetitions_k,
+        "completedRepetitions": len(completed),
+        "repetitions": results,
+        "error": None if len(completed) == repetitions_k else f"{repetitions_k - len(completed)} repeticion(es) fallaron.",
+    }
+
+
 class InitialPopulationComparisonService:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -232,6 +368,7 @@ class InitialPopulationComparisonService:
             "n": 10,
             "topK": 10,
             "seed": 42,
+            "repetitionsK": 1,
             "commonEmbeddingModel": DEFAULT_EMBEDDING_MODEL,
             "hybrid": hybrid,
             "baselines": {
@@ -339,6 +476,7 @@ class InitialPopulationComparisonService:
         top_k = min(self._int_between(payload.get("topK", defaults["topK"]), "topK", 1, 500), n)
         seed_value = payload.get("seed", defaults["seed"])
         seed = self._int_between(seed_value, "seed", 0, 2_147_483_647) if seed_value is not None else None
+        repetitions_k = self._int_between(payload.get("repetitionsK", defaults["repetitionsK"]), "repetitionsK", 1, 30)
         common_embedding = self._safe_text(payload.get("commonEmbeddingModel", defaults["commonEmbeddingModel"]), "commonEmbeddingModel")
 
         hybrid_payload = payload.get("hybrid") if isinstance(payload.get("hybrid"), dict) else defaults["hybrid"]
@@ -369,6 +507,7 @@ class InitialPopulationComparisonService:
             "n": n,
             "topK": top_k,
             "seed": seed,
+            "repetitionsK": repetitions_k,
             "commonEmbeddingModel": common_embedding,
             "hybrid": hybrid_config,
             "baselines": baseline_config,
@@ -389,7 +528,7 @@ class InitialPopulationComparisonService:
                     if run.get("cancelRequested"):
                         self._mark_queued_as_cancelled_unlocked(run)
                         break
-                result = self._execute_strategy(run, strategy)
+                result = self._execute_strategy_repeated(run, strategy)
                 with self._lock:
                     run["strategies"].append(result)
                     state = run["strategyStates"].setdefault(strategy.strategy_id, self._initial_strategy_state(strategy))
@@ -428,16 +567,50 @@ class InitialPopulationComparisonService:
                 self._append_log_unlocked(run, "system", f"Unexpected comparison error: {error}")
                 self._write_summary_unlocked(run)
 
-    def _execute_strategy(self, run: dict[str, Any], strategy: StrategyDefinition) -> dict[str, Any]:
-        with self._lock:
-            self._set_strategy_state_unlocked(run, strategy.strategy_id, STATUS_RUNNING, "Preparando ejecucion", 0.01)
+    def _execute_strategy_repeated(self, run: dict[str, Any], strategy: StrategyDefinition) -> dict[str, Any]:
+        repetitions_k = int(run["config"].get("repetitionsK") or 1)
+        if repetitions_k <= 1:
+            return self._execute_strategy(run, strategy, 0, 1)
 
+        results: list[dict[str, Any]] = []
+        for repetition_index in range(repetitions_k):
+            with self._lock:
+                if run.get("cancelRequested"):
+                    break
+                self._set_strategy_state_unlocked(
+                    run,
+                    strategy.strategy_id,
+                    STATUS_RUNNING,
+                    f"Repeticion {repetition_index + 1}/{repetitions_k}",
+                    repetition_index / repetitions_k,
+                )
+            result = self._execute_strategy(run, strategy, repetition_index, repetitions_k)
+            result["repetitionIndex"] = repetition_index + 1
+            result["repetitionSeed"] = self._repetition_seed(run["config"].get("seed"), repetition_index)
+            results.append(result)
+
+        return aggregate_initial_strategy_repetitions(strategy, results, repetitions_k)
+
+    def _execute_strategy(
+        self,
+        run: dict[str, Any],
+        strategy: StrategyDefinition,
+        repetition_index: int = 0,
+        repetition_count: int = 1,
+    ) -> dict[str, Any]:
+        with self._lock:
+            label = "Preparando ejecucion" if repetition_count <= 1 else f"Preparando ejecucion {repetition_index + 1}/{repetition_count}"
+            self._set_strategy_state_unlocked(run, strategy.strategy_id, STATUS_RUNNING, label, 0.01)
+
+        execution_config = self._config_for_repetition(run["config"], repetition_index)
         strategy_dir = Path(run["runDir"]) / strategy.strategy_id
+        if repetition_count > 1:
+            strategy_dir = strategy_dir / f"rep-{repetition_index + 1:03d}"
         strategy_dir.mkdir(parents=True, exist_ok=True)
         if strategy.runner == "hybrid":
-            process_result = self._run_hybrid_process(run, strategy, strategy_dir)
+            process_result = self._run_hybrid_process(run, strategy, strategy_dir, execution_config)
         else:
-            process_result = self._run_baseline_process(run, strategy, strategy_dir)
+            process_result = self._run_baseline_process(run, strategy, strategy_dir, execution_config)
 
         result = read_json_or_default(strategy_dir / "result.json", {})
         if run.get("cancelRequested"):
@@ -451,15 +624,15 @@ class InitialPopulationComparisonService:
             return self._failed_result(strategy, strategy_dir, self._error_label(error) if error else "Strategy did not produce a completed result.", process_result, result)
 
         try:
-            normalized = self._normalize_strategy_result(run, strategy, strategy_dir, result, process_result)
+            normalized = self._normalize_strategy_result(run, strategy, strategy_dir, result, process_result, execution_config)
             write_json(strategy_dir / "normalized_result.json", normalized)
             return normalized
         except Exception as error:
             return self._failed_result(strategy, strategy_dir, f"Could not normalize strategy result: {error}", process_result, result)
 
-    def _run_hybrid_process(self, run: dict[str, Any], strategy: StrategyDefinition, strategy_dir: Path) -> dict[str, Any]:
+    def _run_hybrid_process(self, run: dict[str, Any], strategy: StrategyDefinition, strategy_dir: Path, execution_config: dict[str, Any]) -> dict[str, Any]:
         config_path = strategy_dir / "hybrid_config.json"
-        write_json(config_path, run["config"]["hybrid"])
+        write_json(config_path, execution_config["hybrid"])
         command = [
             sys.executable,
             "-m",
@@ -469,17 +642,17 @@ class InitialPopulationComparisonService:
             "--output-dir",
             str(strategy_dir),
         ]
-        return self._run_process(run, strategy.strategy_id, command, self.root, run["config"]["hybrid"]["timeoutSeconds"], "second(s)", None)
+        return self._run_process(run, strategy.strategy_id, command, self.root, execution_config["hybrid"]["timeoutSeconds"], "second(s)", None)
 
-    def _run_baseline_process(self, run: dict[str, Any], strategy: StrategyDefinition, strategy_dir: Path) -> dict[str, Any]:
+    def _run_baseline_process(self, run: dict[str, Any], strategy: StrategyDefinition, strategy_dir: Path, execution_config: dict[str, Any]) -> dict[str, Any]:
         assert strategy.repository_path is not None
         baseline_config = {
-            **run["config"]["baselines"],
+            **execution_config["baselines"],
             "strategyId": strategy.strategy_id,
             "displayName": strategy.display_name,
-            "referenceText": run["config"]["referenceText"],
-            "n": run["config"]["n"],
-            "seed": run["config"]["seed"],
+            "referenceText": execution_config["referenceText"],
+            "n": execution_config["n"],
+            "seed": execution_config["seed"],
             "repositoryDir": str(self.root / strategy.repository_path),
         }
         config_path = strategy_dir / "baseline_config.json"
@@ -494,7 +667,7 @@ class InitialPopulationComparisonService:
             "--output-dir",
             str(strategy_dir),
         ]
-        timeout_seconds = run["config"]["baselines"]["timeoutMinutes"] * 60
+        timeout_seconds = execution_config["baselines"]["timeoutMinutes"] * 60
         return self._run_process(run, strategy.strategy_id, command, self.root, timeout_seconds, "minute(s)", cost_metrics_path)
 
     def _run_process(
@@ -595,7 +768,9 @@ class InitialPopulationComparisonService:
         strategy_dir: Path,
         result: dict[str, Any],
         process_result: dict[str, Any],
+        execution_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        config = execution_config or run["config"]
         rows = [dict(row) for row in result.get("rows", []) if isinstance(row, dict)]
         if strategy.strategy_id == "hybrid-semantic-v7":
             rows = self._normalize_hybrid_rows(rows)
@@ -611,8 +786,8 @@ class InitialPopulationComparisonService:
 
         rows, common_metrics, common_cost = attach_common_metrics(
             rows,
-            run["config"]["referenceText"],
-            run["config"]["commonEmbeddingModel"],
+            config["referenceText"],
+            config["commonEmbeddingModel"],
         )
         rows.sort(
             key=lambda row: (
@@ -661,6 +836,22 @@ class InitialPopulationComparisonService:
             "artifacts": artifacts,
             "error": None,
         }
+
+    def _config_for_repetition(self, config: dict[str, Any], repetition_index: int) -> dict[str, Any]:
+        seed = self._repetition_seed(config.get("seed"), repetition_index)
+        hybrid = dict(config["hybrid"])
+        hybrid["seed"] = seed if seed is not None else hybrid.get("seed")
+        return {
+            **config,
+            "seed": seed,
+            "hybrid": hybrid,
+            "baselines": dict(config["baselines"]),
+        }
+
+    def _repetition_seed(self, seed: Any, repetition_index: int) -> int | None:
+        if seed is None:
+            return None
+        return (int(seed) + int(repetition_index)) % 2_147_483_648
 
     def _normalize_hybrid_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []

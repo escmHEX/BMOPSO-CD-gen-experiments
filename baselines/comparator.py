@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from sbert_service import shared_sbert_service
+
 
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
@@ -30,8 +32,6 @@ GENERATION_RE = re.compile(r"Generaci[oó]n\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
 PERCENT_RE = re.compile(r"(\d{1,3})%")
 PROPOSAL_TOTALS = {proposal_id: total for proposal_id, total in (("evolmd", 6), ("evolmd-mo", 5))}
 POSTHOC_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-_POSTHOC_MODEL: Any = None
-_POSTHOC_MODEL_LOCK = threading.Lock()
 
 
 def utc_now() -> str:
@@ -148,32 +148,18 @@ def normalized_posthoc_point(row: dict[str, Any]) -> tuple[float, float] | None:
     return clamp(finite_float(vector[0]), 0.0, 1.0), clamp(finite_float(vector[1]), 0.0, 1.0)
 
 
-def posthoc_embedding_model() -> Any:
-    global _POSTHOC_MODEL
-    with _POSTHOC_MODEL_LOCK:
-        if _POSTHOC_MODEL is None:
-            import torch  # noqa: F401
-            from sentence_transformers import SentenceTransformer
-
-            _POSTHOC_MODEL = SentenceTransformer(POSTHOC_EMBEDDING_MODEL)
-        return _POSTHOC_MODEL
-
-
 def calculate_posthoc_semantic_diversity(generated_texts: list[str]) -> list[float]:
     if len(generated_texts) <= 1:
         return [0.0] * len(generated_texts)
 
-    import torch
-    from sentence_transformers import util
-
     texts = [text if text.strip() else "[texto vacio]" for text in generated_texts]
-    embeddings = posthoc_embedding_model().encode(texts, convert_to_tensor=True, normalize_embeddings=True)
-    similarity_matrix = util.cos_sim(embeddings, embeddings)
+    embeddings, _ = shared_sbert_service().encode_texts(POSTHOC_EMBEDDING_MODEL, texts)
+    similarity_matrix = embeddings @ embeddings.T
     scores: list[float] = []
     for index in range(len(texts)):
-        sum_similarity = torch.sum(similarity_matrix[index]) - 1.0
+        sum_similarity = float(similarity_matrix[index].sum()) - 1.0
         average_similarity = sum_similarity / (len(texts) - 1)
-        scores.append(clamp(1.0 - float(average_similarity), 0.0, 1.0))
+        scores.append(clamp(1.0 - average_similarity, 0.0, 1.0))
     return scores
 
 
@@ -375,6 +361,175 @@ def summarize_costs(proposals: list[dict[str, Any]], run_elapsed_seconds: float)
     }
 
 
+def average_present(values: list[Any]) -> float | None:
+    numbers = [finite_float(value) for value in values if value is not None]
+    return sum(numbers) / len(numbers) if numbers else None
+
+
+def average_vector(vectors: list[Any]) -> list[float]:
+    normalized = [
+        [finite_float(value) for value in vector]
+        for vector in vectors
+        if isinstance(vector, list) and vector
+    ]
+    if not normalized:
+        return []
+    width = min(len(vector) for vector in normalized)
+    return [sum(vector[index] for vector in normalized) / len(normalized) for index in range(width)]
+
+
+def aggregate_runtime_breakdowns(costs: list[dict[str, Any]]) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for cost in costs:
+        runtime = cost.get("runtimeBreakdown") if isinstance(cost.get("runtimeBreakdown"), dict) else {}
+        for key, value in runtime.items():
+            totals[key] = totals.get(key, 0.0) + finite_float(value)
+    return totals
+
+
+def aggregate_comparator_costs(results: list[dict[str, Any]]) -> dict[str, Any]:
+    costs = [result.get("cost") or empty_cost_metrics() for result in results]
+    if not costs:
+        return empty_cost_metrics()
+
+    llm_calls = sum(int(finite_float(cost.get("llmCalls"))) for cost in costs)
+    llm_client_seconds = sum(finite_float(cost.get("llmClientWallClockSeconds")) for cost in costs)
+    algorithm_values = [
+        finite_float(cost.get("algorithmRuntimeSeconds"))
+        for cost in costs
+        if cost.get("algorithmRuntimeSeconds") is not None
+    ]
+    process_seconds = sum(finite_float(cost.get("processWallClockSeconds")) for cost in costs)
+    ollama_seconds = sum(finite_float(cost.get("ollamaTotalDurationSeconds")) for cost in costs)
+    average_call_seconds = llm_client_seconds / llm_calls if llm_calls > 0 else None
+    return {
+        "processWallClockSeconds": process_seconds,
+        "processWallClockLabel": label_from_seconds(process_seconds),
+        "algorithmRuntimeSeconds": sum(algorithm_values) if algorithm_values else None,
+        "algorithmRuntimeLabel": label_from_seconds(sum(algorithm_values) if algorithm_values else None),
+        "llmCalls": llm_calls,
+        "llmSuccessfulCalls": sum(int(finite_float(cost.get("llmSuccessfulCalls"))) for cost in costs),
+        "llmFailedCalls": sum(int(finite_float(cost.get("llmFailedCalls"))) for cost in costs),
+        "llmClientWallClockSeconds": llm_client_seconds,
+        "llmClientWallClockLabel": label_from_seconds(llm_client_seconds),
+        "llmAverageCallSeconds": average_call_seconds,
+        "llmAverageCallLabel": label_from_seconds(average_call_seconds),
+        "ollamaTotalDurationSeconds": ollama_seconds,
+        "ollamaTotalDurationLabel": label_from_seconds(ollama_seconds),
+        "promptEvalCount": sum(int(finite_float(cost.get("promptEvalCount"))) for cost in costs),
+        "evalCount": sum(int(finite_float(cost.get("evalCount"))) for cost in costs),
+        "totalTokens": sum(int(finite_float(cost.get("totalTokens"))) for cost in costs),
+        "returnCode": next((cost.get("returnCode") for cost in reversed(costs) if cost.get("returnCode") is not None), None),
+        "timedOut": any(bool(cost.get("timedOut")) for cost in costs),
+        "cancelled": any(bool(cost.get("cancelled")) for cost in costs),
+        "runtimeBreakdown": aggregate_runtime_breakdowns(costs),
+        "metricsPaths": [cost.get("metricsPath") for cost in costs if cost.get("metricsPath")],
+    }
+
+
+def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Path) -> dict[str, Any]:
+    metrics_list = [result.get("metrics") or {} for result in results]
+    if not metrics_list:
+        return {
+            "totalRows": 0,
+            "completedRows": 0,
+            "objectiveNames": [],
+            "bestObjectiveVector": [],
+            "bestObjectiveLabel": "--",
+            "nonDominatedRows": 0,
+            "hypervolume": None,
+            "hypervolumeLabel": "No aplica",
+            "spread": None,
+            "spreadLabel": "No aplica",
+            "outputDir": str(proposal_dir),
+            "repetitionAggregation": "Promedio sobre repeticiones K con semillas distintas.",
+        }
+    best_vector = average_vector([metrics.get("bestObjectiveVector") for metrics in metrics_list])
+    best_diagnostic_vector = average_vector([
+        metrics.get("bestDiagnosticObjectiveVector")
+        for metrics in metrics_list
+    ])
+    hypervolume = average_present([metrics.get("hypervolume") for metrics in metrics_list])
+    spread = average_present([metrics.get("spread") for metrics in metrics_list])
+    first_metrics = next((metrics for metrics in metrics_list if metrics), {})
+    metrics: dict[str, Any] = {
+        "totalRows": average_present([metrics.get("totalRows") for metrics in metrics_list]),
+        "completedRows": average_present([metrics.get("completedRows") for metrics in metrics_list]),
+        "objectiveNames": first_metrics.get("objectiveNames") or [],
+        "bestObjectiveVector": best_vector,
+        "bestObjectiveLabel": objective_label(best_vector),
+        "nonDominatedRows": average_present([metrics.get("nonDominatedRows") for metrics in metrics_list]),
+        "hypervolume": hypervolume,
+        "hypervolumeLabel": f"{hypervolume:.6f}" if hypervolume is not None else "No aplica",
+        "spread": spread,
+        "spreadLabel": f"{spread:.6f}" if spread is not None else "No aplica",
+        "outputDir": str(proposal_dir),
+        "moConvention": first_metrics.get("moConvention"),
+        "repetitionAggregation": "Promedio sobre repeticiones K con semillas distintas.",
+    }
+    if first_metrics.get("postHocDiagnostic"):
+        metrics.update(
+            {
+                "postHocDiagnostic": True,
+                "diagnosticObjectiveNames": first_metrics.get("diagnosticObjectiveNames") or [],
+                "bestDiagnosticObjectiveVector": best_diagnostic_vector,
+                "bestDiagnosticObjectiveLabel": objective_label(best_diagnostic_vector),
+                "postHocNonDominatedRows": average_present([
+                    item.get("postHocNonDominatedRows")
+                    for item in metrics_list
+                ]),
+            }
+        )
+    return metrics
+
+
+def aggregate_proposal_repetitions(
+    proposal: ProposalDefinition,
+    proposal_dir: Path,
+    results: list[dict[str, Any]],
+    repetitions_k: int,
+) -> dict[str, Any]:
+    completed = [result for result in results if result.get("status") == STATUS_COMPLETED]
+    if not completed:
+        failure = results[-1] if results else {}
+        status = STATUS_CANCELLED if any(result.get("status") == STATUS_CANCELLED for result in results) else STATUS_FAILED
+        return {
+            "proposalId": proposal.proposal_id,
+            "displayName": proposal.display_name,
+            "status": status,
+            "outputDir": str(proposal_dir),
+            "rows": [],
+            "metrics": aggregate_comparator_metrics([], proposal_dir),
+            "cost": aggregate_comparator_costs(results),
+            "error": failure.get("error") or "Todas las repeticiones fallaron.",
+            "repetitionsK": repetitions_k,
+            "completedRepetitions": 0,
+            "repetitions": results,
+        }
+
+    rows: list[dict[str, Any]] = []
+    for result in completed:
+        repetition_index = result.get("repetitionIndex")
+        repetition_seed = result.get("repetitionSeed")
+        for row in result.get("rows") or []:
+            if isinstance(row, dict):
+                rows.append({**row, "repetitionIndex": repetition_index, "repetitionSeed": repetition_seed})
+
+    return {
+        "proposalId": proposal.proposal_id,
+        "displayName": proposal.display_name,
+        "status": STATUS_COMPLETED,
+        "outputDir": str(proposal_dir),
+        "rows": rows,
+        "metrics": aggregate_comparator_metrics(completed, proposal_dir),
+        "cost": aggregate_comparator_costs(completed),
+        "error": None if len(completed) == repetitions_k else f"{repetitions_k - len(completed)} repeticion(es) fallaron.",
+        "repetitionsK": repetitions_k,
+        "completedRepetitions": len(completed),
+        "repetitions": results,
+    }
+
+
 @dataclass(frozen=True)
 class ProposalDefinition:
     proposal_id: str
@@ -528,6 +683,8 @@ class ComparatorService:
             "topK": self._int_between(payload.get("topK", 10), "topK", 1, 200),
             "n": self._int_between(payload.get("n", 10), "n", 1, 500),
             "generaciones": self._int_between(payload.get("generaciones", 3), "generaciones", 0, 500),
+            "seed": self._int_between(payload.get("seed", 42), "seed", 0, 2_147_483_647),
+            "repetitionsK": self._int_between(payload.get("repetitionsK", 1), "repetitionsK", 1, 30),
             "model": self._safe_model_name(payload.get("model", "llama3")),
             "k": self._int_between(payload.get("k", 3), "k", 1, 100),
             "probCrossover": self._float_between(payload.get("probCrossover", 0.8), "probCrossover", 0.0, 1.0),
@@ -687,9 +844,50 @@ class ComparatorService:
         run["costSummary"] = summarize_costs(run.get("proposals") or [], elapsed)
 
     def _execute_proposal(self, run: dict[str, Any], proposal: ProposalDefinition) -> dict[str, Any]:
+        repetitions_k = int(run["config"].get("repetitionsK") or 1)
+        base_dir = Path(run["runDir"]) / proposal.proposal_id
+        if repetitions_k <= 1:
+            return self._execute_proposal_once(
+                run,
+                proposal,
+                base_dir,
+                self._repetition_seed(run["config"].get("seed"), 0),
+            )
+
+        base_dir.mkdir(parents=True, exist_ok=True)
+        results: list[dict[str, Any]] = []
+        for repetition_index in range(repetitions_k):
+            with self._lock:
+                if run.get("cancelRequested"):
+                    break
+                self._set_proposal_state_unlocked(
+                    run,
+                    proposal.proposal_id,
+                    STATUS_RUNNING,
+                    f"Repeticion {repetition_index + 1}/{repetitions_k}",
+                    repetition_index / repetitions_k,
+                )
+
+            repetition_seed = self._repetition_seed(run["config"].get("seed"), repetition_index)
+            repetition_dir = base_dir / f"rep-{repetition_index + 1:03d}"
+            result = self._execute_proposal_once(run, proposal, repetition_dir, repetition_seed)
+            result["repetitionIndex"] = repetition_index + 1
+            result["repetitionSeed"] = repetition_seed
+            results.append(result)
+            write_json(repetition_dir / "summary.json", result)
+
+        return aggregate_proposal_repetitions(proposal, base_dir, results, repetitions_k)
+
+    def _execute_proposal_once(
+        self,
+        run: dict[str, Any],
+        proposal: ProposalDefinition,
+        proposal_dir: Path,
+        random_seed: int | None,
+    ) -> dict[str, Any]:
         with self._lock:
             if run.get("cancelRequested"):
-                return self._cancelled_result(proposal, Path(run["runDir"]) / proposal.proposal_id)
+                return self._cancelled_result(proposal, proposal_dir)
             self._set_proposal_state_unlocked(
                 run,
                 proposal.proposal_id,
@@ -698,7 +896,6 @@ class ComparatorService:
                 0.01,
             )
 
-        proposal_dir = Path(run["runDir"]) / proposal.proposal_id
         proposal_dir.mkdir(parents=True, exist_ok=True)
         reference_path = proposal_dir / "reference.txt"
         reference_path.write_text(run["config"]["referenceText"], encoding="utf-8")
@@ -744,6 +941,7 @@ class ComparatorService:
             repository_dir,
             proposal.preload_modules,
             cost_metrics_path,
+            random_seed,
         )
         return_code = int(process_cost["returnCode"])
         llm_payload = read_json_or_default(cost_metrics_path, {})
@@ -919,6 +1117,11 @@ class ComparatorService:
             "totalProposals": len(states),
         }
 
+    def _repetition_seed(self, seed: Any, repetition_index: int) -> int | None:
+        if seed is None:
+            return None
+        return (int(seed) + int(repetition_index)) % 2_147_483_648
+
     def _run_process(
         self,
         run: dict[str, Any],
@@ -927,10 +1130,15 @@ class ComparatorService:
         cwd: Path,
         preload_modules: tuple[str, ...],
         cost_metrics_path: Path,
+        random_seed: int | None = None,
     ) -> dict[str, Any]:
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["BASELINE_COST_METRICS_PATH"] = str(cost_metrics_path)
+        if random_seed is not None:
+            seed_text = str(int(random_seed))
+            environment["BASELINE_RANDOM_SEED"] = seed_text
+            environment["PYTHONHASHSEED"] = seed_text
         if preload_modules:
             environment["BASELINE_PRELOAD_MODULES"] = ",".join(preload_modules)
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0

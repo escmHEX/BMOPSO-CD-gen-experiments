@@ -1,6 +1,40 @@
-const embeddingWorker = new Worker(new URL("./embedding-worker.js", import.meta.url), { type: "module" });
-
 const EMBEDDING_MODELS = {
+  "all-MiniLM-L6-v2": {
+    displayName: "all-MiniLM-L6-v2",
+    family: "Sentence Transformers / SBERT",
+    baseModel: "sentence-transformers/all-MiniLM-L6-v2",
+    mtebAverage: "56,26",
+    mtebRetrieval: "41,95",
+    dimensions: "384",
+    maxInput: "256 word pieces",
+    approximateCost: "Bajo: modelo PyTorch cargado en backend Python",
+    language: "Inglés",
+    runtime: {
+      task: "SentenceTransformer.encode",
+      pooling: "Definido por sentence-transformers",
+      normalize: "true",
+      batching: "Embedding conjunto de ambos textos",
+      execution: "Backend Python con sentence-transformers",
+    },
+  },
+  "thenlper/gte-small": {
+    displayName: "gte-small",
+    family: "General Text Embeddings",
+    baseModel: "thenlper/gte-small",
+    mtebAverage: "61,36",
+    mtebRetrieval: "49,46",
+    dimensions: "384",
+    maxInput: "512 tokens",
+    approximateCost: "Bajo: modelo PyTorch cargado en backend Python",
+    language: "Inglés",
+    runtime: {
+      task: "SentenceTransformer.encode",
+      pooling: "Definido por sentence-transformers",
+      normalize: "true",
+      batching: "Embedding conjunto de ambos textos",
+      execution: "Backend Python con sentence-transformers",
+    },
+  },
   "Xenova/all-MiniLM-L6-v2": {
     displayName: "all-MiniLM-L6-v2",
     family: "Sentence Transformers / SBERT",
@@ -9,8 +43,15 @@ const EMBEDDING_MODELS = {
     mtebRetrieval: "41,95",
     dimensions: "384",
     maxInput: "256 word pieces",
-    approximateCost: "Muy bajo: ONNX quantized aprox. 24,5 MB",
+    approximateCost: "Alias heredado: se redirige al backend Python compartido",
     language: "Inglés",
+    runtime: {
+      task: "SentenceTransformer.encode",
+      pooling: "Definido por sentence-transformers",
+      normalize: "true",
+      batching: "Embedding conjunto en backend",
+      execution: "Backend Python con sentence-transformers",
+    },
   },
   "Xenova/gte-small": {
     displayName: "gte-small",
@@ -20,17 +61,24 @@ const EMBEDDING_MODELS = {
     mtebRetrieval: "49,46",
     dimensions: "384",
     maxInput: "512 tokens",
-    approximateCost: "Muy bajo: ONNX int8 aprox. 33,8 MB",
+    approximateCost: "Alias heredado: se redirige al backend Python compartido",
     language: "Inglés",
+    runtime: {
+      task: "SentenceTransformer.encode",
+      pooling: "Definido por sentence-transformers",
+      normalize: "true",
+      batching: "Embedding conjunto en backend",
+      execution: "Backend Python con sentence-transformers",
+    },
   },
 };
 
 const PIPELINE_CONFIG = {
-  task: "feature-extraction",
-  pooling: "mean",
+  task: "SentenceTransformer.encode",
+  pooling: "Definido por sentence-transformers",
   normalize: "true",
-  batching: "Embedding canónico por texto individual",
-  execution: "Web Worker en navegador",
+  batching: "Embedding conjunto en backend",
+  execution: "Backend Python con sentence-transformers",
 };
 
 const COMPONENT_PRESETS = {
@@ -85,6 +133,52 @@ const PSO_OPERATORS = {
     statusLabel: "turbulencia",
   },
 };
+
+const TURBULENCE_LLM_DEFAULT_MODEL = "Qwen3.5-2B";
+const OPERATOR_DEFAULT_TEMPERATURES = {
+  influence: "0.45",
+  turbulence: "0.35",
+};
+const OPERATOR_DEFAULT_MODELS = {
+  influence: "meta-llama-3.1-8b-instruct",
+  turbulence: TURBULENCE_LLM_DEFAULT_MODEL,
+};
+
+const TURBULENCE_SYSTEM_PROMPT = `You are a prompt-component rewriting module.
+
+Task:
+Generate very close rewrites of one semantic prompt component.
+The rewrite must preserve the same meaning and the same component type.
+
+General rules:
+- Return only rewritten component candidates.
+- Each candidate must have 2-8 words.
+- Do not copy the current component exactly.
+- Do not change the main meaning.
+- Keep most words from the current component in the same order.
+- Replace only 1 word if possible, maximum 2 words.
+- Do not use context to add new information.
+- Candidates must be distinct from each other.
+- Do not explain.
+- Do not use quotes.
+- Do not add titles, labels, comments, or extra text.
+- Return exactly the number of candidates requested by the user.
+- Use numbered lines with this format:
+1) rewritten candidate
+2) rewritten candidate
+3) rewritten candidate
+...`;
+
+const TURBULENCE_USER_PROMPT_TEMPLATE = `TURBULENCE_USER_PROMPT = """
+Number of candidates: {num_candidates}
+
+Component type: {component_name}
+Component definition: {component_definition}
+Current component value: {current_component}
+
+Context:
+{other_components}
+"""`;
 
 const SOLUTION_GENERATION_SYSTEM_PROMPT = `You are a plain-text generator for natural-disaster scenario messages. You will receive one text-generation instruction from the user. Follow the instruction and generate exactly one final text message.
 
@@ -250,8 +344,6 @@ const SOLUTION_COST_ASSUMPTIONS = {
   mesapRuntimeMultiplier: 1.18,
 };
 
-const workerRequests = new Map();
-let nextWorkerRequestId = 1;
 let stopRequested = false;
 let solutionEvalStopRequested = false;
 let latestEmbeddingVectors = null;
@@ -264,6 +356,9 @@ let initialPopulationPollTimer = null;
 let currentInitialPopulationRunId = null;
 let initialComparisonPollTimer = null;
 let currentInitialComparisonRunId = null;
+let turbulenceComparisonPollTimer = null;
+let currentTurbulenceComparisonRunId = null;
+let turbulenceMetricPopover = null;
 let referenceTextLibrary = [];
 let lmStudioModelOptions = [];
 
@@ -306,6 +401,7 @@ const dom = {
   targetComponent: document.querySelector("#targetComponent"),
   otherComponents: document.querySelector("#otherComponents"),
   referenceText: document.querySelector("#referenceText"),
+  systemPrompt: document.querySelector("#systemPrompt"),
   promptTemplate: document.querySelector("#promptTemplate"),
   baselineSimilarity: document.querySelector("#baselineSimilarity"),
   templateMetrics: document.querySelector(".metrics-grid[aria-label='Resumen de evaluación']"),
@@ -444,6 +540,7 @@ const dom = {
   initialComparisonN: document.querySelector("#initialComparisonN"),
   initialComparisonTopK: document.querySelector("#initialComparisonTopK"),
   initialComparisonSeed: document.querySelector("#initialComparisonSeed"),
+  initialComparisonRepetitions: document.querySelector("#initialComparisonRepetitions"),
   initialComparisonEmbeddingModel: document.querySelector("#initialComparisonEmbeddingModel"),
   compareHybridStrategy: document.querySelector("#compareHybridStrategy"),
   compareEvolmdStrategy: document.querySelector("#compareEvolmdStrategy"),
@@ -492,6 +589,68 @@ const dom = {
   initialComparisonStrategyDetails: document.querySelector("#initialComparisonStrategyDetails"),
   initialComparisonLogOutput: document.querySelector("#initialComparisonLogOutput"),
   initialComparisonIntegrationDetails: document.querySelector("#initialComparisonIntegrationDetails"),
+  turbulenceStrategyLlm: document.querySelector("#turbulenceStrategyLlm"),
+  turbulenceStrategyWordnet: document.querySelector("#turbulenceStrategyWordnet"),
+  turbulenceStrategyDistilbert: document.querySelector("#turbulenceStrategyDistilbert"),
+  turbulenceIndividualCount: document.querySelector("#turbulenceIndividualCount"),
+  turbulenceSeed: document.querySelector("#turbulenceSeed"),
+  turbulenceRepetitions: document.querySelector("#turbulenceRepetitions"),
+  turbulenceChangeThreshold: document.querySelector("#turbulenceChangeThreshold"),
+  turbulenceCandidateCount: document.querySelector("#turbulenceCandidateCount"),
+  turbulenceComparisonMinSimilarity: document.querySelector("#turbulenceComparisonMinSimilarity"),
+  turbulenceComparisonMaxSimilarity: document.querySelector("#turbulenceComparisonMaxSimilarity"),
+  turbulenceMinWords: document.querySelector("#turbulenceMinWords"),
+  turbulenceMaxWords: document.querySelector("#turbulenceMaxWords"),
+  turbulenceEmbeddingModel: document.querySelector("#turbulenceEmbeddingModel"),
+  turbulenceDistilbertModel: document.querySelector("#turbulenceDistilbertModel"),
+  turbulenceFinalFidelityMin: document.querySelector("#turbulenceFinalFidelityMin"),
+  turbulenceFinalFidelityMax: document.querySelector("#turbulenceFinalFidelityMax"),
+  turbulenceReferenceText: document.querySelector("#turbulenceReferenceText"),
+  turbulencePpdbSourcePath: document.querySelector("#turbulencePpdbSourcePath"),
+  turbulencePpdbIndexPath: document.querySelector("#turbulencePpdbIndexPath"),
+  refreshTurbulencePpdbButton: document.querySelector("#refreshTurbulencePpdbButton"),
+  prepareTurbulencePpdbButton: document.querySelector("#prepareTurbulencePpdbButton"),
+  turbulencePpdbSetupStatus: document.querySelector("#turbulencePpdbSetupStatus"),
+  turbulenceLmBaseUrl: document.querySelector("#turbulenceLmBaseUrl"),
+  turbulenceLmApiMode: document.querySelector("#turbulenceLmApiMode"),
+  turbulenceLlmModel: document.querySelector("#turbulenceLlmModel"),
+  turbulenceOperatorParallelism: document.querySelector("#turbulenceOperatorParallelism"),
+  turbulenceGenerationParallelism: document.querySelector("#turbulenceGenerationParallelism"),
+  turbulenceLlmTemperature: document.querySelector("#turbulenceLlmTemperature"),
+  turbulenceLlmTopP: document.querySelector("#turbulenceLlmTopP"),
+  turbulenceLlmMaxTokens: document.querySelector("#turbulenceLlmMaxTokens"),
+  turbulenceTimeoutSeconds: document.querySelector("#turbulenceTimeoutSeconds"),
+  turbulenceLlmPromptTemplate: document.querySelector("#turbulenceLlmPromptTemplate"),
+  turbulenceLlmSystemPrompt: document.querySelector("#turbulenceLlmSystemPrompt"),
+  turbulenceFinalPromptTemplate: document.querySelector("#turbulenceFinalPromptTemplate"),
+  loadTurbulenceModelsButton: document.querySelector("#loadTurbulenceModelsButton"),
+  runTurbulenceComparisonButton: document.querySelector("#runTurbulenceComparisonButton"),
+  cancelTurbulenceComparisonButton: document.querySelector("#cancelTurbulenceComparisonButton"),
+  clearTurbulenceComparisonButton: document.querySelector("#clearTurbulenceComparisonButton"),
+  turbulenceComparisonConnectionDot: document.querySelector("#turbulenceComparisonConnectionDot"),
+  turbulenceComparisonConnectionText: document.querySelector("#turbulenceComparisonConnectionText"),
+  turbulenceRunStatus: document.querySelector("#turbulenceRunStatus"),
+  turbulenceRunStatusDetail: document.querySelector("#turbulenceRunStatusDetail"),
+  turbulenceProgressPercent: document.querySelector("#turbulenceProgressPercent"),
+  turbulenceProgressSummary: document.querySelector("#turbulenceProgressSummary"),
+  turbulenceMovementCount: document.querySelector("#turbulenceMovementCount"),
+  turbulenceRecommendation: document.querySelector("#turbulenceRecommendation"),
+  turbulenceRecommendationDetail: document.querySelector("#turbulenceRecommendationDetail"),
+  turbulenceBaselineFidelity: document.querySelector("#turbulenceBaselineFidelity"),
+  turbulenceBaselineDiversity: document.querySelector("#turbulenceBaselineDiversity"),
+  turbulencePpdbStatus: document.querySelector("#turbulencePpdbStatus"),
+  turbulencePpdbDetail: document.querySelector("#turbulencePpdbDetail"),
+  turbulenceRunId: document.querySelector("#turbulenceRunId"),
+  turbulenceStatusTone: document.querySelector("#turbulenceStatusTone"),
+  turbulenceStatusTitle: document.querySelector("#turbulenceStatusTitle"),
+  turbulenceStatusDetail: document.querySelector("#turbulenceStatusDetail"),
+  turbulenceStrategyMetricsBody: document.querySelector("#turbulenceStrategyMetricsBody"),
+  turbulenceMovementRowsBody: document.querySelector("#turbulenceMovementRowsBody"),
+  turbulenceLogOutput: document.querySelector("#turbulenceLogOutput"),
+  turbulenceCandidateModal: document.querySelector("#turbulenceCandidateModal"),
+  turbulenceCandidateModalTitle: document.querySelector("#turbulenceCandidateModalTitle"),
+  turbulenceCandidateModalBody: document.querySelector("#turbulenceCandidateModalBody"),
+  closeTurbulenceCandidateModalButton: document.querySelector("#closeTurbulenceCandidateModalButton"),
   comparatorReferencePreset: document.querySelector("#comparatorReferencePreset"),
   comparatorReferenceSaveLabel: document.querySelector("#comparatorReferenceSaveLabel"),
   saveComparatorReferenceButton: document.querySelector("#saveComparatorReferenceButton"),
@@ -499,6 +658,8 @@ const dom = {
   comparatorReferenceText: document.querySelector("#comparatorReferenceText"),
   comparatorModel: document.querySelector("#comparatorModel"),
   comparatorTopK: document.querySelector("#comparatorTopK"),
+  comparatorSeed: document.querySelector("#comparatorSeed"),
+  comparatorRepetitions: document.querySelector("#comparatorRepetitions"),
   comparatorProposalParallelism: document.querySelector("#comparatorProposalParallelism"),
   comparatorTimeoutMinutes: document.querySelector("#comparatorTimeoutMinutes"),
   comparatorN: document.querySelector("#comparatorN"),
@@ -553,39 +714,12 @@ const dom = {
 
 const DEFAULT_PROMPT_TEMPLATES = {
   influence: dom.promptTemplate.value,
-  turbulence: `TURBULENCE_N_PROMPT_QWEN = """
-Generate exactly {num_candidates} very close rewrites of one prompt component.
+  turbulence: TURBULENCE_USER_PROMPT_TEMPLATE,
+};
 
-Component type: {component_name}
-Component definition: {component_definition}
-
-Current component value: {current_component}
-
-Context:
-{other_components}
-
-Task:
-Rewrite Current with minimal wording changes.
-Keep the same meaning and same component type.
-Keep most words from Current in the same order.
-Replace only 1 word if possible, maximum 2 words.
-Do not use Context to add new information.
-
-Rules:
-- Return only {component_name} candidates.
-- Each candidate must have 2-8 words.
-- Do not copy Current exactly.
-- Do not change the main meaning.
-- Do not explain.
-- No quotes.
-- Exactly {num_candidates} numbered lines.
-
-Format:
-1) rewritten {component_name}
-2) rewritten {component_name}
-3) rewritten {component_name}
-...
-"""`,
+const DEFAULT_SYSTEM_PROMPT_TEMPLATES = {
+  influence: "",
+  turbulence: TURBULENCE_SYSTEM_PROMPT,
 };
 
 const COMPARATOR_API = "/api/comparator";
@@ -595,6 +729,10 @@ const INITIAL_POPULATION_TERMINAL_STATUSES = new Set(["completed", "failed", "ca
 const INITIAL_POPULATION_COMPARISON_API = "/api/initial-population-comparison";
 const INITIAL_POPULATION_COMPARISON_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const REFERENCE_TEXTS_API = "/api/reference-texts";
+const TURBULENCE_COMPARISON_API = "/api/turbulence-comparison";
+const TURBULENCE_COMPARISON_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const SBERT_API = "/api/sbert";
+const LM_STUDIO_API = "/api/lm-studio";
 
 function setStatus(toneElement, titleElement, detailElement, title, detail, state = "ready") {
   titleElement.textContent = title;
@@ -671,7 +809,23 @@ function normalizeEndpoint(endpoint) {
 }
 
 function endpointForMode(mode) {
-  return mode === "openai" ? "/lmstudio/v1" : "/lmstudio/api/v1";
+  return "http://127.0.0.1:1234";
+}
+
+function lmStudioBaseUrlFromEndpoint(endpoint) {
+  const value = normalizeEndpoint(endpoint);
+  if (!value || value.startsWith("/lmstudio")) {
+    return "";
+  }
+  try {
+    const url = new URL(value);
+    url.pathname = url.pathname.replace(/\/(?:api\/v1|v1)$/u, "");
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/u, "");
+  } catch {
+    return value.replace(/\/(?:api\/v1|v1)$/u, "");
+  }
 }
 
 function selectedLlmModel() {
@@ -688,13 +842,14 @@ function selectedEmbeddingModel() {
 
 function renderEmbeddingModelDetails() {
   const model = EMBEDDING_MODELS[selectedEmbeddingModel()];
+  const runtime = model.runtime || PIPELINE_CONFIG;
   dom.embeddingModelLabel.textContent = model.family;
   renderDefinitionList(dom.embeddingRuntimeDetails, [
-    ["Pipeline", PIPELINE_CONFIG.task],
-    ["Pooling", PIPELINE_CONFIG.pooling],
-    ["Normalización", PIPELINE_CONFIG.normalize],
-    ["Cálculo", PIPELINE_CONFIG.batching],
-    ["Ejecución", PIPELINE_CONFIG.execution],
+    ["Pipeline", runtime.task],
+    ["Pooling", runtime.pooling],
+    ["Normalización", runtime.normalize],
+    ["Cálculo", runtime.batching],
+    ["Ejecución", runtime.execution],
   ]);
   renderDefinitionList(dom.embeddingModelDetails, [
     ["Modelo", `${model.displayName} (${selectedEmbeddingModel()})`],
@@ -708,16 +863,56 @@ function renderEmbeddingModelDetails() {
   ]);
 }
 
-function requestEmbeddings(modelId, texts) {
-  const id = nextWorkerRequestId;
-  nextWorkerRequestId += 1;
-
-  const promise = new Promise((resolve, reject) => {
-    workerRequests.set(id, { resolve, reject });
+async function requestEmbeddings(modelId, texts) {
+  const response = await fetch(`${SBERT_API}/embeddings`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ model: modelId, texts }),
   });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `Solicitud SBERT fallida (${response.status}).`);
+  }
+  return payload.embeddings;
+}
 
-  embeddingWorker.postMessage({ id, modelId, texts });
-  return promise;
+async function requestSbertPair(model, textA, textB) {
+  const response = await fetch(`${SBERT_API}/pair`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ model, textA, textB }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `Solicitud SBERT fallida (${response.status}).`);
+  }
+  return payload;
+}
+
+async function requestLmStudioJson(path, payload, timeoutMs = 120000) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${LM_STUDIO_API}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      signal: controller.signal,
+      body: JSON.stringify(payload),
+    });
+    const responsePayload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(responsePayload.error || `Solicitud LM Studio fallida (${response.status}).`);
+    }
+    return responsePayload;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 function vectorPreview(vector) {
@@ -745,19 +940,26 @@ async function calculateEmbeddingPair() {
 
   dom.calculateEmbeddingButton.disabled = true;
   resetEmbeddingResults();
-  setStatus(dom.embeddingStatusTone, dom.embeddingStatusTitle, dom.embeddingStatusDetail, "Calculando", "Preparando embeddings.", "busy");
+  setStatus(dom.embeddingStatusTone, dom.embeddingStatusTitle, dom.embeddingStatusDetail, "Calculando", "Preparando embeddings en el backend Python.", "busy");
 
   try {
-    latestEmbeddingVectors = await requestEmbeddings(selectedEmbeddingModel(), [textA, textB]);
-    const similarity = cosineSimilarity(latestEmbeddingVectors[0], latestEmbeddingVectors[1]);
-    dom.embeddingSimilarity.textContent = formatNumber(similarity);
-    dom.embeddingDistance.textContent = formatNumber(cosineDistance(similarity));
-    dom.embeddingDimension.textContent = String(latestEmbeddingVectors[0].length);
+    const selectedModel = selectedEmbeddingModel();
+    const result = await requestSbertPair(selectedModel, textA, textB);
+    latestEmbeddingVectors = result.embeddings;
+    dom.embeddingSimilarity.textContent = formatNumber(result.similarity);
+    dom.embeddingDistance.textContent = formatNumber(result.distance);
+    dom.embeddingDimension.textContent = String(result.dimension);
     dom.embeddingPreviewA.textContent = vectorPreview(latestEmbeddingVectors[0]);
     dom.embeddingPreviewB.textContent = vectorPreview(latestEmbeddingVectors[1]);
     dom.copyEmbeddingAButton.disabled = false;
     dom.copyEmbeddingBButton.disabled = false;
-    setStatus(dom.embeddingStatusTone, dom.embeddingStatusTitle, dom.embeddingStatusDetail, "Cálculo completado", `Embeddings generados con ${EMBEDDING_MODELS[selectedEmbeddingModel()].displayName}.`);
+    setStatus(
+      dom.embeddingStatusTone,
+      dom.embeddingStatusTitle,
+      dom.embeddingStatusDetail,
+      "Cálculo completado",
+      `Similitud calculada con ${EMBEDDING_MODELS[selectedModel].displayName} en ${result.backend}.`,
+    );
   } catch (error) {
     setStatus(dom.embeddingStatusTone, dom.embeddingStatusTitle, dom.embeddingStatusDetail, "Error al calcular", error.message, "error");
   } finally {
@@ -821,10 +1023,52 @@ function isDefaultPromptTemplate(template) {
   return Object.values(DEFAULT_PROMPT_TEMPLATES).some((defaultTemplate) => defaultTemplate.trim() === template.trim());
 }
 
+function isDefaultSystemPromptTemplate(template) {
+  return Object.values(DEFAULT_SYSTEM_PROMPT_TEMPLATES).some((defaultTemplate) => defaultTemplate.trim() === template.trim());
+}
+
+function isDefaultOperatorTemperature(value) {
+  return Object.values(OPERATOR_DEFAULT_TEMPERATURES).includes(String(value).trim());
+}
+
+function isDefaultOperatorModel(value) {
+  return Object.values(OPERATOR_DEFAULT_MODELS).includes(String(value).trim());
+}
+
+function selectLoadedModelMatching(preferredModel) {
+  const preferred = String(preferredModel || "").toLocaleLowerCase();
+  if (!preferred || !dom.llmModelSelect.options.length) return "";
+  const exact = Array.from(dom.llmModelSelect.options).find((option) => option.value.toLocaleLowerCase() === preferred);
+  if (exact) return exact.value;
+  const qwenMatch = preferred.includes("qwen")
+    ? Array.from(dom.llmModelSelect.options).find((option) => {
+        const value = option.value.toLocaleLowerCase();
+        return value.includes("qwen") && (value.includes("2b") || value.includes("3.5"));
+      })
+    : null;
+  return qwenMatch?.value || "";
+}
+
 function applyPsoOperatorTemplate() {
   const operator = selectedPsoOperator();
   if (isDefaultPromptTemplate(dom.promptTemplate.value)) {
     dom.promptTemplate.value = DEFAULT_PROMPT_TEMPLATES[operator];
+  }
+  if (isDefaultSystemPromptTemplate(dom.systemPrompt.value)) {
+    dom.systemPrompt.value = DEFAULT_SYSTEM_PROMPT_TEMPLATES[operator];
+  }
+  if (isDefaultOperatorTemperature(dom.temperature.value)) {
+    dom.temperature.value = OPERATOR_DEFAULT_TEMPERATURES[operator];
+  }
+  if (isDefaultOperatorModel(dom.llmModelManual.value)) {
+    const preferredModel = OPERATOR_DEFAULT_MODELS[operator];
+    const loadedModel = selectLoadedModelMatching(preferredModel);
+    if (loadedModel) {
+      dom.llmModelSelect.value = loadedModel;
+      dom.llmModelManual.value = loadedModel;
+    } else {
+      dom.llmModelManual.value = preferredModel;
+    }
   }
   dom.renderedPromptPreview.textContent = renderPrompt();
   updatePsoOperatorUi();
@@ -874,6 +1118,8 @@ function setCheckerRunning(isRunning) {
   dom.psoSemanticOperator.disabled = isRunning;
   dom.psoIndividualCount.disabled = isRunning;
   dom.psoChangeThreshold.disabled = isRunning;
+  dom.systemPrompt.disabled = isRunning;
+  dom.promptTemplate.disabled = isRunning;
   if (isRunning) {
     dom.turbulenceMinSimilarity.disabled = true;
     dom.turbulenceMaxSimilarity.disabled = true;
@@ -925,6 +1171,11 @@ function normalizeCandidate(line) {
     .trim();
 }
 
+function hasPromptMarkup(candidate) {
+  return /```|\*\*|<\s*\/?\s*[A-Za-z][^>]*>|^\s*(?:system|user|assistant)\s*:|\b(?:based on|here'?s|breakdown|possible components?|current component value|potential next values?)\b/iu
+    .test(candidate.trim());
+}
+
 function parseCandidates(rawOutput, expectedCount) {
   const cleaned = rawOutput
     .replace(/```[A-Za-z]*\n?/g, "")
@@ -933,6 +1184,9 @@ function parseCandidates(rawOutput, expectedCount) {
   const candidates = [];
 
   cleaned.split(/\r?\n/).forEach((line) => {
+    if (!/^\s*\d+\s*[\).\]:-]\s*/u.test(line)) {
+      return;
+    }
     const candidate = normalizeCandidate(line);
     if (candidate) {
       candidates.push(candidate);
@@ -948,6 +1202,9 @@ function validationReason(candidate, runCandidates, config) {
   const target = typeof config.target === "string" ? config.target.toLocaleLowerCase() : "";
   const words = wordCount(candidate);
 
+  if (hasPromptMarkup(candidate)) {
+    return "prompt_marker";
+  }
   if (words < config.minWords || words > config.maxWords) {
     return "invalid_length";
   }
@@ -964,89 +1221,33 @@ function validationReason(candidate, runCandidates, config) {
 }
 
 async function callLmStudio(prompt, runNumber, config) {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), config.timeoutMs);
   const started = performance.now();
-  const isNativeApi = config.apiMode === "native";
-  const requestUrl = isNativeApi ? `${config.endpoint}/chat` : `${config.endpoint}/chat/completions`;
-  const messages = config.systemPrompt
-    ? [
-        { role: "system", content: config.systemPrompt },
-        { role: "user", content: prompt },
-      ]
-    : [{ role: "user", content: prompt }];
-  const requestBody = isNativeApi
-    ? {
-        model: config.model,
-        input: config.systemPrompt ? `${config.systemPrompt}\n\nUser instruction:\n${prompt}` : prompt,
-        temperature: config.temperature,
-        top_p: config.topP,
-        max_output_tokens: config.maxTokens,
-        stream: false,
-        store: false,
-      }
-    : {
-        model: config.model,
-        messages,
-        temperature: config.temperature,
-        top_p: config.topP,
-        max_tokens: config.maxTokens,
-        stream: false,
-      };
+  const payload = await requestLmStudioJson(
+    "/chat",
+    {
+      baseUrl: lmStudioBaseUrlFromEndpoint(config.endpoint),
+      apiMode: config.apiMode,
+      model: config.model,
+      systemPrompt: config.systemPrompt || "",
+      userPrompt: prompt,
+      temperature: config.temperature,
+      topP: config.topP,
+      maxTokens: config.maxTokens,
+      timeoutSeconds: Math.max(1, Math.ceil(config.timeoutMs / 1000)),
+    },
+    config.timeoutMs + 5000,
+  );
 
-  try {
-    const response = await fetch(requestUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify(requestBody),
-    });
-
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(payload.error?.message || `LM Studio respondió HTTP ${response.status}`);
-    }
-
-    return {
-      raw: extractLmStudioText(payload, config.apiMode),
-      elapsedMs: performance.now() - started,
-      usage: payload.usage || payload.stats || null,
-      runNumber,
-    };
-  } finally {
-    window.clearTimeout(timeout);
-  }
-}
-
-function extractLmStudioText(payload, apiMode) {
-  const contentToText = (content) => {
-    if (typeof content === "string") {
-      return content;
-    }
-    if (Array.isArray(content)) {
-      return content
-        .map((item) => (typeof item === "string" ? item : item?.text || item?.content || ""))
-        .filter(Boolean)
-        .join("\n");
-    }
-    return "";
+  return {
+    raw: payload.text || "",
+    elapsedMs: Number.isFinite(Number(payload.elapsedSeconds)) ? Number(payload.elapsedSeconds) * 1000 : performance.now() - started,
+    usage: {
+      prompt_tokens: payload.promptTokens ?? 0,
+      completion_tokens: payload.completionTokens ?? 0,
+      total_tokens: payload.totalTokens ?? 0,
+    },
+    runNumber,
   };
-
-  if (apiMode === "native") {
-    if (typeof payload.output_text === "string") {
-      return payload.output_text.trim();
-    }
-
-    const output = Array.isArray(payload.output) ? payload.output : [];
-    return output
-      .filter((item) => item?.type === "message")
-      .map((item) => contentToText(item.content))
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-  }
-
-  return contentToText(payload.choices?.[0]?.message?.content).trim();
 }
 
 async function fetchLmStudioModels() {
@@ -1058,12 +1259,11 @@ async function fetchLmStudioModels() {
   dom.checkerConnectionText.textContent = "Consultando LM Studio";
 
   try {
-    const response = await fetch(`${endpoint}/models`);
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error?.message || `HTTP ${response.status}`);
-    }
-
+    const payload = await requestLmStudioJson("/models", {
+      baseUrl: lmStudioBaseUrlFromEndpoint(endpoint),
+      apiMode: dom.lmApiMode.value,
+      timeoutSeconds: 30,
+    }, 35000);
     const models = parseLmStudioModels(payload, dom.lmApiMode.value);
     dom.llmModelSelect.replaceChildren(
       ...models.map((model) => {
@@ -1075,7 +1275,11 @@ async function fetchLmStudioModels() {
     );
 
     if (models.length > 0) {
-      const loaded = models.find((model) => model.loaded) || models[0];
+      const preferredModel = OPERATOR_DEFAULT_MODELS[selectedPsoOperator()];
+      const preferredLoaded = selectLoadedModelMatching(preferredModel);
+      const loaded = preferredLoaded
+        ? models.find((model) => model.id === preferredLoaded)
+        : models.find((model) => model.loaded) || models[0];
       dom.llmModelSelect.value = loaded.id;
       dom.llmModelManual.value = loaded.id;
     }
@@ -1100,12 +1304,11 @@ async function fetchSolutionLmStudioModels() {
   dom.solutionConnectionText.textContent = "Consultando LM Studio";
 
   try {
-    const response = await fetch(`${endpoint}/models`);
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error?.message || `HTTP ${response.status}`);
-    }
-
+    const payload = await requestLmStudioJson("/models", {
+      baseUrl: lmStudioBaseUrlFromEndpoint(endpoint),
+      apiMode: dom.solutionLmApiMode.value,
+      timeoutSeconds: 30,
+    }, 35000);
     const models = parseLmStudioModels(payload, dom.solutionLmApiMode.value);
     dom.solutionLlmModelSelect.replaceChildren(
       ...models.map((model) => {
@@ -1134,6 +1337,13 @@ async function fetchSolutionLmStudioModels() {
 }
 
 function parseLmStudioModels(payload, apiMode) {
+  if (
+    Array.isArray(payload.models)
+    && payload.models.every((model) => model && typeof model.id === "string")
+  ) {
+    return payload.models;
+  }
+
   if (apiMode === "native") {
     return (Array.isArray(payload.models) ? payload.models : [])
       .filter((model) => model.type === "llm")
@@ -1193,6 +1403,7 @@ function readCheckerConfig() {
     current: variables.current_component,
     target: variables.target_component,
     referenceText: variables.reference_text,
+    systemPrompt: getTemplateBody(dom.systemPrompt.value),
     promptTemplate: dom.promptTemplate.value,
     prompt: renderPrompt(),
   };
@@ -1977,6 +2188,9 @@ function initialPopulationStatusLabel(status) {
 }
 
 function formatOptionalNumber(value, digits = 6) {
+  if (value === null || value === undefined || value === "") {
+    return "--";
+  }
   const number = Number(value);
   return Number.isFinite(number) ? formatNumber(number, digits) : "--";
 }
@@ -2093,14 +2307,23 @@ function updateLmStudioModelSelectOptions(models) {
   lmStudioModelOptions = [...new Set((models || []).map((model) => String(model).trim()).filter(Boolean))].sort();
   lmStudioModelSelects().forEach((select) => {
     const current = select.value;
+    const preferred = select.dataset.preferredModel || "";
+    const shouldKeepPreferred = preferred && (!current || current === OPERATOR_DEFAULT_MODELS.influence);
+    const desired = shouldKeepPreferred ? preferred : current;
     if (!lmStudioModelOptions.length) {
-      if (current) {
-        select.replaceChildren(new Option(current, current));
+      if (desired) {
+        select.replaceChildren(new Option(desired, desired));
       }
       return;
     }
-    select.replaceChildren(...lmStudioModelOptions.map((model) => new Option(model, model)));
-    select.value = lmStudioModelOptions.includes(current) ? current : lmStudioModelOptions[0];
+    const options = lmStudioModelOptions.map((model) => new Option(model, model));
+    if (preferred && desired && !lmStudioModelOptions.includes(desired)) {
+      options.unshift(new Option(`${desired} (no listado en LM Studio)`, desired));
+    }
+    select.replaceChildren(...options);
+    select.value = desired && Array.from(select.options).some((option) => option.value === desired)
+      ? desired
+      : lmStudioModelOptions[0];
   });
 }
 
@@ -2160,6 +2383,21 @@ async function loadInitialComparisonModels() {
       tone: dom.initialComparisonStatusTone,
       title: dom.initialComparisonStatusTitle,
       detail: dom.initialComparisonStatusDetail,
+    },
+  });
+}
+
+async function loadTurbulenceModels() {
+  await loadLmStudioModelsForInitialConfig({
+    baseUrl: dom.turbulenceLmBaseUrl.value.trim(),
+    apiMode: dom.turbulenceLmApiMode.value,
+    button: dom.loadTurbulenceModelsButton,
+    statusElements: {
+      connectionText: dom.turbulenceComparisonConnectionText,
+      connectionDot: dom.turbulenceComparisonConnectionDot,
+      tone: dom.turbulenceStatusTone,
+      title: dom.turbulenceStatusTitle,
+      detail: dom.turbulenceStatusDetail,
     },
   });
 }
@@ -2728,12 +2966,14 @@ function readInitialComparisonConfig() {
   const n = Math.floor(readClampedNumber(dom.initialComparisonN, "N individuos", 1, 500));
   const topK = Math.floor(readClampedNumber(dom.initialComparisonTopK, "Top K tabla", 1, 500));
   const seed = Math.floor(readClampedNumber(dom.initialComparisonSeed, "Semilla", 0, 2147483647));
+  const repetitionsK = Math.floor(readClampedNumber(dom.initialComparisonRepetitions, "K repeticiones", 1, 30));
   return {
     referenceText,
     selectedStrategies,
     n,
     topK,
     seed,
+    repetitionsK,
     commonEmbeddingModel: dom.initialComparisonEmbeddingModel.value,
     hybrid: {
       strategyId: "hybrid-semantic-v7",
@@ -2949,7 +3189,7 @@ function initialComparisonStrategyViews(run) {
   }));
 }
 
-function renderInitialComparisonProgress(progress) {
+function renderInitialComparisonProgress(progress, config = null) {
   if (!progress) {
     dom.initialComparisonProgressPercent.textContent = "--";
     dom.initialComparisonProgressSummary.textContent = "Sin corrida activa.";
@@ -2972,6 +3212,7 @@ function renderInitialComparisonProgress(progress) {
     ["Tiempo transcurrido", progress.elapsedLabel || "--"],
     ["Tiempo restante estimado", progress.remainingLabel || "No disponible"],
     ["Estrategia activa", progress.activeStrategyName || "--"],
+    ["K repeticiones", config?.repetitionsK ?? 1],
     ["Cola", `${progress.queuedStrategies ?? 0}/${progress.totalStrategies ?? 0}`],
   ]);
 }
@@ -3007,7 +3248,7 @@ function renderInitialComparisonRun(run) {
   dom.initialComparisonConnectionDot.classList.toggle("is-error", run.status === "failed");
 
   const strategies = initialComparisonStrategyViews(run);
-  renderInitialComparisonProgress(run.progress || null);
+  renderInitialComparisonProgress(run.progress || null, run.config || null);
   renderInitialComparisonCostSummary(run.costSummary || null);
   renderInitialComparisonMetrics(strategies);
   renderInitialComparisonStrategyDetails(strategies);
@@ -3304,6 +3545,753 @@ function renderInitialComparisonLogs(logs) {
     .join("\n");
 }
 
+function turbulenceStatusLabel(status) {
+  const labels = {
+    queued: "en cola",
+    running: "ejecutando",
+    completed: "completado",
+    failed: "fallido",
+    cancelled: "cancelado",
+  };
+  return labels[status] || status || "--";
+}
+
+async function requestTurbulenceComparisonJson(path, options = {}) {
+  const response = await fetch(`${TURBULENCE_COMPARISON_API}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `Solicitud fallida (${response.status}).`);
+  }
+  return payload;
+}
+
+function readTurbulencePpdbPayload() {
+  return {
+    ppdbSourcePath: dom.turbulencePpdbSourcePath.value.trim(),
+    ppdbIndexPath: dom.turbulencePpdbIndexPath.value.trim(),
+  };
+}
+
+function renderTurbulencePpdbStatus(ppdb) {
+  if (!ppdb) {
+    dom.turbulencePpdbStatus.textContent = "--";
+    dom.turbulencePpdbDetail.textContent = "Indice compacto no revisado.";
+    dom.turbulencePpdbSetupStatus.textContent = "Descarga PPDB desde Kaggle y deja el archivo en data/external/ppdb/ppdb-2.0-s-all.";
+    return;
+  }
+
+  const source = ppdb.source || {};
+  const index = ppdb.index || {};
+  dom.turbulencePpdbStatus.textContent = ppdb.available ? "disponible" : "no disponible";
+  dom.turbulencePpdbDetail.textContent = ppdb.available
+    ? `${ppdb.entries ?? index.entries ?? 0} clave(s) en ${ppdb.path || index.path || "indice local"}.`
+    : (ppdb.message || index.message || "Indice compacto PPDB no preparado.");
+  const sourceLabel = source.exists
+    ? `Dataset local encontrado (${source.sizeLabel || "--"}): ${source.path || "--"}`
+    : `Dataset local faltante: ${source.path || dom.turbulencePpdbSourcePath.value.trim() || "--"}`;
+  const indexLabel = index.exists
+    ? `Indice: ${index.available ? "disponible" : "invalido"} en ${index.path || ppdb.path || "--"}`
+    : `Indice faltante: ${index.path || ppdb.path || dom.turbulencePpdbIndexPath.value.trim() || "--"}`;
+  dom.turbulencePpdbSetupStatus.textContent = `${sourceLabel}. ${indexLabel}.`;
+}
+
+async function refreshTurbulencePpdbStatus() {
+  try {
+    const status = await requestTurbulenceComparisonJson("/ppdb/status", {
+      method: "POST",
+      body: JSON.stringify(readTurbulencePpdbPayload()),
+    });
+    renderTurbulencePpdbStatus(status);
+  } catch (error) {
+    dom.turbulencePpdbStatus.textContent = "error";
+    dom.turbulencePpdbDetail.textContent = error.message;
+    dom.turbulencePpdbSetupStatus.textContent = `No se pudo verificar PPDB: ${error.message}`;
+  }
+}
+
+async function prepareTurbulencePpdb() {
+  const originalText = dom.prepareTurbulencePpdbButton.textContent;
+  dom.prepareTurbulencePpdbButton.disabled = true;
+  dom.refreshTurbulencePpdbButton.disabled = true;
+  dom.prepareTurbulencePpdbButton.textContent = "Preparando...";
+  dom.turbulencePpdbSetupStatus.textContent = "Leyendo PPDB completo y generando indice compacto. Puede tardar varios minutos.";
+  try {
+    const payload = await requestTurbulenceComparisonJson("/ppdb/prepare", {
+      method: "POST",
+      body: JSON.stringify(readTurbulencePpdbPayload()),
+    });
+    renderTurbulencePpdbStatus(payload.ppdb);
+  } catch (error) {
+    dom.turbulencePpdbStatus.textContent = "error";
+    dom.turbulencePpdbDetail.textContent = error.message;
+    dom.turbulencePpdbSetupStatus.textContent = `No se pudo preparar PPDB: ${error.message}`;
+  } finally {
+    dom.prepareTurbulencePpdbButton.textContent = originalText;
+    dom.prepareTurbulencePpdbButton.disabled = false;
+    dom.refreshTurbulencePpdbButton.disabled = false;
+  }
+}
+
+function readTurbulenceComparisonConfig() {
+  const strategies = [];
+  if (dom.turbulenceStrategyLlm.checked) strategies.push("llm");
+  if (dom.turbulenceStrategyWordnet.checked) strategies.push("wordnet-ppdb-sbert");
+  if (dom.turbulenceStrategyDistilbert.checked) strategies.push("distilbert-sbert");
+  if (!strategies.length) {
+    throw new Error("Selecciona al menos una estrategia.");
+  }
+
+  const minSimilarity = readClampedNumber(dom.turbulenceComparisonMinSimilarity, "Sim. minima", -1, 1);
+  const maxSimilarity = readClampedNumber(dom.turbulenceComparisonMaxSimilarity, "Sim. maxima", -1, 1);
+  if (minSimilarity > maxSimilarity) {
+    throw new Error("La similitud minima no puede ser mayor que la maxima.");
+  }
+  const minWords = Math.floor(readClampedNumber(dom.turbulenceMinWords, "Min. palabras", 1, 40));
+  const maxWords = Math.floor(readClampedNumber(dom.turbulenceMaxWords, "Max. palabras", 1, 80));
+  if (minWords > maxWords) {
+    throw new Error("El minimo de palabras no puede ser mayor que el maximo.");
+  }
+  const finalFidelityMin = readClampedNumber(dom.turbulenceFinalFidelityMin, "Fidelidad final minima", -1, 1);
+  const finalFidelityMax = readClampedNumber(dom.turbulenceFinalFidelityMax, "Fidelidad final maxima", -1, 1);
+  if (finalFidelityMin > finalFidelityMax) {
+    throw new Error("La fidelidad final minima no puede ser mayor que la maxima.");
+  }
+
+  const requiredText = (input, label) => {
+    const value = input.value.trim();
+    if (!value) {
+      throw new Error(`${label} no puede estar vacio.`);
+    }
+    return value;
+  };
+
+  return {
+    strategies,
+    individualCount: Math.floor(readClampedNumber(dom.turbulenceIndividualCount, "N individuos", 1, 200)),
+    seed: Math.floor(readClampedNumber(dom.turbulenceSeed, "Semilla", 0, 2147483647)),
+    repetitionsK: Math.floor(readClampedNumber(dom.turbulenceRepetitions, "K repeticiones", 1, 30)),
+    kCandidates: Math.floor(readClampedNumber(dom.turbulenceCandidateCount, "K candidatos", 1, 30)),
+    turbulenceMinSimilarity: minSimilarity,
+    turbulenceMaxSimilarity: maxSimilarity,
+    minWords,
+    maxWords,
+    embeddingModel: requiredText(dom.turbulenceEmbeddingModel, "Modelo SBERT"),
+    distilbertModel: requiredText(dom.turbulenceDistilbertModel, "Modelo DistilBERT"),
+    referenceText: requiredText(dom.turbulenceReferenceText, "Texto de referencia final"),
+    finalFidelityMin,
+    finalFidelityMax,
+    ppdbSourcePath: requiredText(dom.turbulencePpdbSourcePath, "Archivo PPDB completo"),
+    ppdbIndexPath: requiredText(dom.turbulencePpdbIndexPath, "Indice compacto PPDB"),
+    operatorParallelism: Math.floor(readClampedNumber(dom.turbulenceOperatorParallelism, "Paralelismo operador", 1, 8)),
+    generationParallelism: Math.floor(readClampedNumber(dom.turbulenceGenerationParallelism, "Paralelismo generacion final", 1, 8)),
+    lmStudio: {
+      baseUrl: requiredText(dom.turbulenceLmBaseUrl, "Base URL LM Studio"),
+      apiMode: dom.turbulenceLmApiMode.value,
+      model: requiredText(dom.turbulenceLlmModel, "Modelo LLM"),
+      temperature: readClampedNumber(dom.turbulenceLlmTemperature, "Temperatura", 0, 2),
+      topP: readClampedNumber(dom.turbulenceLlmTopP, "Top p", 0, 1),
+      maxTokens: Math.floor(readClampedNumber(dom.turbulenceLlmMaxTokens, "Max. tokens", 8, 4096)),
+      timeoutSeconds: readClampedNumber(dom.turbulenceTimeoutSeconds, "Timeout", 5, 1200),
+    },
+    llmTurbulenceSystemPrompt: requiredText(dom.turbulenceLlmSystemPrompt, "System prompt turbulencia LLM"),
+    llmTurbulencePromptTemplate: requiredText(dom.turbulenceLlmPromptTemplate, "Prompt turbulencia LLM"),
+    finalPromptTemplate: requiredText(dom.turbulenceFinalPromptTemplate, "Prompt generacion final"),
+  };
+}
+
+function setTurbulenceComparisonRunning(isRunning, cancelRequested = false) {
+  dom.loadTurbulenceModelsButton.disabled = isRunning;
+  dom.runTurbulenceComparisonButton.disabled = isRunning;
+  dom.cancelTurbulenceComparisonButton.disabled = !isRunning || !currentTurbulenceComparisonRunId || cancelRequested;
+  dom.cancelTurbulenceComparisonButton.textContent = cancelRequested ? "Cancelando..." : "Cancelar";
+  dom.clearTurbulenceComparisonButton.disabled = isRunning;
+  dom.refreshTurbulencePpdbButton.disabled = isRunning;
+  dom.prepareTurbulencePpdbButton.disabled = isRunning;
+  document
+    .querySelectorAll("#turbulenceComparison input, #turbulenceComparison select, #turbulenceComparison textarea")
+    .forEach((field) => {
+      field.disabled = isRunning;
+    });
+}
+
+function stopTurbulenceComparisonPolling() {
+  if (turbulenceComparisonPollTimer) {
+    window.clearInterval(turbulenceComparisonPollTimer);
+    turbulenceComparisonPollTimer = null;
+  }
+}
+
+function resetTurbulenceComparisonUi() {
+  stopTurbulenceComparisonPolling();
+  currentTurbulenceComparisonRunId = null;
+  setTurbulenceComparisonRunning(false);
+  dom.turbulenceRunStatus.textContent = "--";
+  dom.turbulenceRunStatusDetail.textContent = "Sin corrida activa.";
+  dom.turbulenceProgressPercent.textContent = "--";
+  dom.turbulenceProgressSummary.textContent = "Sin ejecucion.";
+  dom.turbulenceMovementCount.textContent = "--";
+  dom.turbulenceRecommendation.textContent = "--";
+  dom.turbulenceRecommendationDetail.textContent = "Pendiente.";
+  dom.turbulenceBaselineFidelity.textContent = "--";
+  dom.turbulenceBaselineDiversity.textContent = "--";
+  renderTurbulencePpdbStatus(null);
+  dom.turbulenceRunId.textContent = "--";
+  dom.turbulenceComparisonConnectionText.textContent = "Sin ejecucion";
+  dom.turbulenceComparisonConnectionDot.classList.remove("is-busy", "is-error");
+  dom.turbulenceStrategyMetricsBody.innerHTML = '<tr><td colspan="10">Sin resultados todavia.</td></tr>';
+  dom.turbulenceMovementRowsBody.innerHTML = '<tr><td colspan="8">Sin movimientos todavia.</td></tr>';
+  dom.turbulenceLogOutput.textContent = "Sin logs todavia.";
+  setStatus(
+    dom.turbulenceStatusTone,
+    dom.turbulenceStatusTitle,
+    dom.turbulenceStatusDetail,
+    "Listo",
+    "Configura las estrategias y ejecuta una comparacion corta para validar el flujo.",
+  );
+}
+
+async function runTurbulenceComparison() {
+  try {
+    const config = readTurbulenceComparisonConfig();
+    stopTurbulenceComparisonPolling();
+    currentTurbulenceComparisonRunId = null;
+    setTurbulenceComparisonRunning(true);
+    setStatus(
+      dom.turbulenceStatusTone,
+      dom.turbulenceStatusTitle,
+      dom.turbulenceStatusDetail,
+      "Enviando corrida",
+      "Preparando la comparacion en backend.",
+      "busy",
+    );
+    const run = await requestTurbulenceComparisonJson("/runs", {
+      method: "POST",
+      body: JSON.stringify(config),
+    });
+    currentTurbulenceComparisonRunId = run.runId;
+    renderTurbulenceComparisonRun(run);
+    turbulenceComparisonPollTimer = window.setInterval(
+      () => refreshTurbulenceComparisonRun(currentTurbulenceComparisonRunId),
+      2000,
+    );
+    await refreshTurbulenceComparisonRun(currentTurbulenceComparisonRunId);
+  } catch (error) {
+    currentTurbulenceComparisonRunId = null;
+    stopTurbulenceComparisonPolling();
+    setTurbulenceComparisonRunning(false);
+    setStatus(dom.turbulenceStatusTone, dom.turbulenceStatusTitle, dom.turbulenceStatusDetail, "Error", error.message, "error");
+    dom.turbulenceComparisonConnectionText.textContent = "Error";
+    dom.turbulenceComparisonConnectionDot.classList.add("is-error");
+  }
+}
+
+async function refreshTurbulenceComparisonRun(runId) {
+  if (!runId) return;
+  try {
+    const run = await requestTurbulenceComparisonJson(`/runs/${encodeURIComponent(runId)}`);
+    renderTurbulenceComparisonRun(run);
+    if (TURBULENCE_COMPARISON_TERMINAL_STATUSES.has(run.status)) {
+      stopTurbulenceComparisonPolling();
+      currentTurbulenceComparisonRunId = run.runId;
+      setTurbulenceComparisonRunning(false);
+    } else {
+      currentTurbulenceComparisonRunId = run.runId;
+      setTurbulenceComparisonRunning(true, Boolean(run.cancelRequested));
+    }
+  } catch (error) {
+    stopTurbulenceComparisonPolling();
+    setTurbulenceComparisonRunning(false);
+    setStatus(dom.turbulenceStatusTone, dom.turbulenceStatusTitle, dom.turbulenceStatusDetail, "Error consultando corrida", error.message, "error");
+  }
+}
+
+async function cancelTurbulenceComparisonRun() {
+  if (!currentTurbulenceComparisonRunId) return;
+  setTurbulenceComparisonRunning(true, true);
+  try {
+    const run = await requestTurbulenceComparisonJson(`/runs/${encodeURIComponent(currentTurbulenceComparisonRunId)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    renderTurbulenceComparisonRun(run);
+    setTurbulenceComparisonRunning(!TURBULENCE_COMPARISON_TERMINAL_STATUSES.has(run.status), true);
+  } catch (error) {
+    setStatus(dom.turbulenceStatusTone, dom.turbulenceStatusTitle, dom.turbulenceStatusDetail, "Error cancelando corrida", error.message, "error");
+    setTurbulenceComparisonRunning(true);
+  }
+}
+
+function renderTurbulenceComparisonRun(run) {
+  const progress = run.progress || {};
+  const result = run.result || {};
+  const baseline = result.baseline || {};
+  const ppdb = result.ppdb || {};
+  const repetitionsK = result.repetitionsK ?? run.config?.repetitionsK ?? 1;
+  const percent = Number.isFinite(Number(progress.percent)) ? Math.round(Number(progress.percent)) : 0;
+  const statusLabel = turbulenceStatusLabel(run.status);
+
+  dom.turbulenceRunStatus.textContent = statusLabel;
+  dom.turbulenceRunStatusDetail.textContent = progress.message || run.error || "Sin detalle.";
+  dom.turbulenceProgressPercent.textContent = `${percent}%`;
+  dom.turbulenceProgressSummary.textContent = `${progress.completed ?? 0}/${progress.total ?? 0} - ${progress.stage || "--"} | K ${repetitionsK}`;
+  dom.turbulenceMovementCount.textContent = result.movementCount ?? "--";
+  dom.turbulenceRunId.textContent = run.runId || "--";
+  dom.turbulenceBaselineFidelity.textContent = formatOptionalNumber(baseline.averageFidelity, 6);
+  dom.turbulenceBaselineDiversity.textContent = formatOptionalNumber(baseline.averageDiversity, 6);
+  renderTurbulencePpdbStatus(ppdb);
+
+  const recommendation = result.recommendation || {};
+  dom.turbulenceRecommendation.textContent = recommendation.displayName || "--";
+  dom.turbulenceRecommendationDetail.textContent = recommendation.message || "Pendiente.";
+
+  const isRunning = run.status === "queued" || run.status === "running";
+  dom.turbulenceComparisonConnectionText.textContent = statusLabel;
+  dom.turbulenceComparisonConnectionDot.classList.toggle("is-busy", isRunning);
+  dom.turbulenceComparisonConnectionDot.classList.toggle("is-error", run.status === "failed");
+  setStatus(
+    dom.turbulenceStatusTone,
+    dom.turbulenceStatusTitle,
+    dom.turbulenceStatusDetail,
+    statusLabel,
+    run.error || progress.message || "Sin detalle.",
+    run.status === "failed" ? "error" : isRunning ? "busy" : "ready",
+  );
+
+  renderTurbulenceStrategyMetrics(result.strategies || [], run.config || {}, recommendation);
+  renderTurbulenceMovementRows(result.strategies || []);
+  renderTurbulenceLogs(run.logs || []);
+}
+
+function formatTurbulenceRate(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${formatNumber(number * 100, 2)}%` : "--";
+}
+
+function formatSignedOptional(value) {
+  if (value === null || value === undefined || value === "") {
+    return "--";
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? formatSigned(number) : "--";
+}
+
+function turbulenceCostLabel(cost = {}) {
+  const ppdbQueries = cost.ppdbQueries ?? 0;
+  const ppdbAttempts = cost.ppdbLookupAttempts ?? ppdbQueries;
+  const ppdbLabel = ppdbAttempts > ppdbQueries
+    ? `PPDB ${ppdbQueries} (${ppdbAttempts} intento${ppdbAttempts === 1 ? "" : "s"} no disp.)`
+    : `PPDB ${ppdbQueries}`;
+  return [
+    `LLM ${cost.llmCalls ?? 0}`,
+    `WN ${cost.wordnetQueries ?? 0}`,
+    ppdbLabel,
+    `D-BERT ${cost.distilbertInferences ?? 0}`,
+    `Emb ${cost.embeddingTexts ?? 0}`,
+    `SBERT ${formatDuration(Number(cost.embeddingWallClockSeconds || 0) * 1000)}`,
+  ].join(" | ");
+}
+
+function bestTurbulenceIndexes(strategies, getter, direction = "max") {
+  const values = strategies
+    .map((strategy, index) => ({ index, value: Number(getter(strategy)) }))
+    .filter((entry) => Number.isFinite(entry.value));
+  if (!values.length) {
+    return new Set();
+  }
+  const target = direction === "min"
+    ? Math.min(...values.map((entry) => entry.value))
+    : Math.max(...values.map((entry) => entry.value));
+  return new Set(values.filter((entry) => entry.value === target).map((entry) => entry.index));
+}
+
+function turbulenceBestClass(bestIndexes, index) {
+  return bestIndexes.has(index) ? "metric-best" : "";
+}
+
+function turbulenceMetricLabel(key) {
+  return {
+    success: "Tasa de exito",
+    coverage: "Cobertura",
+    time: "Tiempo promedio",
+    cost: "Costo operador",
+    fidelity: "Fidelidad final semantica vs referencia",
+    fidelityDelta: "Delta fidelidad vs baseline sin turbulencia",
+    diversity: "Diversidad semantica entre textos finales",
+    diversityDelta: "Delta diversidad vs baseline sin turbulencia",
+    eligible: "Recomendable por rango de fidelidad",
+  }[key] || key;
+}
+
+function turbulenceMetricValue(strategy, key, config = {}) {
+  const operator = strategy.operatorMetrics || {};
+  const finalMetrics = strategy.finalMetrics || {};
+  const cost = operator.cost || {};
+  const deltas = strategy.deltas || {};
+  if (key === "success") return formatTurbulenceRate(operator.successRate);
+  if (key === "coverage") return formatTurbulenceRate(operator.coverageRate);
+  if (key === "time") return formatDuration(Number(operator.operatorAverageSeconds || 0) * 1000);
+  if (key === "cost") return `${turbulenceCostLabel(cost)}; costo relativo ${formatOptionalNumber(strategy.relativeOperatorCost, 2)}`;
+  if (key === "fidelity") return formatOptionalNumber(finalMetrics.averageFidelity, 6);
+  if (key === "fidelityDelta") return formatSignedOptional(deltas.averageFidelityDelta);
+  if (key === "diversity") return formatOptionalNumber(finalMetrics.averageDiversity, 6);
+  if (key === "diversityDelta") return formatSignedOptional(deltas.averageDiversityDelta);
+  if (key === "eligible") {
+    const fidelity = Number(finalMetrics.averageFidelity);
+    const finalMin = Number(config.finalFidelityMin);
+    const finalMax = Number(config.finalFidelityMax);
+    return Number.isFinite(fidelity) && fidelity >= finalMin && fidelity <= finalMax ? "si" : "no";
+  }
+  return "--";
+}
+
+function turbulenceMetricCell(content, className, key) {
+  const label = turbulenceMetricLabel(key);
+  return `<td class="${className} metric-breakdown-cell" data-turbulence-breakdown="${key}" tabindex="0" role="button" aria-label="Ver desglose por K: ${escapeHtml(label)}">${content}</td>`;
+}
+
+function closeTurbulenceMetricPopover() {
+  if (turbulenceMetricPopover) {
+    turbulenceMetricPopover.hidden = true;
+  }
+}
+
+function ensureTurbulenceMetricPopover() {
+  if (turbulenceMetricPopover) return turbulenceMetricPopover;
+  turbulenceMetricPopover = document.createElement("div");
+  turbulenceMetricPopover.className = "metric-breakdown-popover";
+  turbulenceMetricPopover.hidden = true;
+  turbulenceMetricPopover.setAttribute("role", "tooltip");
+  document.body.appendChild(turbulenceMetricPopover);
+  document.addEventListener("click", (event) => {
+    if (
+      turbulenceMetricPopover
+      && !turbulenceMetricPopover.hidden
+      && !turbulenceMetricPopover.contains(event.target)
+      && !(event.target instanceof Element && event.target.closest("[data-turbulence-breakdown]"))
+    ) {
+      closeTurbulenceMetricPopover();
+    }
+  });
+  window.addEventListener("scroll", closeTurbulenceMetricPopover, true);
+  window.addEventListener("resize", closeTurbulenceMetricPopover);
+  return turbulenceMetricPopover;
+}
+
+function showTurbulenceMetricBreakdown(event, strategy, key, config) {
+  event.stopPropagation();
+  const popover = ensureTurbulenceMetricPopover();
+  const repetitions = Array.isArray(strategy.repetitions) && strategy.repetitions.length
+    ? strategy.repetitions
+    : [strategy];
+  const rows = repetitions.map((item, index) => ({
+    k: item.repetitionIndex ?? index + 1,
+    seed: item.repetitionSeed ?? "--",
+    value: turbulenceMetricValue(item, key, config),
+  }));
+  popover.innerHTML = `
+    <div class="metric-breakdown-title">${escapeHtml(strategy.displayName || strategy.strategyId || "Estrategia")}</div>
+    <div class="metric-breakdown-subtitle">${escapeHtml(turbulenceMetricLabel(key))}</div>
+    <p><strong>Agregado:</strong> ${escapeHtml(turbulenceMetricValue(strategy, key, config))}</p>
+    <table>
+      <thead>
+        <tr><th>K</th><th>Semilla</th><th>Valor</th></tr>
+      </thead>
+      <tbody>
+        ${rows.map((row) => `
+          <tr>
+            <td>${escapeHtml(String(row.k))}</td>
+            <td>${escapeHtml(String(row.seed))}</td>
+            <td>${escapeHtml(row.value)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+  popover.hidden = false;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const width = Math.max(160, Math.min(560, window.innerWidth - 24));
+  popover.style.width = `${width}px`;
+  const top = Math.min(window.innerHeight - popover.offsetHeight - 12, rect.bottom + 8);
+  const left = Math.min(window.innerWidth - width - 12, Math.max(12, rect.left));
+  popover.style.top = `${Math.max(12, top)}px`;
+  popover.style.left = `${left}px`;
+}
+
+function addTurbulenceMetricBreakdowns(row, strategy, config) {
+  row.querySelectorAll("[data-turbulence-breakdown]").forEach((cell) => {
+    const key = cell.dataset.turbulenceBreakdown;
+    cell.addEventListener("click", (event) => showTurbulenceMetricBreakdown(event, strategy, key, config));
+    cell.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        showTurbulenceMetricBreakdown(event, strategy, key, config);
+      }
+    });
+  });
+}
+
+function renderTurbulenceStrategyMetrics(strategies, config, recommendation) {
+  if (!strategies.length) {
+    dom.turbulenceStrategyMetricsBody.innerHTML = '<tr><td colspan="10">Sin resultados todavia.</td></tr>';
+    return;
+  }
+  const finalMin = Number(config.finalFidelityMin);
+  const finalMax = Number(config.finalFidelityMax);
+  const best = {
+    success: bestTurbulenceIndexes(strategies, (strategy) => strategy.operatorMetrics?.successRate, "max"),
+    coverage: bestTurbulenceIndexes(strategies, (strategy) => strategy.operatorMetrics?.coverageRate, "max"),
+    time: bestTurbulenceIndexes(strategies, (strategy) => strategy.operatorMetrics?.operatorAverageSeconds, "min"),
+    cost: bestTurbulenceIndexes(strategies, (strategy) => strategy.relativeOperatorCost, "min"),
+    fidelity: bestTurbulenceIndexes(strategies, (strategy) => strategy.finalMetrics?.averageFidelity, "max"),
+    fidelityDelta: bestTurbulenceIndexes(strategies, (strategy) => strategy.deltas?.averageFidelityDelta, "max"),
+    diversity: bestTurbulenceIndexes(strategies, (strategy) => strategy.finalMetrics?.averageDiversity, "max"),
+    diversityDelta: bestTurbulenceIndexes(strategies, (strategy) => strategy.deltas?.averageDiversityDelta, "max"),
+  };
+  dom.turbulenceStrategyMetricsBody.replaceChildren(
+    ...strategies.map((strategy, index) => {
+      const operator = strategy.operatorMetrics || {};
+      const finalMetrics = strategy.finalMetrics || {};
+      const cost = operator.cost || {};
+      const deltas = strategy.deltas || {};
+      const warnings = Array.isArray(strategy.warnings) ? strategy.warnings : [];
+      const fidelity = Number(finalMetrics.averageFidelity);
+      const eligible = Number.isFinite(fidelity) && fidelity >= finalMin && fidelity <= finalMax;
+      const isWinner = recommendation?.strategyId === strategy.strategyId;
+      const tr = document.createElement("tr");
+      if (isWinner) tr.classList.add("is-nondominated-row");
+      tr.innerHTML = `
+        <td>${escapeHtml(strategy.displayName || strategy.strategyId)}${warnings.length ? `<br><small>${escapeHtml(warnings[0])}</small>` : ""}</td>
+        ${turbulenceMetricCell(formatTurbulenceRate(operator.successRate), turbulenceBestClass(best.success, index), "success")}
+        ${turbulenceMetricCell(formatTurbulenceRate(operator.coverageRate), turbulenceBestClass(best.coverage, index), "coverage")}
+        ${turbulenceMetricCell(`${formatDuration(Number(operator.operatorAverageSeconds || 0) * 1000)}<br><small>wall ${formatDuration(Number(operator.operatorWallClockSeconds || 0) * 1000)}; par ${operator.operatorParallelism ?? 1}</small>`, turbulenceBestClass(best.time, index), "time")}
+        ${turbulenceMetricCell(`${escapeHtml(turbulenceCostLabel(cost))}<br><small>costo relativo ${formatOptionalNumber(strategy.relativeOperatorCost, 2)}</small>`, turbulenceBestClass(best.cost, index), "cost")}
+        ${turbulenceMetricCell(formatOptionalNumber(finalMetrics.averageFidelity, 6), turbulenceBestClass(best.fidelity, index), "fidelity")}
+        ${turbulenceMetricCell(formatSignedOptional(deltas.averageFidelityDelta), turbulenceBestClass(best.fidelityDelta, index), "fidelityDelta")}
+        ${turbulenceMetricCell(formatOptionalNumber(finalMetrics.averageDiversity, 6), turbulenceBestClass(best.diversity, index), "diversity")}
+        ${turbulenceMetricCell(formatSignedOptional(deltas.averageDiversityDelta), turbulenceBestClass(best.diversityDelta, index), "diversityDelta")}
+        ${turbulenceMetricCell(`<span class="${eligible ? "valid" : "invalid"}">${eligible ? "si" : "no"}</span>${isWinner ? "<br><small>recomendada</small>" : ""}`, "", "eligible")}
+      `;
+      addTurbulenceMetricBreakdowns(tr, strategy, config);
+      return tr;
+    }),
+  );
+}
+
+function renderTurbulenceMovementRows(strategies) {
+  const rows = strategies.flatMap((strategy, strategyIndex) =>
+    (strategy.movementRows || []).map((row) => ({
+      ...row,
+      strategyName: strategy.displayName || strategy.strategyId,
+      strategyIndex,
+    })),
+  ).sort((a, b) =>
+    String(a.individualId || "").localeCompare(String(b.individualId || ""), undefined, { numeric: true, sensitivity: "base" })
+    || Number(a.movementNumber || 0) - Number(b.movementNumber || 0)
+    || a.strategyIndex - b.strategyIndex
+  );
+  if (!rows.length) {
+    dom.turbulenceMovementRowsBody.innerHTML = '<tr><td colspan="8">Sin movimientos todavia.</td></tr>';
+    return;
+  }
+  dom.turbulenceMovementRowsBody.replaceChildren(
+    ...rows.slice(0, 160).map((row) => {
+      const tr = document.createElement("tr");
+      const statusText = row.error ? `${row.status || "error"}: ${row.error}` : (row.status || "--");
+      const hasLlmDiagnostics = Boolean(row.diagnostics?.llm);
+      tr.classList.add("turbulence-movement-row", `turbulence-strategy-row-${row.strategyIndex % 6}`);
+      if (!row.success) {
+        tr.classList.add("turbulence-row-invalid");
+      }
+      if (!row.success || hasLlmDiagnostics) {
+        tr.classList.add("is-clickable-diagnostic");
+        tr.tabIndex = 0;
+        tr.setAttribute("role", "button");
+        tr.setAttribute("aria-label", `Ver diagnóstico de ${row.strategyName} para ${row.individualId || "individuo"}`);
+        tr.addEventListener("click", () => openTurbulenceCandidateModal(row));
+        tr.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openTurbulenceCandidateModal(row);
+          }
+        });
+      }
+      tr.innerHTML = `
+        <td><span class="strategy-badge">${escapeHtml(row.strategyName)}</span></td>
+        <td>${escapeHtml(String(row.movementNumber ?? "--"))}</td>
+        <td>${escapeHtml(row.individualId || "--")}</td>
+        <td>${escapeHtml(row.componentName || "--")}</td>
+        <td class="context-cell long-cell"><div class="scroll-cell">${escapeHtml(row.current || "--")}</div></td>
+        <td class="context-cell long-cell"><div class="scroll-cell">${escapeHtml(row.selectedCandidate || "--")}</div></td>
+        <td>${formatOptionalNumber(row.similarity, 6)}</td>
+        <td><span class="${row.success ? "valid" : "invalid"}">${escapeHtml(statusText)}</span></td>
+      `;
+      return tr;
+    }),
+  );
+}
+
+function openTurbulenceCandidateModal(row) {
+  const candidates = Array.isArray(row.candidates) ? row.candidates : [];
+  const validCandidates = candidates.filter((candidate) => candidate.valid);
+  const statusDescription = turbulenceReasonDescription(row.status);
+  dom.turbulenceCandidateModalTitle.textContent = `${row.strategyName || "Estrategia"} - ${row.individualId || "individuo"}`;
+  dom.turbulenceCandidateModalBody.innerHTML = `
+    <dl class="diagnostic-summary">
+      <div><dt>Movimiento</dt><dd>${escapeHtml(String(row.movementNumber ?? "--"))}</dd></div>
+      <div><dt>Componente</dt><dd>${escapeHtml(row.componentName || "--")}</dd></div>
+      <div><dt>Estado</dt><dd><span class="invalid">${escapeHtml(row.status || "--")}</span><small>${escapeHtml(statusDescription)}</small></dd></div>
+      <div><dt>Cobertura</dt><dd>${row.coverage ? "sí" : "no"}</dd></div>
+      <div><dt>Candidatos crudos</dt><dd>${escapeHtml(String(row.rawCandidateCount ?? 0))}</dd></div>
+      <div><dt>Candidatos válidos</dt><dd>${escapeHtml(String(validCandidates.length))}</dd></div>
+    </dl>
+    <div class="diagnostic-block">
+      <h3>Componente original</h3>
+      <p>${escapeHtml(row.current || "--")}</p>
+    </div>
+    ${row.error ? `
+      <div class="diagnostic-block diagnostic-error">
+        <h3>Error</h3>
+        <p>${escapeHtml(row.error)}</p>
+      </div>
+    ` : ""}
+    ${turbulenceLlmDiagnosticsBlock(row.diagnostics?.llm)}
+    <div class="diagnostic-block">
+      <h3>Candidatos generados internamente</h3>
+      ${candidates.length ? turbulenceCandidateDiagnosticsTable(candidates) : '<p>No se generaron candidatos parseables antes del filtro semántico.</p>'}
+    </div>
+  `;
+  dom.turbulenceCandidateModal.hidden = false;
+  dom.closeTurbulenceCandidateModalButton.focus();
+}
+
+function turbulenceLlmDiagnosticsBlock(llm) {
+  if (!llm) return "";
+  return `
+    <div class="diagnostic-block">
+      <h3>Solicitud LLM usada</h3>
+      <dl class="diagnostic-summary diagnostic-summary-compact">
+        <div><dt>Modelo</dt><dd>${escapeHtml(llm.model || "--")}</dd></div>
+        <div><dt>API</dt><dd>${escapeHtml(llm.apiMode || "--")}</dd></div>
+        <div><dt>Temperatura</dt><dd>${formatOptionalNumber(llm.temperature, 2)}</dd></div>
+        <div><dt>Top p</dt><dd>${formatOptionalNumber(llm.topP, 2)}</dd></div>
+        <div><dt>Máx. tokens</dt><dd>${escapeHtml(String(llm.maxTokens ?? "--"))}</dd></div>
+      </dl>
+      ${turbulencePromptCopyBlock("system", "System prompt exacto", llm.systemPrompt || "")}
+      ${turbulencePromptCopyBlock("user", "User prompt exacto", llm.userPrompt || "")}
+    </div>
+  `;
+}
+
+function turbulencePromptCopyBlock(key, title, text) {
+  return `
+    <div class="diagnostic-prompt-block">
+      <div class="diagnostic-prompt-header">
+        <h4>${escapeHtml(title)}</h4>
+        <button class="secondary diagnostic-copy-button" type="button" data-copy-diagnostic-prompt="${escapeHtml(key)}">Copiar</button>
+      </div>
+      <textarea class="diagnostic-prompt-text" data-diagnostic-prompt="${escapeHtml(key)}" readonly>${escapeHtml(text)}</textarea>
+    </div>
+  `;
+}
+
+function turbulenceCandidateDiagnosticsTable(candidates) {
+  const rows = candidates.map((candidate) => `
+    <tr class="${candidate.valid ? "candidate-valid-row" : "candidate-invalid-row"}">
+      <td class="context-cell long-cell"><div class="scroll-cell">${escapeHtml(candidate.candidate || "--")}</div></td>
+      <td>${escapeHtml(candidate.source || "--")}</td>
+      <td>${formatOptionalNumber(candidate.similarity, 6)}</td>
+      <td>${formatOptionalNumber(candidate.diversity, 6)}</td>
+      <td>${turbulenceReasonMarkup(candidate.reason, candidate.valid)}</td>
+    </tr>
+  `).join("");
+  return `
+    <div class="table-wrap">
+      <table class="diagnostic-candidates-table">
+        <thead>
+          <tr>
+            <th>Candidato</th>
+            <th>Fuente</th>
+            <th>Similitud</th>
+            <th>Diversidad</th>
+            <th>Razón</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function turbulenceReasonMarkup(reason, isValid) {
+  const labelClass = isValid ? "valid" : "invalid";
+  return `
+    <span class="${labelClass} reason-code">${escapeHtml(reason || "--")}</span>
+    <small class="reason-description">${escapeHtml(turbulenceReasonDescription(reason))}</small>
+  `;
+}
+
+function turbulenceReasonDescription(reason) {
+  const descriptions = {
+    valid: "El candidato pasó los filtros de forma, longitud y rango semántico de turbulencia.",
+    ok: "El operador aplicó un candidato válido.",
+    no_valid_candidate: "La estrategia generó candidatos, pero ninguno pasó todos los filtros configurados.",
+    error: "La estrategia falló antes de completar la evaluación del movimiento.",
+    empty: "El candidato está vacío.",
+    line_break: "El candidato trae saltos de línea; se esperaba una sola unidad textual.",
+    not_numbered_line: "La línea no cumple el formato numerado exigido por la estrategia, por eso solo se muestra como diagnóstico y no cuenta como candidato.",
+    prompt_marker: "El candidato contiene marcas de prompt, código o etiquetas en vez de solo el componente.",
+    contains_prompt_markup: "El candidato contiene marcas de prompt, código o etiquetas en vez de solo el componente.",
+    literal_copy_current: "El candidato no cambia el componente original.",
+    too_short: "El candidato tiene menos palabras que el mínimo configurado.",
+    too_long: "El candidato tiene más palabras que el máximo configurado.",
+    invalid_length: "El candidato no cumple los límites de longitud configurados.",
+    length_drift: "La cantidad de palabras se aleja demasiado del componente original; se considera un cambio de alcance excesivo.",
+    too_distant_from_current: "La similitud semántica contra el componente original quedó bajo el mínimo de turbulencia; el cambio es demasiado grande.",
+    too_close_to_current: "La similitud semántica contra el componente original quedó sobre el máximo de turbulencia; el cambio es demasiado leve.",
+    semantic_copy_target: "El candidato queda demasiado cerca del texto objetivo y se considera copia semántica.",
+    insufficient_semantic_progress: "El candidato no mejora lo suficiente respecto a la referencia semántica configurada.",
+  };
+  return descriptions[reason] || "Motivo técnico no documentado; revisar candidato, similitud y configuración de filtros.";
+}
+
+function closeTurbulenceCandidateModal() {
+  dom.turbulenceCandidateModal.hidden = true;
+  dom.turbulenceCandidateModalBody.replaceChildren();
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
+function renderTurbulenceLogs(logs) {
+  if (!logs.length) {
+    dom.turbulenceLogOutput.textContent = "Sin logs todavia.";
+    return;
+  }
+  dom.turbulenceLogOutput.textContent = logs
+    .slice(-80)
+    .map((entry) => `[${entry.time || "--"}] ${entry.message || ""}`)
+    .join("\n");
+}
+
 function comparatorStatusLabel(status) {
   const labels = {
     queued: "en cola",
@@ -3337,6 +4325,8 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
     dom.comparatorReferenceText,
     dom.comparatorModel,
     dom.comparatorTopK,
+    dom.comparatorSeed,
+    dom.comparatorRepetitions,
     dom.comparatorProposalParallelism,
     dom.comparatorTimeoutMinutes,
     dom.comparatorN,
@@ -3404,6 +4394,8 @@ function readComparatorConfig() {
     referenceText,
     model,
     topK: Math.floor(readClampedNumber(dom.comparatorTopK, "Top K tabla", 1, 200)),
+    seed: Math.floor(readClampedNumber(dom.comparatorSeed, "Semilla", 0, 2147483647)),
+    repetitionsK: Math.floor(readClampedNumber(dom.comparatorRepetitions, "K repeticiones", 1, 30)),
     n: Math.floor(readClampedNumber(dom.comparatorN, "N individuos", 1, 500)),
     generaciones: Math.floor(readClampedNumber(dom.comparatorGeneraciones, "Generaciones", 0, 500)),
     k: Math.floor(readClampedNumber(dom.comparatorK, "K torneo", 1, 100)),
@@ -3567,7 +4559,7 @@ function comparatorProposalViews(run) {
   return merged;
 }
 
-function renderComparatorProgress(progress) {
+function renderComparatorProgress(progress, config = null) {
   if (!progress) {
     dom.comparatorProgressPercent.textContent = "--";
     dom.comparatorProgressSummary.textContent = "Sin corrida activa.";
@@ -3591,6 +4583,7 @@ function renderComparatorProgress(progress) {
     ["Tiempo transcurrido", progress.elapsedLabel || "--"],
     ["Tiempo restante estimado", progress.remainingLabel || "No disponible"],
     ["Propuesta activa", progress.activeProposalName || "--"],
+    ["K repeticiones", config?.repetitionsK ?? 1],
     ["Cola", `${progress.queuedProposals ?? 0}/${progress.totalProposals ?? 0}`],
   ]);
 }
@@ -3628,7 +4621,7 @@ function renderComparatorRun(run) {
   dom.comparatorConnectionDot.classList.toggle("is-busy", run.status === "queued" || run.status === "running");
   dom.comparatorConnectionDot.classList.toggle("is-error", run.status === "failed");
 
-  renderComparatorProgress(run.progress || null);
+  renderComparatorProgress(run.progress || null, run.config || null);
   renderComparatorCostSummary(run.costSummary || null);
   renderComparatorCards(comparatorProposalViews(run));
   renderComparatorRows(rows);
@@ -4232,31 +5225,13 @@ function applyComponentPreset() {
   dom.otherComponents.value = preset.other;
 }
 
-embeddingWorker.addEventListener("message", (event) => {
-  const { id, type, embeddings, message, progress } = event.data;
-  const request = workerRequests.get(id);
-
-  if (type === "progress") {
-    const file = progress?.file ? `: ${progress.file}` : "";
-    const pct = typeof progress?.progress === "number" ? ` (${Math.round(progress.progress)}%)` : "";
-    setStatus(dom.embeddingStatusTone, dom.embeddingStatusTitle, dom.embeddingStatusDetail, "Descargando modelo", `${progress?.status || "progreso"}${file}${pct}`, "busy");
-    return;
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !dom.turbulenceCandidateModal.hidden) {
+    closeTurbulenceCandidateModal();
   }
-
-  if (!request) return;
-  workerRequests.delete(id);
-
-  if (type === "result") {
-    request.resolve(embeddings);
-    return;
+  if (event.key === "Escape") {
+    closeTurbulenceMetricPopover();
   }
-
-  request.reject(new Error(message));
-});
-
-embeddingWorker.addEventListener("error", (event) => {
-  workerRequests.forEach(({ reject }) => reject(new Error(event.message)));
-  workerRequests.clear();
 });
 
 dom.navItems.forEach((button) => {
@@ -4301,6 +5276,37 @@ dom.loadInitialComparisonModelsButton.addEventListener("click", loadInitialCompa
 dom.runInitialComparisonButton.addEventListener("click", runInitialComparison);
 dom.cancelInitialComparisonButton.addEventListener("click", cancelInitialComparisonRun);
 dom.clearInitialComparisonButton.addEventListener("click", resetInitialComparisonUi);
+dom.loadTurbulenceModelsButton.addEventListener("click", loadTurbulenceModels);
+dom.refreshTurbulencePpdbButton.addEventListener("click", refreshTurbulencePpdbStatus);
+dom.prepareTurbulencePpdbButton.addEventListener("click", prepareTurbulencePpdb);
+dom.runTurbulenceComparisonButton.addEventListener("click", runTurbulenceComparison);
+dom.cancelTurbulenceComparisonButton.addEventListener("click", cancelTurbulenceComparisonRun);
+dom.clearTurbulenceComparisonButton.addEventListener("click", resetTurbulenceComparisonUi);
+dom.closeTurbulenceCandidateModalButton.addEventListener("click", closeTurbulenceCandidateModal);
+dom.turbulenceCandidateModal.addEventListener("click", (event) => {
+  if (event.target === dom.turbulenceCandidateModal) {
+    closeTurbulenceCandidateModal();
+  }
+});
+dom.turbulenceCandidateModalBody.addEventListener("click", async (event) => {
+  if (!(event.target instanceof Element)) return;
+  const button = event.target.closest("[data-copy-diagnostic-prompt]");
+  if (!button) return;
+  const key = button.dataset.copyDiagnosticPrompt;
+  const textarea = dom.turbulenceCandidateModalBody.querySelector(`[data-diagnostic-prompt="${CSS.escape(key)}"]`);
+  if (!textarea) return;
+  const originalText = button.textContent;
+  try {
+    await copyTextToClipboard(textarea.value);
+    button.textContent = "Copiado";
+  } catch (error) {
+    button.textContent = "No copiado";
+  } finally {
+    window.setTimeout(() => {
+      button.textContent = originalText;
+    }, 1400);
+  }
+});
 dom.runComparatorButton.addEventListener("click", runComparator);
 dom.cancelComparatorButton.addEventListener("click", cancelComparatorRun);
 dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
@@ -4315,6 +5321,11 @@ dom.solutionLmApiMode.addEventListener("change", () => {
   dom.solutionLlmModelManual.value = "meta-llama-3.1-8b-instruct";
   dom.solutionConnectionText.textContent = "Sin probar conexión";
   dom.solutionConnectionDot.classList.remove("is-error", "is-busy");
+});
+dom.turbulenceLmApiMode.addEventListener("change", () => {
+  dom.turbulenceLlmModel.replaceChildren(new Option(TURBULENCE_LLM_DEFAULT_MODEL, TURBULENCE_LLM_DEFAULT_MODEL));
+  dom.turbulenceComparisonConnectionText.textContent = "Sin ejecucion";
+  dom.turbulenceComparisonConnectionDot.classList.remove("is-error", "is-busy");
 });
 dom.simulatePsoSwitch.addEventListener("change", () => {
   updateSimulationModeUi();
@@ -4335,7 +5346,7 @@ dom.llmModelSelect.addEventListener("change", () => {
 dom.lmApiMode.addEventListener("change", () => {
   dom.lmEndpoint.value = endpointForMode(dom.lmApiMode.value);
   dom.llmModelSelect.replaceChildren(new Option("Cargar modelos desde LM Studio", ""));
-  dom.llmModelManual.value = dom.lmApiMode.value === "native" ? "meta-llama-3.1-8b-instruct" : "meta-llama-3.1-8b-instruct";
+  dom.llmModelManual.value = OPERATOR_DEFAULT_MODELS[selectedPsoOperator()];
   dom.checkerConnectionText.textContent = "Sin probar conexión";
   dom.checkerConnectionDot.classList.remove("is-error", "is-busy");
 });
@@ -4370,6 +5381,8 @@ loadInitialPopulationStrategies();
 buildInitialComparisonStageEditors();
 resetInitialComparisonUi();
 loadInitialComparisonStrategies();
+resetTurbulenceComparisonUi();
+refreshTurbulencePpdbStatus();
 resetComparatorUi();
 loadComparatorProposals();
 dom.renderedPromptPreview.textContent = renderPrompt();
