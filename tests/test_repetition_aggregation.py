@@ -151,6 +151,8 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertAlmostEqual(strategy["operatorMetrics"]["successRate"], 0.75)
         self.assertAlmostEqual(strategy["finalMetrics"]["averageFidelity"], 0.7)
         self.assertAlmostEqual(strategy["deltas"]["averageFidelityDelta"], 0.1)
+        self.assertEqual(strategy["repetitions"][0]["repetitionIndex"], 1)
+        self.assertEqual(strategy["repetitions"][1]["repetitionSeed"], 8)
 
 
 if __name__ == "__main__":

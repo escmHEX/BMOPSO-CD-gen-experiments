@@ -358,6 +358,7 @@ let initialComparisonPollTimer = null;
 let currentInitialComparisonRunId = null;
 let turbulenceComparisonPollTimer = null;
 let currentTurbulenceComparisonRunId = null;
+let turbulenceMetricPopover = null;
 let referenceTextLibrary = [];
 let lmStudioModelOptions = [];
 
@@ -3913,6 +3914,128 @@ function turbulenceBestClass(bestIndexes, index) {
   return bestIndexes.has(index) ? "metric-best" : "";
 }
 
+function turbulenceMetricLabel(key) {
+  return {
+    success: "Tasa de exito",
+    coverage: "Cobertura",
+    time: "Tiempo promedio",
+    cost: "Costo operador",
+    fidelity: "Fidelidad final semantica vs referencia",
+    fidelityDelta: "Delta fidelidad vs baseline sin turbulencia",
+    diversity: "Diversidad semantica entre textos finales",
+    diversityDelta: "Delta diversidad vs baseline sin turbulencia",
+    eligible: "Recomendable por rango de fidelidad",
+  }[key] || key;
+}
+
+function turbulenceMetricValue(strategy, key, config = {}) {
+  const operator = strategy.operatorMetrics || {};
+  const finalMetrics = strategy.finalMetrics || {};
+  const cost = operator.cost || {};
+  const deltas = strategy.deltas || {};
+  if (key === "success") return formatTurbulenceRate(operator.successRate);
+  if (key === "coverage") return formatTurbulenceRate(operator.coverageRate);
+  if (key === "time") return formatDuration(Number(operator.operatorAverageSeconds || 0) * 1000);
+  if (key === "cost") return `${turbulenceCostLabel(cost)}; costo relativo ${formatOptionalNumber(strategy.relativeOperatorCost, 2)}`;
+  if (key === "fidelity") return formatOptionalNumber(finalMetrics.averageFidelity, 6);
+  if (key === "fidelityDelta") return formatSignedOptional(deltas.averageFidelityDelta);
+  if (key === "diversity") return formatOptionalNumber(finalMetrics.averageDiversity, 6);
+  if (key === "diversityDelta") return formatSignedOptional(deltas.averageDiversityDelta);
+  if (key === "eligible") {
+    const fidelity = Number(finalMetrics.averageFidelity);
+    const finalMin = Number(config.finalFidelityMin);
+    const finalMax = Number(config.finalFidelityMax);
+    return Number.isFinite(fidelity) && fidelity >= finalMin && fidelity <= finalMax ? "si" : "no";
+  }
+  return "--";
+}
+
+function turbulenceMetricCell(content, className, key) {
+  const label = turbulenceMetricLabel(key);
+  return `<td class="${className} metric-breakdown-cell" data-turbulence-breakdown="${key}" tabindex="0" role="button" aria-label="Ver desglose por K: ${escapeHtml(label)}">${content}</td>`;
+}
+
+function closeTurbulenceMetricPopover() {
+  if (turbulenceMetricPopover) {
+    turbulenceMetricPopover.hidden = true;
+  }
+}
+
+function ensureTurbulenceMetricPopover() {
+  if (turbulenceMetricPopover) return turbulenceMetricPopover;
+  turbulenceMetricPopover = document.createElement("div");
+  turbulenceMetricPopover.className = "metric-breakdown-popover";
+  turbulenceMetricPopover.hidden = true;
+  turbulenceMetricPopover.setAttribute("role", "tooltip");
+  document.body.appendChild(turbulenceMetricPopover);
+  document.addEventListener("click", (event) => {
+    if (
+      turbulenceMetricPopover
+      && !turbulenceMetricPopover.hidden
+      && !turbulenceMetricPopover.contains(event.target)
+      && !(event.target instanceof Element && event.target.closest("[data-turbulence-breakdown]"))
+    ) {
+      closeTurbulenceMetricPopover();
+    }
+  });
+  window.addEventListener("scroll", closeTurbulenceMetricPopover, true);
+  window.addEventListener("resize", closeTurbulenceMetricPopover);
+  return turbulenceMetricPopover;
+}
+
+function showTurbulenceMetricBreakdown(event, strategy, key, config) {
+  event.stopPropagation();
+  const popover = ensureTurbulenceMetricPopover();
+  const repetitions = Array.isArray(strategy.repetitions) && strategy.repetitions.length
+    ? strategy.repetitions
+    : [strategy];
+  const rows = repetitions.map((item, index) => ({
+    k: item.repetitionIndex ?? index + 1,
+    seed: item.repetitionSeed ?? "--",
+    value: turbulenceMetricValue(item, key, config),
+  }));
+  popover.innerHTML = `
+    <div class="metric-breakdown-title">${escapeHtml(strategy.displayName || strategy.strategyId || "Estrategia")}</div>
+    <div class="metric-breakdown-subtitle">${escapeHtml(turbulenceMetricLabel(key))}</div>
+    <p><strong>Agregado:</strong> ${escapeHtml(turbulenceMetricValue(strategy, key, config))}</p>
+    <table>
+      <thead>
+        <tr><th>K</th><th>Semilla</th><th>Valor</th></tr>
+      </thead>
+      <tbody>
+        ${rows.map((row) => `
+          <tr>
+            <td>${escapeHtml(String(row.k))}</td>
+            <td>${escapeHtml(String(row.seed))}</td>
+            <td>${escapeHtml(row.value)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+  popover.hidden = false;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const width = Math.min(520, window.innerWidth - 24);
+  popover.style.width = `${width}px`;
+  const top = Math.min(window.innerHeight - popover.offsetHeight - 12, rect.bottom + 8);
+  const left = Math.min(window.innerWidth - width - 12, Math.max(12, rect.left));
+  popover.style.top = `${Math.max(12, top)}px`;
+  popover.style.left = `${left}px`;
+}
+
+function addTurbulenceMetricBreakdowns(row, strategy, config) {
+  row.querySelectorAll("[data-turbulence-breakdown]").forEach((cell) => {
+    const key = cell.dataset.turbulenceBreakdown;
+    cell.addEventListener("click", (event) => showTurbulenceMetricBreakdown(event, strategy, key, config));
+    cell.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        showTurbulenceMetricBreakdown(event, strategy, key, config);
+      }
+    });
+  });
+}
+
 function renderTurbulenceStrategyMetrics(strategies, config, recommendation) {
   if (!strategies.length) {
     dom.turbulenceStrategyMetricsBody.innerHTML = '<tr><td colspan="10">Sin resultados todavia.</td></tr>';
@@ -3944,16 +4067,17 @@ function renderTurbulenceStrategyMetrics(strategies, config, recommendation) {
       if (isWinner) tr.classList.add("is-nondominated-row");
       tr.innerHTML = `
         <td>${escapeHtml(strategy.displayName || strategy.strategyId)}${warnings.length ? `<br><small>${escapeHtml(warnings[0])}</small>` : ""}</td>
-        <td class="${turbulenceBestClass(best.success, index)}">${formatTurbulenceRate(operator.successRate)}</td>
-        <td class="${turbulenceBestClass(best.coverage, index)}">${formatTurbulenceRate(operator.coverageRate)}</td>
-        <td class="${turbulenceBestClass(best.time, index)}">${formatDuration(Number(operator.operatorAverageSeconds || 0) * 1000)}<br><small>wall ${formatDuration(Number(operator.operatorWallClockSeconds || 0) * 1000)}; par ${operator.operatorParallelism ?? 1}</small></td>
-        <td class="${turbulenceBestClass(best.cost, index)}">${escapeHtml(turbulenceCostLabel(cost))}<br><small>costo relativo ${formatOptionalNumber(strategy.relativeOperatorCost, 2)}</small></td>
-        <td class="${turbulenceBestClass(best.fidelity, index)}">${formatOptionalNumber(finalMetrics.averageFidelity, 6)}</td>
-        <td class="${turbulenceBestClass(best.fidelityDelta, index)}">${formatSignedOptional(deltas.averageFidelityDelta)}</td>
-        <td class="${turbulenceBestClass(best.diversity, index)}">${formatOptionalNumber(finalMetrics.averageDiversity, 6)}</td>
-        <td class="${turbulenceBestClass(best.diversityDelta, index)}">${formatSignedOptional(deltas.averageDiversityDelta)}</td>
-        <td><span class="${eligible ? "valid" : "invalid"}">${eligible ? "si" : "no"}</span>${isWinner ? "<br><small>recomendada</small>" : ""}</td>
+        ${turbulenceMetricCell(formatTurbulenceRate(operator.successRate), turbulenceBestClass(best.success, index), "success")}
+        ${turbulenceMetricCell(formatTurbulenceRate(operator.coverageRate), turbulenceBestClass(best.coverage, index), "coverage")}
+        ${turbulenceMetricCell(`${formatDuration(Number(operator.operatorAverageSeconds || 0) * 1000)}<br><small>wall ${formatDuration(Number(operator.operatorWallClockSeconds || 0) * 1000)}; par ${operator.operatorParallelism ?? 1}</small>`, turbulenceBestClass(best.time, index), "time")}
+        ${turbulenceMetricCell(`${escapeHtml(turbulenceCostLabel(cost))}<br><small>costo relativo ${formatOptionalNumber(strategy.relativeOperatorCost, 2)}</small>`, turbulenceBestClass(best.cost, index), "cost")}
+        ${turbulenceMetricCell(formatOptionalNumber(finalMetrics.averageFidelity, 6), turbulenceBestClass(best.fidelity, index), "fidelity")}
+        ${turbulenceMetricCell(formatSignedOptional(deltas.averageFidelityDelta), turbulenceBestClass(best.fidelityDelta, index), "fidelityDelta")}
+        ${turbulenceMetricCell(formatOptionalNumber(finalMetrics.averageDiversity, 6), turbulenceBestClass(best.diversity, index), "diversity")}
+        ${turbulenceMetricCell(formatSignedOptional(deltas.averageDiversityDelta), turbulenceBestClass(best.diversityDelta, index), "diversityDelta")}
+        ${turbulenceMetricCell(`<span class="${eligible ? "valid" : "invalid"}">${eligible ? "si" : "no"}</span>${isWinner ? "<br><small>recomendada</small>" : ""}`, "", "eligible")}
       `;
+      addTurbulenceMetricBreakdowns(tr, strategy, config);
       return tr;
     }),
   );
@@ -5104,6 +5228,9 @@ function applyComponentPreset() {
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !dom.turbulenceCandidateModal.hidden) {
     closeTurbulenceCandidateModal();
+  }
+  if (event.key === "Escape") {
+    closeTurbulenceMetricPopover();
   }
 });
 

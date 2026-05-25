@@ -1101,6 +1101,62 @@ td.metric-best {
   background: #fef9c3;
 }
 
+.metric-breakdown-cell {
+  cursor: pointer;
+  outline: none;
+}
+
+.metric-breakdown-cell:hover,
+.metric-breakdown-cell:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(38, 96, 190, 0.35);
+}
+
+.metric-breakdown-popover {
+  position: fixed;
+  z-index: 70;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 14px;
+}
+
+.metric-breakdown-popover[hidden] {
+  display: none;
+}
+
+.metric-breakdown-title {
+  font-weight: 800;
+}
+
+.metric-breakdown-subtitle {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-top: 2px;
+}
+
+.metric-breakdown-popover p {
+  margin: 10px 0;
+}
+
+.metric-breakdown-popover table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.metric-breakdown-popover th,
+.metric-breakdown-popover td {
+  border-bottom: 1px solid var(--border);
+  padding: 7px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.metric-breakdown-popover td:last-child {
+  word-break: break-word;
+}
+
 .metric-explainer {
   margin-top: 14px;
   border: 1px solid var(--border);

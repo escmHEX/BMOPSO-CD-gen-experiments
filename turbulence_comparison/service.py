@@ -1166,12 +1166,16 @@ def aggregate_turbulence_repetitions(repetitions: list[dict[str, Any]], config: 
 
     strategy_results: list[dict[str, Any]] = []
     for strategy_id in config["strategies"]:
-        per_repetition = [
-            strategy
-            for repetition in completed
-            for strategy in repetition.get("strategies", [])
-            if strategy.get("strategyId") == strategy_id
-        ]
+        per_repetition = []
+        for repetition in completed:
+            repetition_meta = repetition.get("configSummary") or {}
+            for strategy in repetition.get("strategies", []):
+                if strategy.get("strategyId") == strategy_id:
+                    per_repetition.append({
+                        **strategy,
+                        "repetitionIndex": repetition_meta.get("repetitionIndex"),
+                        "repetitionSeed": repetition_meta.get("seed"),
+                    })
         if not per_repetition:
             continue
         movement_rows = []
