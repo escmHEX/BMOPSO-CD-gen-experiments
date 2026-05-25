@@ -66,6 +66,11 @@ def source_path(source: str) -> Path:
     return Path(source)
 
 
+def resolve_project_path(root: Path, value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else root / path
+
+
 def open_text(path: Path):
     if path.suffix == ".gz":
         return gzip.open(path, "rt", encoding="utf-8", errors="replace")
@@ -107,6 +112,40 @@ def build_index(source: Path, keys: set[str], limit_per_key: int) -> dict[str, l
     return {key: values for key, values in sorted(index.items()) if values}
 
 
+def prepare_ppdb_index(
+    root: Path,
+    source: str | Path,
+    output: str | Path = "data/turbulence/ppdb_index.json",
+    limit_per_key: int = 30,
+) -> dict[str, object]:
+    source_text = str(source)
+    source_candidate = source_path(source_text)
+    source_file = source_candidate if source_candidate.is_absolute() else root / source_candidate
+    if not source_file.exists():
+        raise FileNotFoundError(f"PPDB source not found: {source_file}")
+
+    output_path = resolve_project_path(root, output)
+    keys = component_terms(root)
+    entries = build_index(source_file, keys, max(1, int(limit_per_key)))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schemaVersion": 1,
+        "source": source_text,
+        "sourcePath": str(source_file),
+        "keyCount": len(keys),
+        "entryCount": sum(len(values) for values in entries.values()),
+        "entries": entries,
+    }
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "outputPath": str(output_path),
+        "sourcePath": str(source_file),
+        "keyCount": len(keys),
+        "indexedKeys": len(entries),
+        "entryCount": payload["entryCount"],
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a compact PPDB index for the turbulence comparison tool.")
     parser.add_argument("--source", required=True, help="Local PPDB file path or direct URL. .gz files are supported.")
@@ -115,20 +154,8 @@ def main() -> None:
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
-    source = source_path(args.source)
-    keys = component_terms(root)
-    entries = build_index(source, keys, max(1, args.limit_per_key))
-    output = root / args.output
-    output.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "schemaVersion": 1,
-        "source": args.source,
-        "keyCount": len(keys),
-        "entryCount": sum(len(values) for values in entries.values()),
-        "entries": entries,
-    }
-    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"PPDB index written to {output} with {len(entries)} keyed entries.")
+    summary = prepare_ppdb_index(root, args.source, args.output, args.limit_per_key)
+    print(f"PPDB index written to {summary['outputPath']} with {summary['indexedKeys']} keyed entries.")
 
 
 if __name__ == "__main__":

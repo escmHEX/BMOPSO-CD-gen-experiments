@@ -462,6 +462,14 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
     def handle_turbulence_comparison_post(self) -> None:
         path_parts = self.turbulence_comparison_path_parts()
         try:
+            if path_parts == ["ppdb", "status"]:
+                self.send_json(200, self.turbulence_comparison_service.ppdb_status(self.read_json_body()))
+                return
+
+            if path_parts == ["ppdb", "prepare"]:
+                self.send_json(200, self.turbulence_comparison_service.prepare_ppdb(self.read_json_body()))
+                return
+
             if path_parts == ["runs"]:
                 run = self.turbulence_comparison_service.start_run(self.read_json_body())
                 self.send_json(202, run)

@@ -1688,6 +1688,36 @@ Output rules:
                 </label>
               </div>
             </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>PPDB local</h2>
+                <span>Dataset completo fuera de Git + indice compacto para la estrategia WordNet+PPDB+SBERT</span>
+              </div>
+              <div class="form-grid">
+                <label class="span-2">
+                  <span>Archivo PPDB completo</span>
+                  <input id="turbulencePpdbSourcePath" type="text" value="data/external/ppdb/ppdb-2.0-s-all" autocomplete="off">
+                </label>
+                <label class="span-2">
+                  <span>Indice compacto PPDB</span>
+                  <input id="turbulencePpdbIndexPath" type="text" value="data/turbulence/ppdb_index.json" autocomplete="off">
+                </label>
+              </div>
+              <div class="inline-actions">
+                <button id="refreshTurbulencePpdbButton" class="secondary" type="button">Verificar PPDB</button>
+                <button id="prepareTurbulencePpdbButton" class="secondary" type="button">Preparar indice desde PPDB local</button>
+              </div>
+              <p id="turbulencePpdbSetupStatus" class="muted-text">Descarga PPDB desde Kaggle y deja el archivo en data/external/ppdb/ppdb-2.0-s-all.</p>
+              <p class="muted-text">
+                Fuente sugerida:
+                <a href="https://www.kaggle.com/datasets/cudawarrior/ppdb-2-0-s-all" target="_blank" rel="noreferrer">Kaggle ppdb-2-0-s-all</a>.
+                Referencias:
+                <a href="https://www.cis.upenn.edu/~ccb/ppdb/" target="_blank" rel="noreferrer">PPDB oficial</a>
+                y
+                <a href="https://aclanthology.org/P15-2070/" target="_blank" rel="noreferrer">paper PPDB 2.0</a>.
+              </p>
+            </article>
           </section>
 
           <section class="grid two-columns">

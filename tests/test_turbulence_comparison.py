@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -59,6 +61,13 @@ class FakePPDB:
 
     def lookup(self, text):
         return []
+
+
+class FakeAvailablePPDB:
+    available = True
+
+    def lookup(self, text):
+        return ["aid"] if text == "help" else []
 
 
 class FakeDistilBert:
@@ -192,6 +201,20 @@ class TurbulenceComparisonTests(unittest.TestCase):
         self.assertEqual(result.cost["ppdbQueries"], 0)
         self.assertFalse(result.coverage)
 
+    def test_ppdb_available_counts_real_queries(self):
+        unit = MutableUnit("help", "help", "NOUN", 23, 27, "word")
+        operator = WordNetPPDBOperator(
+            FakeAnalyzer([unit]),
+            FakeRanker([0.72]),
+            FakeAvailablePPDB(),
+            wordnet=FakeWordNet([]),
+        )
+        result = operator.apply("request urgent shelter help", config())
+        self.assertEqual(result.output, "request urgent shelter aid")
+        self.assertEqual(result.cost["ppdbLookupAttempts"], 1)
+        self.assertEqual(result.cost["ppdbQueries"], 1)
+        self.assertTrue(result.cost["ppdbAvailable"])
+
     def test_distilbert_strategy_filters_by_similarity_range(self):
         unit = MutableUnit("help", "help", "NOUN", 23, 27, "word")
         operator = DistilBertOperator(
@@ -296,6 +319,53 @@ class TurbulenceComparisonTests(unittest.TestCase):
         self.assertEqual(summary["cost"]["wordnetQueries"], 3)
         self.assertAlmostEqual(deltas["averageFidelityDelta"], 0.15)
         self.assertAlmostEqual(deltas["averageDiversityDelta"], 0.05)
+
+    def test_ppdb_status_distinguishes_missing_source_and_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "LLM" / "data").mkdir(parents=True)
+            (root / "LLM" / "data" / "pso-individuals.json").write_text(
+                json.dumps({"individuals": []}),
+                encoding="utf-8",
+            )
+            service = TurbulenceComparisonService(root)
+            status = service.ppdb_status({})
+            self.assertFalse(status["available"])
+            self.assertFalse(status["source"]["exists"])
+            self.assertFalse(status["index"]["exists"])
+
+    def test_ppdb_prepare_from_local_file_marks_index_available(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "LLM" / "data").mkdir(parents=True)
+            (root / "LLM" / "data" / "pso-individuals.json").write_text(
+                json.dumps(
+                    {
+                        "individuals": [
+                            {
+                                "rol": "resident",
+                                "topico": "flooded housing",
+                                "accion": "request urgent shelter help",
+                                "pbest": {"rol": "resident", "topico": "flooded housing", "accion": "request urgent shelter help"},
+                                "lider": {"rol": "resident", "topico": "flooded housing", "accion": "request urgent shelter help"},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            ppdb_source = root / "data" / "external" / "ppdb" / "ppdb-2.0-s-all"
+            ppdb_source.parent.mkdir(parents=True)
+            ppdb_source.write_text("[X] ||| help ||| aid ||| features ||| Equivalence\n", encoding="utf-8")
+            service = TurbulenceComparisonService(root)
+            payload = {
+                "ppdbSourcePath": str(ppdb_source),
+                "ppdbIndexPath": "data/turbulence/ppdb_index.json",
+            }
+            prepared = service.prepare_ppdb(payload)
+            self.assertTrue(prepared["ppdb"]["available"])
+            self.assertEqual(prepared["ppdb"]["entries"], 1)
+            self.assertTrue((root / "data" / "turbulence" / "ppdb_index.json").exists())
 
 
 if __name__ == "__main__":

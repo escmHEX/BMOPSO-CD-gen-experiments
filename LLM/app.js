@@ -605,6 +605,11 @@ const dom = {
   turbulenceFinalFidelityMin: document.querySelector("#turbulenceFinalFidelityMin"),
   turbulenceFinalFidelityMax: document.querySelector("#turbulenceFinalFidelityMax"),
   turbulenceReferenceText: document.querySelector("#turbulenceReferenceText"),
+  turbulencePpdbSourcePath: document.querySelector("#turbulencePpdbSourcePath"),
+  turbulencePpdbIndexPath: document.querySelector("#turbulencePpdbIndexPath"),
+  refreshTurbulencePpdbButton: document.querySelector("#refreshTurbulencePpdbButton"),
+  prepareTurbulencePpdbButton: document.querySelector("#prepareTurbulencePpdbButton"),
+  turbulencePpdbSetupStatus: document.querySelector("#turbulencePpdbSetupStatus"),
   turbulenceLmBaseUrl: document.querySelector("#turbulenceLmBaseUrl"),
   turbulenceLmApiMode: document.querySelector("#turbulenceLmApiMode"),
   turbulenceLlmModel: document.querySelector("#turbulenceLlmModel"),
@@ -3565,6 +3570,73 @@ async function requestTurbulenceComparisonJson(path, options = {}) {
   return payload;
 }
 
+function readTurbulencePpdbPayload() {
+  return {
+    ppdbSourcePath: dom.turbulencePpdbSourcePath.value.trim(),
+    ppdbIndexPath: dom.turbulencePpdbIndexPath.value.trim(),
+  };
+}
+
+function renderTurbulencePpdbStatus(ppdb) {
+  if (!ppdb) {
+    dom.turbulencePpdbStatus.textContent = "--";
+    dom.turbulencePpdbDetail.textContent = "Indice compacto no revisado.";
+    dom.turbulencePpdbSetupStatus.textContent = "Descarga PPDB desde Kaggle y deja el archivo en data/external/ppdb/ppdb-2.0-s-all.";
+    return;
+  }
+
+  const source = ppdb.source || {};
+  const index = ppdb.index || {};
+  dom.turbulencePpdbStatus.textContent = ppdb.available ? "disponible" : "no disponible";
+  dom.turbulencePpdbDetail.textContent = ppdb.available
+    ? `${ppdb.entries ?? index.entries ?? 0} clave(s) en ${ppdb.path || index.path || "indice local"}.`
+    : (ppdb.message || index.message || "Indice compacto PPDB no preparado.");
+  const sourceLabel = source.exists
+    ? `Dataset local encontrado (${source.sizeLabel || "--"}): ${source.path || "--"}`
+    : `Dataset local faltante: ${source.path || dom.turbulencePpdbSourcePath.value.trim() || "--"}`;
+  const indexLabel = index.exists
+    ? `Indice: ${index.available ? "disponible" : "invalido"} en ${index.path || ppdb.path || "--"}`
+    : `Indice faltante: ${index.path || ppdb.path || dom.turbulencePpdbIndexPath.value.trim() || "--"}`;
+  dom.turbulencePpdbSetupStatus.textContent = `${sourceLabel}. ${indexLabel}.`;
+}
+
+async function refreshTurbulencePpdbStatus() {
+  try {
+    const status = await requestTurbulenceComparisonJson("/ppdb/status", {
+      method: "POST",
+      body: JSON.stringify(readTurbulencePpdbPayload()),
+    });
+    renderTurbulencePpdbStatus(status);
+  } catch (error) {
+    dom.turbulencePpdbStatus.textContent = "error";
+    dom.turbulencePpdbDetail.textContent = error.message;
+    dom.turbulencePpdbSetupStatus.textContent = `No se pudo verificar PPDB: ${error.message}`;
+  }
+}
+
+async function prepareTurbulencePpdb() {
+  const originalText = dom.prepareTurbulencePpdbButton.textContent;
+  dom.prepareTurbulencePpdbButton.disabled = true;
+  dom.refreshTurbulencePpdbButton.disabled = true;
+  dom.prepareTurbulencePpdbButton.textContent = "Preparando...";
+  dom.turbulencePpdbSetupStatus.textContent = "Leyendo PPDB completo y generando indice compacto. Puede tardar varios minutos.";
+  try {
+    const payload = await requestTurbulenceComparisonJson("/ppdb/prepare", {
+      method: "POST",
+      body: JSON.stringify(readTurbulencePpdbPayload()),
+    });
+    renderTurbulencePpdbStatus(payload.ppdb);
+  } catch (error) {
+    dom.turbulencePpdbStatus.textContent = "error";
+    dom.turbulencePpdbDetail.textContent = error.message;
+    dom.turbulencePpdbSetupStatus.textContent = `No se pudo preparar PPDB: ${error.message}`;
+  } finally {
+    dom.prepareTurbulencePpdbButton.textContent = originalText;
+    dom.prepareTurbulencePpdbButton.disabled = false;
+    dom.refreshTurbulencePpdbButton.disabled = false;
+  }
+}
+
 function readTurbulenceComparisonConfig() {
   const strategies = [];
   if (dom.turbulenceStrategyLlm.checked) strategies.push("llm");
@@ -3613,6 +3685,8 @@ function readTurbulenceComparisonConfig() {
     referenceText: requiredText(dom.turbulenceReferenceText, "Texto de referencia final"),
     finalFidelityMin,
     finalFidelityMax,
+    ppdbSourcePath: requiredText(dom.turbulencePpdbSourcePath, "Archivo PPDB completo"),
+    ppdbIndexPath: requiredText(dom.turbulencePpdbIndexPath, "Indice compacto PPDB"),
     operatorParallelism: Math.floor(readClampedNumber(dom.turbulenceOperatorParallelism, "Paralelismo operador", 1, 8)),
     generationParallelism: Math.floor(readClampedNumber(dom.turbulenceGenerationParallelism, "Paralelismo generacion final", 1, 8)),
     lmStudio: {
@@ -3636,6 +3710,8 @@ function setTurbulenceComparisonRunning(isRunning, cancelRequested = false) {
   dom.cancelTurbulenceComparisonButton.disabled = !isRunning || !currentTurbulenceComparisonRunId || cancelRequested;
   dom.cancelTurbulenceComparisonButton.textContent = cancelRequested ? "Cancelando..." : "Cancelar";
   dom.clearTurbulenceComparisonButton.disabled = isRunning;
+  dom.refreshTurbulencePpdbButton.disabled = isRunning;
+  dom.prepareTurbulencePpdbButton.disabled = isRunning;
   document
     .querySelectorAll("#turbulenceComparison input, #turbulenceComparison select, #turbulenceComparison textarea")
     .forEach((field) => {
@@ -3663,8 +3739,7 @@ function resetTurbulenceComparisonUi() {
   dom.turbulenceRecommendationDetail.textContent = "Pendiente.";
   dom.turbulenceBaselineFidelity.textContent = "--";
   dom.turbulenceBaselineDiversity.textContent = "--";
-  dom.turbulencePpdbStatus.textContent = "--";
-  dom.turbulencePpdbDetail.textContent = "Indice compacto no revisado.";
+  renderTurbulencePpdbStatus(null);
   dom.turbulenceRunId.textContent = "--";
   dom.turbulenceComparisonConnectionText.textContent = "Sin ejecucion";
   dom.turbulenceComparisonConnectionDot.classList.remove("is-busy", "is-error");
@@ -3768,10 +3843,7 @@ function renderTurbulenceComparisonRun(run) {
   dom.turbulenceRunId.textContent = run.runId || "--";
   dom.turbulenceBaselineFidelity.textContent = formatOptionalNumber(baseline.averageFidelity, 6);
   dom.turbulenceBaselineDiversity.textContent = formatOptionalNumber(baseline.averageDiversity, 6);
-  dom.turbulencePpdbStatus.textContent = ppdb.available ? "disponible" : "no disponible";
-  dom.turbulencePpdbDetail.textContent = ppdb.available
-    ? `${ppdb.entries ?? 0} entrada(s) en ${ppdb.path || "indice local"}.`
-    : (ppdb.message || ppdb.path || "Ejecuta scripts/prepare_ppdb_index.py para construir el indice compacto.");
+  renderTurbulencePpdbStatus(ppdb);
 
   const recommendation = result.recommendation || {};
   dom.turbulenceRecommendation.textContent = recommendation.displayName || "--";
@@ -5078,6 +5150,8 @@ dom.runInitialComparisonButton.addEventListener("click", runInitialComparison);
 dom.cancelInitialComparisonButton.addEventListener("click", cancelInitialComparisonRun);
 dom.clearInitialComparisonButton.addEventListener("click", resetInitialComparisonUi);
 dom.loadTurbulenceModelsButton.addEventListener("click", loadTurbulenceModels);
+dom.refreshTurbulencePpdbButton.addEventListener("click", refreshTurbulencePpdbStatus);
+dom.prepareTurbulencePpdbButton.addEventListener("click", prepareTurbulencePpdb);
 dom.runTurbulenceComparisonButton.addEventListener("click", runTurbulenceComparison);
 dom.cancelTurbulenceComparisonButton.addEventListener("click", cancelTurbulenceComparisonRun);
 dom.clearTurbulenceComparisonButton.addEventListener("click", resetTurbulenceComparisonUi);
@@ -5181,6 +5255,7 @@ buildInitialComparisonStageEditors();
 resetInitialComparisonUi();
 loadInitialComparisonStrategies();
 resetTurbulenceComparisonUi();
+refreshTurbulencePpdbStatus();
 resetComparatorUi();
 loadComparatorProposals();
 dom.renderedPromptPreview.textContent = renderPrompt();

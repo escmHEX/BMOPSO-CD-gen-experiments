@@ -42,6 +42,8 @@ DEFAULT_MODEL = "Qwen3.5-2B"
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_DISTILBERT_MODEL = "distilbert/distilbert-base-uncased"
 REFERENCE_TEXT = "streets are flooded and families are asking for shelter after heavy rain"
+DEFAULT_PPDB_SOURCE_PATH = "data/external/ppdb/ppdb-2.0-s-all"
+DEFAULT_PPDB_INDEX_PATH = "data/turbulence/ppdb_index.json"
 
 GENERATION_SYSTEM_PROMPT = """You are a plain-text generator for natural-disaster scenario messages. You will receive one text-generation instruction from the user. Follow the instruction and generate exactly one final text message.
 
@@ -299,6 +301,8 @@ class TurbulenceComparisonService:
             "finalFidelityMax": 0.99,
             "operatorParallelism": 1,
             "generationParallelism": 1,
+            "ppdbSourcePath": DEFAULT_PPDB_SOURCE_PATH,
+            "ppdbIndexPath": DEFAULT_PPDB_INDEX_PATH,
             "lmStudio": {
                 "baseUrl": DEFAULT_LM_STUDIO,
                 "apiMode": DEFAULT_API_MODE,
@@ -342,6 +346,28 @@ class TurbulenceComparisonService:
         thread = threading.Thread(target=self._run_worker, args=(run_id,), daemon=True)
         thread.start()
         return self._public_run(run)
+
+    def ppdb_status(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._ppdb_status(payload or {})
+
+    def prepare_ppdb(self, payload: dict[str, Any]) -> dict[str, Any]:
+        source_path = self._ppdb_source_path(payload)
+        index_path = self._ppdb_index_path(payload)
+        if not source_path.exists():
+            raise ValueError(f"PPDB completo no encontrado en {source_path}. Descarga el dataset y deja el archivo en esa ruta.")
+        from scripts.prepare_ppdb_index import prepare_ppdb_index
+
+        summary = prepare_ppdb_index(
+            self.root,
+            source_path,
+            index_path,
+            int(clamp_number(payload.get("limitPerKey", 30), 1, 500)),
+        )
+        return {
+            "prepared": True,
+            "summary": summary,
+            "ppdb": self._ppdb_status({"ppdbSourcePath": str(source_path), "ppdbIndexPath": str(index_path)}),
+        }
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -494,7 +520,7 @@ class TurbulenceComparisonService:
         result = {
             "movementCount": len(movements),
             "individualCount": len(individuals),
-            "ppdb": self._ppdb_status(),
+            "ppdb": self._ppdb_status(config),
             "baseline": baseline_summary,
             "strategies": strategy_results,
             "recommendation": recommendation,
@@ -509,6 +535,8 @@ class TurbulenceComparisonService:
                 "turbulenceRange": [config["turbulenceMinSimilarity"], config["turbulenceMaxSimilarity"]],
                 "embeddingModel": config["embeddingModel"],
                 "distilbertModel": config["distilbertModel"],
+                "ppdbSourcePath": config["ppdbSourcePath"],
+                "ppdbIndexPath": config["ppdbIndexPath"],
             },
         }
         write_json(Path(run["runDir"]) / "result.json", result)
@@ -687,7 +715,7 @@ class TurbulenceComparisonService:
             return LlmTurbulenceOperator(ranker, client)
         analyzer = LinguisticAnalyzer()
         if strategy_id == "wordnet-ppdb-sbert":
-            return WordNetPPDBOperator(analyzer, ranker, PPDBIndex(self._ppdb_index_path()))
+            return WordNetPPDBOperator(analyzer, ranker, PPDBIndex(self._ppdb_index_path(config)))
         if strategy_id == "distilbert-sbert":
             return DistilBertOperator(analyzer, ranker, DistilBertProvider(config["distilbertModel"]))
         raise ValueError(f"Estrategia no soportada: {strategy_id}")
@@ -738,6 +766,8 @@ class TurbulenceComparisonService:
             "finalFidelityMax": final_max,
             "operatorParallelism": int(clamp_number(payload.get("operatorParallelism", defaults["operatorParallelism"]), 1, 8)),
             "generationParallelism": int(clamp_number(payload.get("generationParallelism", defaults["generationParallelism"]), 1, 8)),
+            "ppdbSourcePath": safe_path_text(payload.get("ppdbSourcePath", defaults["ppdbSourcePath"]), "ppdbSourcePath"),
+            "ppdbIndexPath": safe_path_text(payload.get("ppdbIndexPath", defaults["ppdbIndexPath"]), "ppdbIndexPath"),
             "lmStudio": {
                 "baseUrl": safe_text(lm_payload.get("baseUrl", defaults["lmStudio"]["baseUrl"]), "baseUrl").rstrip("/"),
                 "apiMode": api_mode,
@@ -768,22 +798,78 @@ class TurbulenceComparisonService:
             raise ValueError("LLM/data/pso-individuals.json no contiene individuals.")
         return individuals[:count]
 
-    def _ppdb_index_path(self) -> Path:
-        return self.root / "data" / "turbulence" / "ppdb_index.json"
+    def _resolve_local_path(self, value: str | Path) -> Path:
+        path = Path(str(value))
+        return path if path.is_absolute() else self.root / path
 
-    def _ppdb_status(self) -> dict[str, Any]:
-        path = self._ppdb_index_path()
-        if not path.exists():
+    def _ppdb_source_path(self, payload: dict[str, Any] | None = None) -> Path:
+        payload = payload or {}
+        explicit = payload.get("ppdbSourcePath")
+        source_text = safe_path_text(explicit or DEFAULT_PPDB_SOURCE_PATH, "ppdbSourcePath")
+        source_path = self._resolve_local_path(source_text)
+        if explicit is None and not source_path.exists() and source_path.suffix != ".gz":
+            gz_path = Path(f"{source_path}.gz")
+            if gz_path.exists():
+                return gz_path
+        return source_path
+
+    def _ppdb_index_path(self, payload: dict[str, Any] | None = None) -> Path:
+        payload = payload or {}
+        return self._resolve_local_path(safe_path_text(payload.get("ppdbIndexPath", DEFAULT_PPDB_INDEX_PATH), "ppdbIndexPath"))
+
+    def _ppdb_status(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        source_path = self._ppdb_source_path(payload)
+        index_path = self._ppdb_index_path(payload)
+        source = {
+            "path": str(source_path),
+            "exists": source_path.exists(),
+            "sizeBytes": source_path.stat().st_size if source_path.exists() else None,
+            "sizeLabel": format_bytes(source_path.stat().st_size) if source_path.exists() else "No disponible",
+            "message": "PPDB completo encontrado." if source_path.exists() else "PPDB completo no encontrado.",
+        }
+        if not index_path.exists():
             return {
                 "available": False,
-                "path": str(path),
-                "message": "PPDB no preparado; ejecuta scripts/prepare_ppdb_index.py con un archivo PPDB fuente.",
+                "path": str(index_path),
+                "message": "Indice compacto PPDB no preparado.",
+                "source": source,
+                "index": {
+                    "path": str(index_path),
+                    "exists": False,
+                    "available": False,
+                    "message": "Prepara el indice desde el PPDB completo local.",
+                },
             }
         try:
-            index = PPDBIndex(path)
+            index = PPDBIndex(index_path)
         except Exception as error:
-            return {"available": False, "path": str(path), "message": str(error)}
-        return {"available": index.available, "path": str(path), "entries": len(index.entries)}
+            return {
+                "available": False,
+                "path": str(index_path),
+                "message": f"Indice PPDB invalido: {error}",
+                "source": source,
+                "index": {
+                    "path": str(index_path),
+                    "exists": True,
+                    "available": False,
+                    "message": str(error),
+                },
+            }
+        return {
+            "available": index.available,
+            "path": str(index_path),
+            "entries": len(index.entries),
+            "message": f"Indice compacto PPDB disponible con {len(index.entries)} clave(s).",
+            "source": source,
+            "index": {
+                "path": str(index_path),
+                "exists": True,
+                "available": index.available,
+                "entries": len(index.entries),
+                "message": "Indice compacto cargado correctamente.",
+            },
+        }
 
     def _require_run(self, run_id: str) -> dict[str, Any]:
         with self._lock:
@@ -1296,3 +1382,24 @@ def safe_text(value: Any, field: str) -> str:
     if not text:
         raise ValueError(f"{field} es obligatorio.")
     return text
+
+
+def safe_path_text(value: Any, field: str) -> str:
+    text = safe_text(value, field)
+    if text.startswith(("http://", "https://")):
+        raise ValueError(f"{field} debe ser una ruta local, no una URL.")
+    return text
+
+
+def format_bytes(value: int | float | None) -> str:
+    if value is None:
+        return "No disponible"
+    number = float(value)
+    units = ("B", "KB", "MB", "GB", "TB")
+    unit_index = 0
+    while number >= 1024 and unit_index < len(units) - 1:
+        number /= 1024
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(number)} {units[unit_index]}"
+    return f"{number:.2f} {units[unit_index]}"
