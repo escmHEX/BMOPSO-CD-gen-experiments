@@ -3,6 +3,9 @@ runs/
 .server-*.log
 *.tmp
 
+# External datasets
+data/external/ppdb/
+
 # Python cache and test cache
 __pycache__/
 *.py[cod]
