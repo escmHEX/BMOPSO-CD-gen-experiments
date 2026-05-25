@@ -10,9 +10,7 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from initial_population.runner import DOMAIN_DEFAULT, PROGRESS_PREFIX
+from llm_studio import LmStudioClient, LmStudioHttpError
 
 
 STATUS_QUEUED = "queued"
@@ -405,54 +404,18 @@ class InitialPopulationService:
     def list_lm_studio_models(self, base_url: str | None, api_mode: str | None) -> dict[str, Any]:
         base = (base_url or DEFAULT_LM_STUDIO).rstrip("/")
         mode = api_mode if api_mode in {"native", "openai"} else DEFAULT_API_MODE
-        endpoint = "/api/v1/models" if mode == "native" else "/v1/models"
-        request = urllib.request.Request(f"{base}{endpoint}", method="GET")
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            raise ValueError(f"LM Studio returned HTTP {error.code}.") from error
+            normalized = LmStudioClient(base, mode, timeout_seconds=15).list_models()
+        except LmStudioHttpError as error:
+            raise ValueError(f"LM Studio returned HTTP {error.status_code}.") from error
         except Exception as error:
             raise ValueError(f"Could not query LM Studio models: {error}") from error
-
-        models: list[str] = []
-        native_models = payload.get("models") if isinstance(payload, dict) else None
-        if isinstance(native_models, list):
-            for item in native_models:
-                if not isinstance(item, dict):
-                    continue
-                if str(item.get("type") or "").lower() == "embedding":
-                    continue
-                loaded_instances = item.get("loaded_instances")
-                if isinstance(loaded_instances, list) and loaded_instances:
-                    for instance in loaded_instances:
-                        if isinstance(instance, dict) and instance.get("id"):
-                            models.append(str(instance["id"]))
-                    continue
-                if item.get("loaded") is True and item.get("key"):
-                    models.append(str(item["key"]))
-
-        data = payload.get("data") if isinstance(payload, dict) else None
-        if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and item.get("id"):
-                    item_type = str(item.get("type") or "").lower()
-                    if item_type in {"embedding", "embeddings"}:
-                        continue
-                    state = item.get("state")
-                    if state is not None and state != "loaded":
-                        continue
-                    models.append(str(item["id"]))
-                elif isinstance(item, str):
-                    models.append(item)
-        elif isinstance(payload, list):
-            models = [str(item.get("id") if isinstance(item, dict) else item) for item in payload]
 
         return {
             "baseUrl": base,
             "apiMode": mode,
-            "models": sorted(set(model for model in models if model)),
-            "raw": payload,
+            "models": sorted({model["id"] for model in normalized if model.get("id")}),
+            "normalizedModels": normalized,
         }
 
     def start_run(self, payload: dict[str, Any]) -> dict[str, Any]:

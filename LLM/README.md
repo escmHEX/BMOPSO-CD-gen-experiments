@@ -27,7 +27,7 @@ El evaluador usa por defecto el endpoint nativo recomendado por LM Studio 0.4.x:
 http://127.0.0.1:1234/api/v1/chat
 ```
 
-El portal se sirve con `server.py`, que además expone un proxy local en `/lmstudio/...`. Esto evita errores CORS del navegador al llamar a LM Studio desde otro puerto.
+El portal se sirve con `server.py`. Las secciones propias de la web llaman a LM Studio a través de la API local `POST /api/lm-studio/chat` y `POST /api/lm-studio/models`, implementada en Python con `llm_studio.py`. El proxy `/lmstudio/...` queda disponible por compatibilidad, pero no es la ruta común usada por los módulos principales.
 
 Cada ejecución se envía como una solicitud independiente con un único input. Se usa `store: false` en la API nativa para no conservar historial entre ejecuciones y aproximar chats separados.
 
@@ -63,7 +63,7 @@ La sección `Probar evaluación de soluciones` ejecuta un flujo completo:
 1. Genera soluciones mock con `rol`, `topico` y `accion` a partir de textos de referencia breves publicados en la memoria de Nicolas Meneses o el paper EVOLMD-MO.
 2. Renderiza un prompt mediante la plantilla determinística configurable.
 3. Envía el prompt al LLM generador con el system prompt fijo de generación de texto.
-4. Calcula embeddings con `Xenova/all-MiniLM-L6-v2` por defecto o `Xenova/gte-small`.
+4. Calcula embeddings con el runtime Python compartido `all-MiniLM-L6-v2` por defecto o `thenlper/gte-small`.
 5. Calcula el vector F.O `[F1, F2]`, donde `F1 = cos(texto generado, referencia)` y `F2` es la distancia coseno promedio contra las demás soluciones.
 6. Marca las soluciones no dominadas usando dominancia de Pareto sobre maximización de `F1` y `F2`.
 
@@ -153,15 +153,11 @@ Las métricas específicas del modo PSO reportan componentes sorteadas, componen
 
 ## Embeddings
 
-Los embeddings se calculan en el navegador mediante Transformers.js con:
+Los embeddings de las secciones propias del portal usan Python `sentence-transformers` con `normalize_embeddings=True`, centralizado en `sbert_service.py`. La calculadora usa `POST /api/sbert/pair`; los flujos que necesitan vectores usan `POST /api/sbert/embeddings`. La comparación de turbulencia, la evaluación de plantillas, la prueba de soluciones y las métricas comunes backend quedan sobre el mismo runtime.
 
-- `feature-extraction`
-- `pooling: "mean"`
-- `normalize: true`
+Modelos del runtime compartido:
 
-Para que la calculadora y el evaluador reporten el mismo valor al copiar exactamente los mismos textos, cada string se embebe de forma individual y se cachea por `modelo + texto exacto`. Esto evita que el resultado dependa del lote de textos evaluados en una corrida.
+- `all-MiniLM-L6-v2` (`sentence-transformers/all-MiniLM-L6-v2`)
+- `thenlper/gte-small`
 
-Modelos incluidos:
-
-- `Xenova/all-MiniLM-L6-v2`
-- `Xenova/gte-small`
+Los alias antiguos `Xenova/all-MiniLM-L6-v2` y `Xenova/gte-small` se aceptan solo por compatibilidad y se redirigen al runtime Python equivalente.

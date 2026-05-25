@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from sbert_service import shared_sbert_service
+
 
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
@@ -30,8 +32,6 @@ GENERATION_RE = re.compile(r"Generaci[oó]n\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
 PERCENT_RE = re.compile(r"(\d{1,3})%")
 PROPOSAL_TOTALS = {proposal_id: total for proposal_id, total in (("evolmd", 6), ("evolmd-mo", 5))}
 POSTHOC_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-_POSTHOC_MODEL: Any = None
-_POSTHOC_MODEL_LOCK = threading.Lock()
 
 
 def utc_now() -> str:
@@ -148,32 +148,18 @@ def normalized_posthoc_point(row: dict[str, Any]) -> tuple[float, float] | None:
     return clamp(finite_float(vector[0]), 0.0, 1.0), clamp(finite_float(vector[1]), 0.0, 1.0)
 
 
-def posthoc_embedding_model() -> Any:
-    global _POSTHOC_MODEL
-    with _POSTHOC_MODEL_LOCK:
-        if _POSTHOC_MODEL is None:
-            import torch  # noqa: F401
-            from sentence_transformers import SentenceTransformer
-
-            _POSTHOC_MODEL = SentenceTransformer(POSTHOC_EMBEDDING_MODEL)
-        return _POSTHOC_MODEL
-
-
 def calculate_posthoc_semantic_diversity(generated_texts: list[str]) -> list[float]:
     if len(generated_texts) <= 1:
         return [0.0] * len(generated_texts)
 
-    import torch
-    from sentence_transformers import util
-
     texts = [text if text.strip() else "[texto vacio]" for text in generated_texts]
-    embeddings = posthoc_embedding_model().encode(texts, convert_to_tensor=True, normalize_embeddings=True)
-    similarity_matrix = util.cos_sim(embeddings, embeddings)
+    embeddings, _ = shared_sbert_service().encode_texts(POSTHOC_EMBEDDING_MODEL, texts)
+    similarity_matrix = embeddings @ embeddings.T
     scores: list[float] = []
     for index in range(len(texts)):
-        sum_similarity = torch.sum(similarity_matrix[index]) - 1.0
+        sum_similarity = float(similarity_matrix[index].sum()) - 1.0
         average_similarity = sum_similarity / (len(texts) - 1)
-        scores.append(clamp(1.0 - float(average_similarity), 0.0, 1.0))
+        scores.append(clamp(1.0 - average_similarity, 0.0, 1.0))
     return scores
 
 

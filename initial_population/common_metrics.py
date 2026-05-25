@@ -133,11 +133,10 @@ def attach_common_metrics(
         }
 
     import numpy as np
-    from sentence_transformers import SentenceTransformer
+    from sbert_service import shared_sbert_service
 
-    model = SentenceTransformer(embedding_model)
     texts = [reference_text, *[str(row.get("generatedText") or "") for row in completed]]
-    embeddings = model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
+    embeddings, embedding_cost = shared_sbert_service().encode_texts(embedding_model, texts)
     reference_embedding = embeddings[0]
     generated_embeddings = embeddings[1:]
     fidelities = np.matmul(generated_embeddings, reference_embedding)
@@ -195,7 +194,8 @@ def attach_common_metrics(
         ),
     }
     cost = {
-        "embeddingModel": embedding_model,
+        "embeddingModel": embedding_cost["embeddingModel"],
+        "sourceModel": embedding_cost["sourceModel"],
         "embeddingTexts": len(texts),
         "embeddingWallClockSeconds": elapsed,
         "embeddingWallClockLabel": format_duration(elapsed),

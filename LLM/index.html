@@ -19,6 +19,7 @@
           <button class="nav-item" type="button" data-tool="solutionEvaluator">Probar evaluación de soluciones</button>
           <button class="nav-item" type="button" data-tool="initialPopulationStrategy">Estrategia de gen. de pob. inicial</button>
           <button class="nav-item" type="button" data-tool="initialPopulationComparison">Comparación de estrategias de gen. de pob. inicial</button>
+          <button class="nav-item" type="button" data-tool="turbulenceComparison">Comparación operador turbulencia</button>
           <button class="nav-item" type="button" data-tool="proposalComparator">Comparador de propuestas</button>
           <button class="nav-item" type="button" data-tool="embeddingCalculator">Calculadora SBERT</button>
         </nav>
@@ -55,8 +56,8 @@
                   </select>
                 </label>
                 <label>
-                  <span>Endpoint / proxy</span>
-                  <input id="lmEndpoint" type="text" value="/lmstudio/api/v1" autocomplete="off">
+                  <span>Base URL LM Studio</span>
+                  <input id="lmEndpoint" type="text" value="http://127.0.0.1:1234" autocomplete="off">
                 </label>
                 <label>
                   <span>Modelo LLM</span>
@@ -71,8 +72,8 @@
                 <label>
                   <span>Embedding de evaluación</span>
                   <select id="checkerEmbeddingModel">
-                    <option value="Xenova/all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
-                    <option value="Xenova/gte-small">gte-small</option>
+                    <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                    <option value="thenlper/gte-small">gte-small</option>
                   </select>
                 </label>
                 <label>
@@ -85,7 +86,7 @@
                 </label>
                 <label>
                   <span>Temperatura</span>
-                  <input id="temperature" type="number" min="0" max="2" step="0.05" value="0.7">
+                  <input id="temperature" type="number" min="0" max="2" step="0.05" value="0.45">
                 </label>
                 <label>
                   <span>Top p</span>
@@ -208,10 +209,16 @@
 
           <section class="panel template-panel">
             <div class="panel-title">
-              <h2>Plantilla del prompt</h2>
+              <h2>Plantillas del prompt</h2>
               <span>Variables: {num_candidates}, {component_name}, {component_definition}, {current_component}, {target_component}, {other_components}, {reference_text}</span>
             </div>
-            <textarea id="promptTemplate" class="code-textarea" rows="22">SEMANTIC_MOVE_N_PROMPT = """
+            <label>
+              <span>System prompt</span>
+              <textarea id="systemPrompt" class="code-textarea compact-code-textarea" rows="8"></textarea>
+            </label>
+            <label>
+              <span>User prompt</span>
+              <textarea id="promptTemplate" class="code-textarea" rows="22">SEMANTIC_MOVE_N_PROMPT = """
 Generate exactly {num_candidates} candidate replacements for one prompt component.
 
 Component: {component_name}
@@ -249,6 +256,7 @@ Each line must follow this format:
 3) &lt;{component_name}&gt;
 ...
 """</textarea>
+            </label>
           </section>
 
           <section class="metrics-grid" aria-label="Resumen de evaluación">
@@ -440,8 +448,8 @@ Each line must follow this format:
                   </select>
                 </label>
                 <label>
-                  <span>Endpoint / proxy</span>
-                  <input id="solutionLmEndpoint" type="text" value="/lmstudio/api/v1" autocomplete="off">
+                  <span>Base URL LM Studio</span>
+                  <input id="solutionLmEndpoint" type="text" value="http://127.0.0.1:1234" autocomplete="off">
                 </label>
                 <label>
                   <span>Modelo LLM</span>
@@ -505,8 +513,8 @@ Each line must follow this format:
                 <label>
                   <span>Embedding F.O</span>
                   <select id="solutionEmbeddingModel">
-                    <option value="Xenova/all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
-                    <option value="Xenova/gte-small">gte-small</option>
+                    <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                    <option value="thenlper/gte-small">gte-small</option>
                   </select>
                 </label>
                 <label>
@@ -1577,6 +1585,347 @@ Output rules:
           </section>
         </section>
 
+        <section id="turbulenceComparison" class="tool-panel" aria-label="Comparación operador turbulencia">
+          <header class="tool-header">
+            <div>
+              <p class="eyebrow">PSO compartido + métricas comunes</p>
+              <h1>Comparación operador turbulencia</h1>
+            </div>
+            <div class="header-status">
+              <span id="turbulenceComparisonConnectionDot" class="status-dot" aria-hidden="true"></span>
+              <span id="turbulenceComparisonConnectionText">Sin ejecución</span>
+            </div>
+          </header>
+
+          <section class="grid two-columns">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Estrategias y PSO</h2>
+              </div>
+              <div class="form-grid">
+                <label class="check-row">
+                  <input id="turbulenceStrategyLlm" type="checkbox" checked>
+                  <span>LLM actual</span>
+                </label>
+                <label class="check-row">
+                  <input id="turbulenceStrategyWordnet" type="checkbox" checked>
+                  <span>WordNet+PPDB+SBERT</span>
+                </label>
+                <label class="check-row">
+                  <input id="turbulenceStrategyDistilbert" type="checkbox" checked>
+                  <span>DistilBERT+SBERT</span>
+                </label>
+                <label>
+                  <span>N individuos</span>
+                  <input id="turbulenceIndividualCount" type="number" min="1" max="200" value="5">
+                </label>
+                <label>
+                  <span>Semilla</span>
+                  <input id="turbulenceSeed" type="number" min="0" max="2147483647" value="42">
+                </label>
+                <label>
+                  <span>Selección componente</span>
+                  <input id="turbulenceChangeThreshold" type="text" value="1 componente equiprobable por individuo" readonly>
+                </label>
+                <label>
+                  <span>K candidatos</span>
+                  <input id="turbulenceCandidateCount" type="number" min="1" max="30" value="5">
+                </label>
+                <label>
+                  <span>Sim. mínima</span>
+                  <input id="turbulenceComparisonMinSimilarity" type="number" min="-1" max="1" step="0.01" value="0.55">
+                </label>
+                <label>
+                  <span>Sim. máxima</span>
+                  <input id="turbulenceComparisonMaxSimilarity" type="number" min="-1" max="1" step="0.01" value="0.9">
+                </label>
+                <label>
+                  <span>Mín. palabras</span>
+                  <input id="turbulenceMinWords" type="number" min="1" max="40" value="2">
+                </label>
+                <label>
+                  <span>Máx. palabras</span>
+                  <input id="turbulenceMaxWords" type="number" min="1" max="80" value="8">
+                </label>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Modelos y decisión</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Modelo SBERT</span>
+                  <select id="turbulenceEmbeddingModel">
+                    <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                    <option value="thenlper/gte-small">gte-small</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Modelo DistilBERT</span>
+                  <input id="turbulenceDistilbertModel" type="text" value="distilbert/distilbert-base-uncased" autocomplete="off">
+                </label>
+                <label>
+                  <span>Fidelidad final mínima</span>
+                  <input id="turbulenceFinalFidelityMin" type="number" min="-1" max="1" step="0.01" value="0.25">
+                </label>
+                <label>
+                  <span>Fidelidad final máxima</span>
+                  <input id="turbulenceFinalFidelityMax" type="number" min="-1" max="1" step="0.01" value="0.99">
+                </label>
+                <label class="span-2">
+                  <span>Texto de referencia final</span>
+                  <textarea id="turbulenceReferenceText" rows="4">streets are flooded and families are asking for shelter after heavy rain</textarea>
+                </label>
+              </div>
+            </article>
+          </section>
+
+          <section class="grid two-columns">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>LM Studio</h2>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Base URL</span>
+                  <input id="turbulenceLmBaseUrl" type="text" value="http://127.0.0.1:1234" autocomplete="off">
+                </label>
+                <label>
+                  <span>API</span>
+                  <select id="turbulenceLmApiMode">
+                    <option value="native">REST v1 (/api/v1)</option>
+                    <option value="openai">OpenAI-compatible (/v1)</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Modelo LLM</span>
+                  <select id="turbulenceLlmModel" data-lm-studio-model-select data-preferred-model="Qwen3.5-2B">
+                    <option value="Qwen3.5-2B">Qwen3.5-2B</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Paralelismo generación final</span>
+                  <input id="turbulenceGenerationParallelism" type="number" min="1" max="8" value="1">
+                </label>
+                <label>
+                  <span>Paralelismo operador</span>
+                  <input id="turbulenceOperatorParallelism" type="number" min="1" max="8" value="1">
+                </label>
+                <label>
+                  <span>Temperatura</span>
+                  <input id="turbulenceLlmTemperature" type="number" min="0" max="2" step="0.05" value="0.35">
+                </label>
+                <label>
+                  <span>Top p</span>
+                  <input id="turbulenceLlmTopP" type="number" min="0" max="1" step="0.01" value="0.95">
+                </label>
+                <label>
+                  <span>Máx. tokens</span>
+                  <input id="turbulenceLlmMaxTokens" type="number" min="8" max="4096" value="220">
+                </label>
+                <label>
+                  <span>Timeout (s)</span>
+                  <input id="turbulenceTimeoutSeconds" type="number" min="5" max="1200" value="120">
+                </label>
+              </div>
+              <div class="inline-actions">
+                <button id="loadTurbulenceModelsButton" class="secondary" type="button">Cargar modelos LM Studio</button>
+                <button id="runTurbulenceComparisonButton" type="button">Ejecutar comparación</button>
+                <button id="cancelTurbulenceComparisonButton" class="danger" type="button" disabled>Cancelar</button>
+                <button id="clearTurbulenceComparisonButton" class="secondary" type="button">Limpiar</button>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Plantillas</h2>
+                <span>Variables: {num_candidates}, {component_name}, {component_definition}, {current_component}, {other_components}, {reference_text}, {role}, {topic}, {action}</span>
+              </div>
+              <label>
+                <span>System prompt turbulencia LLM</span>
+                <textarea id="turbulenceLlmSystemPrompt" class="code-textarea compact-code-textarea" rows="9">You are a prompt-component rewriting module.
+
+Task:
+Generate very close rewrites of one semantic prompt component.
+The rewrite must preserve the same meaning and the same component type.
+
+General rules:
+- Return only rewritten component candidates.
+- Each candidate must have 2-8 words.
+- Do not copy the current component exactly.
+- Do not change the main meaning.
+- Keep most words from the current component in the same order.
+- Replace only 1 word if possible, maximum 2 words.
+- Do not use context to add new information.
+- Candidates must be distinct from each other.
+- Do not explain.
+- Do not use quotes.
+- Do not add titles, labels, comments, or extra text.
+- Return exactly the number of candidates requested by the user.
+- Use numbered lines with this format:
+1) rewritten candidate
+2) rewritten candidate
+3) rewritten candidate
+...</textarea>
+              </label>
+              <label>
+                <span>User prompt turbulencia LLM</span>
+                <textarea id="turbulenceLlmPromptTemplate" class="code-textarea compact-code-textarea" rows="7">Number of candidates: {num_candidates}
+
+Component type: {component_name}
+Component definition: {component_definition}
+Current component value: {current_component}
+
+Context:
+{other_components}</textarea>
+              </label>
+              <label>
+                <span>Prompt generación final</span>
+                <textarea id="turbulenceFinalPromptTemplate" class="code-textarea compact-code-textarea" rows="4">Generate a short natural-disaster scenario message using the following semantic components: role = {role}; topic = {topic}; action = {action}. The generated message must follow the role, address the topic, and satisfy the action.</textarea>
+              </label>
+            </article>
+          </section>
+
+          <section class="metrics-grid" aria-label="Resumen comparación turbulencia">
+            <article class="metric">
+              <span>Estado</span>
+              <strong id="turbulenceRunStatus">--</strong>
+              <p id="turbulenceRunStatusDetail">Sin corrida activa.</p>
+            </article>
+            <article class="metric">
+              <span>Progreso</span>
+              <strong id="turbulenceProgressPercent">--</strong>
+              <p id="turbulenceProgressSummary">Sin ejecución.</p>
+            </article>
+            <article class="metric">
+              <span>Movimientos</span>
+              <strong id="turbulenceMovementCount">--</strong>
+              <p>Un componente equiprobable por individuo.</p>
+            </article>
+            <article class="metric">
+              <span>Recomendación</span>
+              <strong id="turbulenceRecommendation">--</strong>
+              <p id="turbulenceRecommendationDetail">Pendiente.</p>
+            </article>
+            <article class="metric">
+              <span>Fidelidad baseline</span>
+              <strong id="turbulenceBaselineFidelity">--</strong>
+              <p>Coseno SBERT promedio entre texto final baseline y texto de referencia.</p>
+            </article>
+            <article class="metric">
+              <span>Diversidad baseline</span>
+              <strong id="turbulenceBaselineDiversity">--</strong>
+              <p>Diversidad semÃ¡ntica promedio entre textos finales baseline.</p>
+            </article>
+            <article class="metric">
+              <span>PPDB</span>
+              <strong id="turbulencePpdbStatus">--</strong>
+              <p id="turbulencePpdbDetail">Índice compacto no revisado.</p>
+            </article>
+            <article class="metric">
+              <span>Run ID</span>
+              <strong id="turbulenceRunId">--</strong>
+              <p>Carpeta en runs/turbulence-comparison.</p>
+            </article>
+          </section>
+
+          <section class="status-panel" aria-live="polite">
+            <span id="turbulenceStatusTone" class="status-dot" aria-hidden="true"></span>
+            <div>
+              <p id="turbulenceStatusTitle">Listo</p>
+              <p id="turbulenceStatusDetail">Configura las estrategias y ejecuta una comparación corta para validar el flujo.</p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Métricas por estrategia</h2>
+              <span>El costo del operador se reporta separado de la generación final.</span>
+            </div>
+            <div class="table-wrap">
+              <table class="wide-table">
+                <thead>
+                  <tr>
+                    <th>Estrategia</th>
+                    <th>Tasa éxito</th>
+                    <th>Cobertura</th>
+                    <th>Tiempo prom.</th>
+                    <th>Costo operador</th>
+                    <th>Fidelidad final<br><small>semÃ¡ntica vs referencia</small></th>
+                    <th>Delta fidelidad<br><small>vs baseline sin turbulencia</small></th>
+                    <th>Diversidad final<br><small>semÃ¡ntica entre textos finales</small></th>
+                    <th>Delta diversidad<br><small>vs baseline sin turbulencia</small></th>
+                    <th>Recomendable</th>
+                  </tr>
+                </thead>
+                <tbody id="turbulenceStrategyMetricsBody">
+                  <tr><td colspan="10">Sin resultados todavía.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <details class="metric-explainer">
+              <summary>Como interpretar estas metricas</summary>
+              <div>
+                <p><strong>Tasa exito</strong>: porcentaje de movimientos donde el operador entrego una salida distinta, valida y dentro del rango de similitud de turbulencia contra el componente actual.</p>
+                <p><strong>Cobertura</strong>: porcentaje de movimientos donde la estrategia genero al menos un candidato antes del filtro semantico final.</p>
+                <p><strong>Tiempo prom.</strong>: tiempo promedio por aplicacion del operador. El valor <strong>wall</strong> muestra el tiempo real observado con el paralelismo configurado.</p>
+                <p><strong>Fidelidad final</strong>: similitud semantica SBERT, por coseno, entre cada texto final generado y el texto de referencia configurado.</p>
+                <p><strong>Diversidad final</strong>: diversidad semantica entre los textos finales generados por la misma estrategia, calculada como 1 menos la similitud coseno promedio contra los demas textos finales.</p>
+                <p><strong>Deltas</strong>: diferencia contra el baseline sin turbulencia usando las mismas metricas finales. Un delta positivo indica mejora respecto al baseline.</p>
+                <p><strong>Costo relativo</strong>: indice heuristico adimensional para ordenar costo del operador. Menor es mejor; no representa dinero ni milisegundos puros. Formula: llamadas LLM x 1000 + inferencias DistilBERT x 10 + textos embebidos x 1 + consultas WordNet x 0,2 + consultas PPDB reales x 0,2 + segundos acumulados del operador x 5.</p>
+                <p><strong>PPDB</strong>: si el indice PPDB no esta preparado, la tarjeta superior indica no disponible. En la tabla se muestran consultas PPDB reales; los intentos de usar PPDB como respaldo se reportan separado como intentos no disponibles.</p>
+              </div>
+            </details>
+          </section>
+
+          <section class="panel turbulence-movement-panel">
+              <div class="panel-title">
+                <h2>Movimientos aplicados</h2>
+              </div>
+              <div class="table-wrap">
+                <table class="wide-table turbulence-movement-table">
+                  <thead>
+                    <tr>
+                      <th>Estrategia</th>
+                      <th>Movimiento</th>
+                      <th>Individuo</th>
+                      <th>Componente</th>
+                      <th>Current</th>
+                      <th>Candidato</th>
+                      <th>Similitud</th>
+                      <th>Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody id="turbulenceMovementRowsBody">
+                    <tr><td colspan="8">Sin movimientos todavía.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+          </section>
+
+          <section class="panel">
+              <div class="panel-title">
+                <h2>Últimos logs</h2>
+              </div>
+              <pre id="turbulenceLogOutput" class="output-box">Sin logs todavía.</pre>
+          </section>
+
+          <div id="turbulenceCandidateModal" class="modal-backdrop" hidden>
+            <section class="diagnostic-modal" role="dialog" aria-modal="true" aria-labelledby="turbulenceCandidateModalTitle">
+              <div class="modal-header">
+                <div>
+                  <p class="eyebrow">Diagnóstico operador</p>
+                  <h2 id="turbulenceCandidateModalTitle">Detalle de candidatos</h2>
+                </div>
+                <button id="closeTurbulenceCandidateModalButton" class="secondary" type="button">Cerrar</button>
+              </div>
+              <div id="turbulenceCandidateModalBody" class="modal-body"></div>
+            </section>
+          </div>
+        </section>
+
         <section id="proposalComparator" class="tool-panel" aria-label="Comparador de propuestas">
           <header class="tool-header">
             <div>
@@ -1790,8 +2139,8 @@ Output rules:
             <label class="model-picker" for="embeddingModelSelect">
               <span>Modelo</span>
               <select id="embeddingModelSelect">
-                <option value="Xenova/all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
-                <option value="Xenova/gte-small">gte-small</option>
+                <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                <option value="thenlper/gte-small">gte-small</option>
               </select>
             </label>
           </header>
@@ -1832,7 +2181,7 @@ Output rules:
             <span id="embeddingStatusTone" class="status-dot" aria-hidden="true"></span>
             <div>
               <p id="embeddingStatusTitle">Listo para calcular</p>
-              <p id="embeddingStatusDetail">La primera ejecución de cada modelo descarga pesos desde Hugging Face.</p>
+              <p id="embeddingStatusDetail">La calculadora usa el mismo backend Python SBERT que las metricas de turbulencia.</p>
             </div>
           </section>
 

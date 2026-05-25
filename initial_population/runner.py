@@ -9,12 +9,13 @@ import re
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from llm_studio import LmStudioClient, LmStudioHttpError
+from sbert_service import shared_sbert_service
 
 
 PROGRESS_PREFIX = "__INITIAL_POPULATION_PROGRESS__"
@@ -261,60 +262,6 @@ def cosine_label(vector: list[float]) -> str:
     return "[" + ", ".join(f"{value:.6f}" for value in vector) + "]"
 
 
-def usage_tokens(payload: dict[str, Any]) -> tuple[int, int, int]:
-    usage = payload.get("usage") if isinstance(payload, dict) else {}
-    usage = usage if isinstance(usage, dict) else {}
-    prompt = int(finite_float(usage.get("prompt_tokens") or usage.get("promptTokens")))
-    completion = int(finite_float(usage.get("completion_tokens") or usage.get("completionTokens")))
-    total = int(finite_float(usage.get("total_tokens") or usage.get("totalTokens")))
-    if total <= 0:
-        total = prompt + completion
-    return prompt, completion, total
-
-
-def extract_lm_studio_text(payload: dict[str, Any], api_mode: str) -> str:
-    if api_mode == "native":
-        output_text = payload.get("output_text")
-        if isinstance(output_text, str):
-            return output_text.strip()
-        output = payload.get("output")
-        if isinstance(output, list):
-            parts: list[str] = []
-            for item in output:
-                if not isinstance(item, dict):
-                    continue
-                content = item.get("content")
-                if isinstance(content, str):
-                    parts.append(content)
-                elif isinstance(content, list):
-                    parts.extend(str(part.get("text") or part.get("content") or "") for part in content if isinstance(part, dict))
-            return "\n".join(part for part in parts if part).strip()
-        choices = payload.get("choices")
-        if isinstance(choices, list) and choices:
-            message = choices[0].get("message") if isinstance(choices[0], dict) else {}
-            if isinstance(message, dict):
-                return str(message.get("content") or "").strip()
-        return ""
-
-    choices = payload.get("choices")
-    if isinstance(choices, list) and choices:
-        first = choices[0] if isinstance(choices[0], dict) else {}
-        message = first.get("message") if isinstance(first, dict) else {}
-        if isinstance(message, dict):
-            content = message.get("content")
-            if isinstance(content, list):
-                return "\n".join(str(item.get("text") or item.get("content") or "") for item in content if isinstance(item, dict)).strip()
-            return str(content or "").strip()
-        return str(first.get("text") or "").strip()
-    return ""
-
-
-def lm_studio_url(base_url: str, api_mode: str, endpoint: str) -> str:
-    base = base_url.rstrip("/")
-    prefix = "/api/v1" if api_mode == "native" else "/v1"
-    return f"{base}{prefix}{endpoint}"
-
-
 def call_lm_studio(
     config: dict[str, Any],
     stage_name: str,
@@ -324,52 +271,26 @@ def call_lm_studio(
 ) -> LlmCallResult:
     lm_studio = config["lmStudio"]
     stage = config["stages"][stage_name]
-    api_mode = lm_studio["apiMode"]
-    messages = []
-    if system_prompt.strip():
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": user_prompt})
-
-    if api_mode == "native":
-        request_url = lm_studio_url(lm_studio["baseUrl"], api_mode, "/chat")
-        body: dict[str, Any] = {
-            "model": stage["model"],
-            "input": f"{system_prompt}\n\nUser instruction:\n{user_prompt}" if system_prompt.strip() else user_prompt,
-            "temperature": stage["temperature"],
-            "top_p": stage["topP"],
-            "top_k": stage["topK"],
-            "max_output_tokens": stage["maxTokens"],
-            "stream": False,
-            "store": False,
-        }
-    else:
-        request_url = lm_studio_url(lm_studio["baseUrl"], api_mode, "/chat/completions")
-        body = {
-            "model": stage["model"],
-            "messages": messages,
-            "temperature": stage["temperature"],
-            "top_p": stage["topP"],
-            "top_k": stage["topK"],
-            "max_tokens": stage["maxTokens"],
-            "stream": False,
-        }
-
-    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        request_url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     started_offset = time.perf_counter() - recorder.started
     started = time.perf_counter()
+    client = LmStudioClient(
+        lm_studio["baseUrl"],
+        lm_studio["apiMode"],
+        stage["model"],
+        float(config["timeoutSeconds"]),
+    )
     try:
-        with urllib.request.urlopen(request, timeout=config["timeoutSeconds"]) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
+        response = client.call(
+            user_prompt,
+            system_prompt=system_prompt,
+            temperature=float(stage["temperature"]),
+            top_p=float(stage["topP"]),
+            top_k=int(stage["topK"]) if stage.get("topK") is not None else None,
+            max_tokens=int(stage["maxTokens"]),
+        )
+    except LmStudioHttpError as error:
         elapsed = time.perf_counter() - started
         finished_offset = started_offset + elapsed
-        body_text = error.read().decode("utf-8", errors="replace")
         recorder.add_llm_call(
             {
                 "stage": stage_name,
@@ -379,10 +300,10 @@ def call_lm_studio(
                 "finishedSeconds": finished_offset,
                 "elapsedSeconds": elapsed,
                 "promptChars": len(system_prompt) + len(user_prompt),
-                "error": f"HTTP {error.code}: {body_text[:500]}",
+                "error": f"HTTP {error.status_code}: {error.response_text[:500]}",
             }
         )
-        raise StrategyExecutionError(stage_name, f"LM Studio returned HTTP {error.code}.", {"response": body_text[:1000]}) from error
+        raise StrategyExecutionError(stage_name, f"LM Studio returned HTTP {error.status_code}.", {"response": error.response_text[:1000]}) from error
     except Exception as error:
         elapsed = time.perf_counter() - started
         finished_offset = started_offset + elapsed
@@ -402,8 +323,7 @@ def call_lm_studio(
 
     elapsed = time.perf_counter() - started
     finished_offset = started_offset + elapsed
-    prompt_tokens, completion_tokens, total_tokens = usage_tokens(payload)
-    text = extract_lm_studio_text(payload, api_mode)
+    text = str(response.get("text") or "")
     recorder.add_llm_call(
         {
             "stage": stage_name,
@@ -414,12 +334,19 @@ def call_lm_studio(
             "elapsedSeconds": elapsed,
             "promptChars": len(system_prompt) + len(user_prompt),
             "responseChars": len(text),
-            "promptTokens": prompt_tokens,
-            "completionTokens": completion_tokens,
-            "totalTokens": total_tokens,
+            "promptTokens": response["promptTokens"],
+            "completionTokens": response["completionTokens"],
+            "totalTokens": response["totalTokens"],
         }
     )
-    return LlmCallResult(text, payload, elapsed, prompt_tokens, completion_tokens, total_tokens)
+    return LlmCallResult(
+        text,
+        response.get("payload") if isinstance(response.get("payload"), dict) else {},
+        elapsed,
+        int(response["promptTokens"]),
+        int(response["completionTokens"]),
+        int(response["totalTokens"]),
+    )
 
 
 def choose_pool_sizes(n: int) -> dict[str, int]:
@@ -630,9 +557,8 @@ def stratified_sample(pools: dict[str, list[str]], max_size: int, seed: int) -> 
 def load_embedding_model(config: dict[str, Any], recorder: RunRecorder) -> Any:
     recorder.progress("embedding_model", f"Loading embedding model {config['embeddingModel']}.", 56, 7, 10)
     recorder.log("embeddings", f"Loading embedding model {config['embeddingModel']}.")
-    from sentence_transformers import SentenceTransformer
-
-    model = SentenceTransformer(config["embeddingModel"])
+    model = shared_sbert_service().model_wrapper(config["embeddingModel"])
+    shared_sbert_service().warmup(config["embeddingModel"])
     recorder.progress("embedding_model", f"Embedding model {config['embeddingModel']} ready.", 58, 7, 10)
     return model
 
@@ -643,7 +569,8 @@ def encode_texts(model: Any, texts: list[str], stage: str, recorder: RunRecorder
     elapsed = time.perf_counter() - started
     recorder.add_embedding_batch({
         "stage": stage,
-        "model": getattr(model, "model_card_data", None).__class__.__name__ if hasattr(model, "model_card_data") else None,
+        "model": getattr(model, "model_name", None),
+        "sourceModel": getattr(model, "source_model", None),
         "textCount": len(texts),
         "elapsedSeconds": elapsed,
     })
