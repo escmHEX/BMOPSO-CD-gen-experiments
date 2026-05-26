@@ -487,7 +487,7 @@ class TurbulenceComparisonService:
         if baseline_summary["completedRows"] == 0:
             self._log(
                 run,
-                "Baseline sin textos finales validos; las metricas finales quedan no disponibles hasta corregir la generacion LM Studio.",
+                "Baseline sin textos finales válidos; las métricas finales quedan no disponibles hasta corregir la generación LM Studio.",
             )
 
         strategy_results = []
@@ -515,7 +515,7 @@ class TurbulenceComparisonService:
             write_json(Path(run["runDir"]) / f"{strategy_id}.json", strategy_result)
 
         recommendation = recommend_strategy(strategy_results, config)
-        self._set_progress(run, "summarizing", "Calculando recomendacion.", 94, len(strategy_results), len(config["strategies"]))
+        self._set_progress(run, "summarizing", "Calculando recomendación.", 94, len(strategy_results), len(config["strategies"]))
         warnings = comparison_warnings(baseline_summary, strategy_results, recommendation)
         result = {
             "movementCount": len(movements),
@@ -613,7 +613,7 @@ class TurbulenceComparisonService:
         if final_summary["completedRows"] == 0:
             self._log(
                 run,
-                f"{STRATEGIES[strategy_id]} sin textos finales validos; fidelidad y diversidad no disponibles.",
+                f"{STRATEGIES[strategy_id]} sin textos finales válidos; fidelidad y diversidad no disponibles.",
             )
         operator_summary = summarize_operator_rows(rows, costs, operator_wall_clock_seconds, operator_parallelism)
         strategy_result = {
@@ -1033,7 +1033,7 @@ def strategy_warnings(movement_rows: list[dict[str, Any]], final_rows: list[dict
         )
     if final_errors:
         warnings.append(
-            f"{len(final_errors)} texto(s) finales fallaron en generacion LM Studio; primer error: {short_error(final_errors[0].get('error'))}"
+            f"{len(final_errors)} texto(s) finales fallaron en generación LM Studio; primer error: {short_error(final_errors[0].get('error'))}"
         )
     return warnings
 
@@ -1045,11 +1045,11 @@ def comparison_warnings(
 ) -> list[str]:
     warnings: list[str] = []
     if baseline_summary.get("completedRows") == 0:
-        warnings.append("Baseline sin textos finales validos; no se pueden calcular deltas finales.")
+        warnings.append("Baseline sin textos finales válidos; no se pueden calcular deltas finales.")
     for result in strategy_results:
         warnings.extend(str(message) for message in result.get("warnings") or [])
     if recommendation.get("strategyId") is None:
-        warnings.append(str(recommendation.get("message") or "Sin recomendacion disponible."))
+        warnings.append(str(recommendation.get("message") or "Sin recomendación disponible."))
     return warnings
 
 
@@ -1121,12 +1121,28 @@ def aggregate_operator_metrics(metrics_list: list[dict[str, Any]]) -> dict[str, 
     wall = sum(finite_float(metrics.get("operatorWallClockSeconds")) for metrics in metrics_list)
     cost = aggregate_costs([metrics.get("cost") or {} for metrics in metrics_list])
     average = cumulative / moves if moves else None
+    similarity_count = sum(int(finite_float(metrics.get("similarityCount"))) for metrics in metrics_list)
+    similarity_sum = sum(finite_float(metrics.get("similaritySum")) for metrics in metrics_list)
+    if similarity_count == 0:
+        similarity_values = [
+            finite_float(metrics.get("averageSimilarity"))
+            for metrics in metrics_list
+            if metrics.get("averageSimilarity") is not None
+        ]
+        average_similarity = sum(similarity_values) / len(similarity_values) if similarity_values else None
+        similarity_sum = sum(similarity_values)
+        similarity_count = len(similarity_values)
+    else:
+        average_similarity = similarity_sum / similarity_count
     return {
         "moves": moves,
         "successes": successes,
         "successRate": successes / moves if moves else 0.0,
         "coverageCount": coverage,
         "coverageRate": coverage / moves if moves else 0.0,
+        "similarityCount": similarity_count,
+        "similaritySum": similarity_sum,
+        "averageSimilarity": average_similarity,
         "operatorParallelism": max((int(finite_float(metrics.get("operatorParallelism"))) for metrics in metrics_list), default=1),
         "operatorCumulativeSeconds": cumulative,
         "operatorCumulativeLabel": format_duration(cumulative),
@@ -1255,12 +1271,22 @@ def summarize_operator_rows(
     wall_clock_seconds = operator_wall_clock_seconds if operator_wall_clock_seconds is not None else cumulative_seconds
     aggregate_cost = aggregate_costs(costs)
     average_seconds = cumulative_seconds / total if total else None
+    similarity_values = [
+        finite_float(row.get("similarity"))
+        for row in rows
+        if row.get("similarity") is not None
+    ]
+    similarity_sum = sum(similarity_values)
+    similarity_count = len(similarity_values)
     return {
         "moves": total,
         "successes": successes,
         "successRate": successes / total if total else 0.0,
         "coverageCount": coverage,
         "coverageRate": coverage / total if total else 0.0,
+        "similarityCount": similarity_count,
+        "similaritySum": similarity_sum,
+        "averageSimilarity": similarity_sum / similarity_count if similarity_count else None,
         "operatorParallelism": operator_parallelism,
         "operatorCumulativeSeconds": cumulative_seconds,
         "operatorCumulativeLabel": format_duration(cumulative_seconds),
@@ -1370,7 +1396,7 @@ def recommend_strategy(strategy_results: list[dict[str, Any]], config: dict[str,
         "eligibleByFidelity": bool(eligible),
         "message": (
             f"{winner['displayName']} combina menor costo relativo, "
-            f"tasa de exito {winner['operatorMetrics']['successRate']:.2%} "
+            f"tasa de éxito {winner['operatorMetrics']['successRate']:.2%} "
             f"y fidelidad final promedio {winner['finalMetrics'].get('averageFidelity') or 0:.6f}."
         ),
     }

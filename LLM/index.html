@@ -1855,7 +1855,7 @@ Context:
             <article class="metric">
               <span>Diversidad baseline</span>
               <strong id="turbulenceBaselineDiversity">--</strong>
-              <p>Diversidad semÃ¡ntica promedio entre textos finales baseline.</p>
+              <p>Diversidad semántica promedio entre textos finales baseline.</p>
             </article>
             <article class="metric">
               <span>PPDB</span>
@@ -1889,13 +1889,13 @@ Context:
                     <th>Estrategia</th>
                     <th>Tasa éxito</th>
                     <th>Cobertura</th>
+                    <th>Similitud prom.<br><small>operador vs componente original</small></th>
                     <th>Tiempo prom.</th>
                     <th>Costo operador</th>
-                    <th>Fidelidad final<br><small>semÃ¡ntica vs referencia</small></th>
+                    <th>Fidelidad final<br><small>semántica vs referencia</small></th>
                     <th>Delta fidelidad<br><small>vs baseline sin turbulencia</small></th>
-                    <th>Diversidad final<br><small>semÃ¡ntica entre textos finales</small></th>
+                    <th>Diversidad final<br><small>semántica entre textos finales</small></th>
                     <th>Delta diversidad<br><small>vs baseline sin turbulencia</small></th>
-                    <th>Recomendable</th>
                   </tr>
                 </thead>
                 <tbody id="turbulenceStrategyMetricsBody">
@@ -1904,16 +1904,17 @@ Context:
               </table>
             </div>
             <details class="metric-explainer">
-              <summary>Como interpretar estas metricas</summary>
+              <summary>Cómo interpretar estas métricas</summary>
               <div>
-                <p><strong>Tasa exito</strong>: porcentaje de movimientos donde el operador entrego una salida distinta, valida y dentro del rango de similitud de turbulencia contra el componente actual.</p>
-                <p><strong>Cobertura</strong>: porcentaje de movimientos donde la estrategia genero al menos un candidato antes del filtro semantico final.</p>
-                <p><strong>Tiempo prom.</strong>: tiempo promedio por aplicacion del operador. El valor <strong>wall</strong> muestra el tiempo real observado con el paralelismo configurado.</p>
-                <p><strong>Fidelidad final</strong>: similitud semantica SBERT, por coseno, entre cada texto final generado y el texto de referencia configurado.</p>
-                <p><strong>Diversidad final</strong>: diversidad semantica entre los textos finales generados por la misma estrategia, calculada como 1 menos la similitud coseno promedio contra los demas textos finales.</p>
-                <p><strong>Deltas</strong>: diferencia contra el baseline sin turbulencia usando las mismas metricas finales. Un delta positivo indica mejora respecto al baseline.</p>
-                <p><strong>Costo relativo</strong>: indice heuristico adimensional para ordenar costo del operador. Menor es mejor; no representa dinero ni milisegundos puros. Formula: llamadas LLM x 1000 + inferencias DistilBERT x 10 + textos embebidos x 1 + consultas WordNet x 0,2 + consultas PPDB reales x 0,2 + segundos acumulados del operador x 5.</p>
-                <p><strong>PPDB</strong>: si el indice PPDB no esta preparado, la tarjeta superior indica no disponible. En la tabla se muestran consultas PPDB reales; los intentos de usar PPDB como respaldo se reportan separado como intentos no disponibles.</p>
+                <p><strong>Tasa éxito</strong>: porcentaje de movimientos donde el operador entregó una salida distinta, válida y dentro del rango de similitud de turbulencia contra el componente actual.</p>
+                <p><strong>Cobertura</strong>: porcentaje de movimientos donde la estrategia generó al menos un candidato antes del filtro semántico final.</p>
+                <p><strong>Similitud prom.</strong>: similitud coseno SBERT promedio entre el candidato seleccionado y el componente original, calculada sobre los movimientos con candidato válido y agregada entre las K repeticiones.</p>
+                <p><strong>Tiempo prom.</strong>: tiempo promedio por aplicación del operador. El valor <strong>wall</strong> muestra el tiempo real observado con el paralelismo configurado.</p>
+                <p><strong>Fidelidad final</strong>: similitud semántica SBERT, por coseno, entre cada texto final generado y el texto de referencia configurado.</p>
+                <p><strong>Diversidad final</strong>: diversidad semántica entre los textos finales generados por la misma estrategia, calculada como 1 menos la similitud coseno promedio contra los demás textos finales.</p>
+                <p><strong>Deltas</strong>: diferencia contra el baseline sin turbulencia usando las mismas métricas finales. Un delta positivo indica mejora respecto al baseline.</p>
+                <p><strong>Costo relativo</strong>: índice heurístico adimensional para ordenar costo del operador. Menor es mejor; no representa dinero ni milisegundos puros. Fórmula: llamadas LLM x 1000 + inferencias DistilBERT x 10 + textos embebidos x 1 + consultas WordNet x 0,2 + consultas PPDB reales x 0,2 + segundos acumulados del operador x 5.</p>
+                <p><strong>PPDB</strong>: si el índice PPDB no está preparado, la tarjeta superior indica no disponible. En la tabla se muestran consultas PPDB reales; los intentos de usar PPDB como respaldo se reportan separado como intentos no disponibles.</p>
               </div>
             </details>
           </section>

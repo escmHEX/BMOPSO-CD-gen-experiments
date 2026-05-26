@@ -3734,7 +3734,7 @@ function resetTurbulenceComparisonUi() {
   dom.turbulenceRunStatus.textContent = "--";
   dom.turbulenceRunStatusDetail.textContent = "Sin corrida activa.";
   dom.turbulenceProgressPercent.textContent = "--";
-  dom.turbulenceProgressSummary.textContent = "Sin ejecucion.";
+  dom.turbulenceProgressSummary.textContent = "Sin ejecución.";
   dom.turbulenceMovementCount.textContent = "--";
   dom.turbulenceRecommendation.textContent = "--";
   dom.turbulenceRecommendationDetail.textContent = "Pendiente.";
@@ -3742,11 +3742,11 @@ function resetTurbulenceComparisonUi() {
   dom.turbulenceBaselineDiversity.textContent = "--";
   renderTurbulencePpdbStatus(null);
   dom.turbulenceRunId.textContent = "--";
-  dom.turbulenceComparisonConnectionText.textContent = "Sin ejecucion";
+  dom.turbulenceComparisonConnectionText.textContent = "Sin ejecución";
   dom.turbulenceComparisonConnectionDot.classList.remove("is-busy", "is-error");
-  dom.turbulenceStrategyMetricsBody.innerHTML = '<tr><td colspan="10">Sin resultados todavia.</td></tr>';
-  dom.turbulenceMovementRowsBody.innerHTML = '<tr><td colspan="8">Sin movimientos todavia.</td></tr>';
-  dom.turbulenceLogOutput.textContent = "Sin logs todavia.";
+  dom.turbulenceStrategyMetricsBody.innerHTML = '<tr><td colspan="10">Sin resultados todavía.</td></tr>';
+  dom.turbulenceMovementRowsBody.innerHTML = '<tr><td colspan="8">Sin movimientos todavía.</td></tr>';
+  dom.turbulenceLogOutput.textContent = "Sin logs todavía.";
   setStatus(
     dom.turbulenceStatusTone,
     dom.turbulenceStatusTitle,
@@ -3916,15 +3916,15 @@ function turbulenceBestClass(bestIndexes, index) {
 
 function turbulenceMetricLabel(key) {
   return {
-    success: "Tasa de exito",
+    success: "Tasa de éxito",
     coverage: "Cobertura",
+    similarity: "Similitud promedio del operador vs componente original",
     time: "Tiempo promedio",
     cost: "Costo operador",
-    fidelity: "Fidelidad final semantica vs referencia",
+    fidelity: "Fidelidad final semántica vs referencia",
     fidelityDelta: "Delta fidelidad vs baseline sin turbulencia",
-    diversity: "Diversidad semantica entre textos finales",
+    diversity: "Diversidad semántica entre textos finales",
     diversityDelta: "Delta diversidad vs baseline sin turbulencia",
-    eligible: "Recomendable por rango de fidelidad",
   }[key] || key;
 }
 
@@ -3935,18 +3935,13 @@ function turbulenceMetricValue(strategy, key, config = {}) {
   const deltas = strategy.deltas || {};
   if (key === "success") return formatTurbulenceRate(operator.successRate);
   if (key === "coverage") return formatTurbulenceRate(operator.coverageRate);
+  if (key === "similarity") return formatOptionalNumber(operator.averageSimilarity, 6);
   if (key === "time") return formatDuration(Number(operator.operatorAverageSeconds || 0) * 1000);
   if (key === "cost") return `${turbulenceCostLabel(cost)}; costo relativo ${formatOptionalNumber(strategy.relativeOperatorCost, 2)}`;
   if (key === "fidelity") return formatOptionalNumber(finalMetrics.averageFidelity, 6);
   if (key === "fidelityDelta") return formatSignedOptional(deltas.averageFidelityDelta);
   if (key === "diversity") return formatOptionalNumber(finalMetrics.averageDiversity, 6);
   if (key === "diversityDelta") return formatSignedOptional(deltas.averageDiversityDelta);
-  if (key === "eligible") {
-    const fidelity = Number(finalMetrics.averageFidelity);
-    const finalMin = Number(config.finalFidelityMin);
-    const finalMax = Number(config.finalFidelityMax);
-    return Number.isFinite(fidelity) && fidelity >= finalMin && fidelity <= finalMax ? "si" : "no";
-  }
   return "--";
 }
 
@@ -4038,14 +4033,13 @@ function addTurbulenceMetricBreakdowns(row, strategy, config) {
 
 function renderTurbulenceStrategyMetrics(strategies, config, recommendation) {
   if (!strategies.length) {
-    dom.turbulenceStrategyMetricsBody.innerHTML = '<tr><td colspan="10">Sin resultados todavia.</td></tr>';
+    dom.turbulenceStrategyMetricsBody.innerHTML = '<tr><td colspan="10">Sin resultados todavía.</td></tr>';
     return;
   }
-  const finalMin = Number(config.finalFidelityMin);
-  const finalMax = Number(config.finalFidelityMax);
   const best = {
     success: bestTurbulenceIndexes(strategies, (strategy) => strategy.operatorMetrics?.successRate, "max"),
     coverage: bestTurbulenceIndexes(strategies, (strategy) => strategy.operatorMetrics?.coverageRate, "max"),
+    similarity: bestTurbulenceIndexes(strategies, (strategy) => strategy.operatorMetrics?.averageSimilarity, "max"),
     time: bestTurbulenceIndexes(strategies, (strategy) => strategy.operatorMetrics?.operatorAverageSeconds, "min"),
     cost: bestTurbulenceIndexes(strategies, (strategy) => strategy.relativeOperatorCost, "min"),
     fidelity: bestTurbulenceIndexes(strategies, (strategy) => strategy.finalMetrics?.averageFidelity, "max"),
@@ -4060,8 +4054,6 @@ function renderTurbulenceStrategyMetrics(strategies, config, recommendation) {
       const cost = operator.cost || {};
       const deltas = strategy.deltas || {};
       const warnings = Array.isArray(strategy.warnings) ? strategy.warnings : [];
-      const fidelity = Number(finalMetrics.averageFidelity);
-      const eligible = Number.isFinite(fidelity) && fidelity >= finalMin && fidelity <= finalMax;
       const isWinner = recommendation?.strategyId === strategy.strategyId;
       const tr = document.createElement("tr");
       if (isWinner) tr.classList.add("is-nondominated-row");
@@ -4069,13 +4061,13 @@ function renderTurbulenceStrategyMetrics(strategies, config, recommendation) {
         <td>${escapeHtml(strategy.displayName || strategy.strategyId)}${warnings.length ? `<br><small>${escapeHtml(warnings[0])}</small>` : ""}</td>
         ${turbulenceMetricCell(formatTurbulenceRate(operator.successRate), turbulenceBestClass(best.success, index), "success")}
         ${turbulenceMetricCell(formatTurbulenceRate(operator.coverageRate), turbulenceBestClass(best.coverage, index), "coverage")}
+        ${turbulenceMetricCell(formatOptionalNumber(operator.averageSimilarity, 6), turbulenceBestClass(best.similarity, index), "similarity")}
         ${turbulenceMetricCell(`${formatDuration(Number(operator.operatorAverageSeconds || 0) * 1000)}<br><small>wall ${formatDuration(Number(operator.operatorWallClockSeconds || 0) * 1000)}; par ${operator.operatorParallelism ?? 1}</small>`, turbulenceBestClass(best.time, index), "time")}
         ${turbulenceMetricCell(`${escapeHtml(turbulenceCostLabel(cost))}<br><small>costo relativo ${formatOptionalNumber(strategy.relativeOperatorCost, 2)}</small>`, turbulenceBestClass(best.cost, index), "cost")}
         ${turbulenceMetricCell(formatOptionalNumber(finalMetrics.averageFidelity, 6), turbulenceBestClass(best.fidelity, index), "fidelity")}
         ${turbulenceMetricCell(formatSignedOptional(deltas.averageFidelityDelta), turbulenceBestClass(best.fidelityDelta, index), "fidelityDelta")}
         ${turbulenceMetricCell(formatOptionalNumber(finalMetrics.averageDiversity, 6), turbulenceBestClass(best.diversity, index), "diversity")}
         ${turbulenceMetricCell(formatSignedOptional(deltas.averageDiversityDelta), turbulenceBestClass(best.diversityDelta, index), "diversityDelta")}
-        ${turbulenceMetricCell(`<span class="${eligible ? "valid" : "invalid"}">${eligible ? "si" : "no"}</span>${isWinner ? "<br><small>recomendada</small>" : ""}`, "", "eligible")}
       `;
       addTurbulenceMetricBreakdowns(tr, strategy, config);
       return tr;
@@ -4096,7 +4088,7 @@ function renderTurbulenceMovementRows(strategies) {
     || a.strategyIndex - b.strategyIndex
   );
   if (!rows.length) {
-    dom.turbulenceMovementRowsBody.innerHTML = '<tr><td colspan="8">Sin movimientos todavia.</td></tr>';
+    dom.turbulenceMovementRowsBody.innerHTML = '<tr><td colspan="8">Sin movimientos todavía.</td></tr>';
     return;
   }
   dom.turbulenceMovementRowsBody.replaceChildren(
@@ -4283,7 +4275,7 @@ async function copyTextToClipboard(text) {
 
 function renderTurbulenceLogs(logs) {
   if (!logs.length) {
-    dom.turbulenceLogOutput.textContent = "Sin logs todavia.";
+    dom.turbulenceLogOutput.textContent = "Sin logs todavía.";
     return;
   }
   dom.turbulenceLogOutput.textContent = logs
@@ -5324,7 +5316,7 @@ dom.solutionLmApiMode.addEventListener("change", () => {
 });
 dom.turbulenceLmApiMode.addEventListener("change", () => {
   dom.turbulenceLlmModel.replaceChildren(new Option(TURBULENCE_LLM_DEFAULT_MODEL, TURBULENCE_LLM_DEFAULT_MODEL));
-  dom.turbulenceComparisonConnectionText.textContent = "Sin ejecucion";
+  dom.turbulenceComparisonConnectionText.textContent = "Sin ejecución";
   dom.turbulenceComparisonConnectionDot.classList.remove("is-error", "is-busy");
 });
 dom.simulatePsoSwitch.addEventListener("change", () => {

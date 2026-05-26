@@ -106,6 +106,8 @@ class RepetitionAggregationTests(unittest.TestCase):
                             "moves": 2,
                             "successes": 1,
                             "coverageCount": 2,
+                            "similarityCount": 1,
+                            "similaritySum": 0.7,
                             "operatorCumulativeSeconds": 1.0,
                             "operatorWallClockSeconds": 1.0,
                             "operatorParallelism": 1,
@@ -130,6 +132,8 @@ class RepetitionAggregationTests(unittest.TestCase):
                             "moves": 2,
                             "successes": 2,
                             "coverageCount": 2,
+                            "similarityCount": 2,
+                            "similaritySum": 1.5,
                             "operatorCumulativeSeconds": 1.0,
                             "operatorWallClockSeconds": 1.0,
                             "operatorParallelism": 1,
@@ -149,6 +153,7 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(aggregated["completedRepetitions"], 2)
         self.assertAlmostEqual(aggregated["baseline"]["averageFidelity"], 0.6)
         self.assertAlmostEqual(strategy["operatorMetrics"]["successRate"], 0.75)
+        self.assertAlmostEqual(strategy["operatorMetrics"]["averageSimilarity"], 2.2 / 3)
         self.assertAlmostEqual(strategy["finalMetrics"]["averageFidelity"], 0.7)
         self.assertAlmostEqual(strategy["deltas"]["averageFidelityDelta"], 0.1)
         self.assertEqual(strategy["repetitions"][0]["repetitionIndex"], 1)
