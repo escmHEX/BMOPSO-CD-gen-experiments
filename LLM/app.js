@@ -135,6 +135,8 @@ const PSO_OPERATORS = {
 };
 
 const TURBULENCE_LLM_DEFAULT_MODEL = "Qwen3.5-2B";
+const TURBULENCE_PPDB_DEFAULT_SOURCE_PATH = "data/external/ppdb/ppdb-2.0-s-all";
+const TURBULENCE_PPDB_DEFAULT_INDEX_PATH = "data/turbulence/ppdb_index.json";
 const OPERATOR_DEFAULT_TEMPERATURES = {
   influence: "0.45",
   turbulence: "0.35",
@@ -606,6 +608,7 @@ const dom = {
   turbulenceFinalFidelityMin: document.querySelector("#turbulenceFinalFidelityMin"),
   turbulenceFinalFidelityMax: document.querySelector("#turbulenceFinalFidelityMax"),
   turbulenceReferenceText: document.querySelector("#turbulenceReferenceText"),
+  turbulenceUsePpdb: document.querySelector("#turbulenceUsePpdb"),
   turbulencePpdbSourcePath: document.querySelector("#turbulencePpdbSourcePath"),
   turbulencePpdbIndexPath: document.querySelector("#turbulencePpdbIndexPath"),
   refreshTurbulencePpdbButton: document.querySelector("#refreshTurbulencePpdbButton"),
@@ -3572,17 +3575,26 @@ async function requestTurbulenceComparisonJson(path, options = {}) {
 }
 
 function readTurbulencePpdbPayload() {
+  const sourcePath = dom.turbulencePpdbSourcePath.value.trim() || TURBULENCE_PPDB_DEFAULT_SOURCE_PATH;
+  const indexPath = dom.turbulencePpdbIndexPath.value.trim() || TURBULENCE_PPDB_DEFAULT_INDEX_PATH;
   return {
-    ppdbSourcePath: dom.turbulencePpdbSourcePath.value.trim(),
-    ppdbIndexPath: dom.turbulencePpdbIndexPath.value.trim(),
+    usePpdb: dom.turbulenceUsePpdb.checked,
+    ppdbSourcePath: sourcePath,
+    ppdbIndexPath: indexPath,
   };
 }
 
 function renderTurbulencePpdbStatus(ppdb) {
   if (!ppdb) {
     dom.turbulencePpdbStatus.textContent = "--";
-    dom.turbulencePpdbDetail.textContent = "Indice compacto no revisado.";
+    dom.turbulencePpdbDetail.textContent = "Índice compacto no revisado.";
     dom.turbulencePpdbSetupStatus.textContent = "Descarga PPDB desde Kaggle y deja el archivo en data/external/ppdb/ppdb-2.0-s-all.";
+    return;
+  }
+  if (ppdb.enabled === false) {
+    dom.turbulencePpdbStatus.textContent = "desactivado";
+    dom.turbulencePpdbDetail.textContent = ppdb.message || "PPDB desactivado; la estrategia usará solo WordNet.";
+    dom.turbulencePpdbSetupStatus.textContent = "PPDB no se consultará en la comparación mientras esté desactivado.";
     return;
   }
 
@@ -3590,14 +3602,14 @@ function renderTurbulencePpdbStatus(ppdb) {
   const index = ppdb.index || {};
   dom.turbulencePpdbStatus.textContent = ppdb.available ? "disponible" : "no disponible";
   dom.turbulencePpdbDetail.textContent = ppdb.available
-    ? `${ppdb.entries ?? index.entries ?? 0} clave(s) en ${ppdb.path || index.path || "indice local"}.`
-    : (ppdb.message || index.message || "Indice compacto PPDB no preparado.");
+    ? `${ppdb.entries ?? index.entries ?? 0} clave(s) en ${ppdb.path || index.path || "índice local"}.`
+    : (ppdb.message || index.message || "Índice compacto PPDB no preparado.");
   const sourceLabel = source.exists
     ? `Dataset local encontrado (${source.sizeLabel || "--"}): ${source.path || "--"}`
     : `Dataset local faltante: ${source.path || dom.turbulencePpdbSourcePath.value.trim() || "--"}`;
   const indexLabel = index.exists
-    ? `Indice: ${index.available ? "disponible" : "invalido"} en ${index.path || ppdb.path || "--"}`
-    : `Indice faltante: ${index.path || ppdb.path || dom.turbulencePpdbIndexPath.value.trim() || "--"}`;
+    ? `Índice: ${index.available ? "disponible" : "inválido"} en ${index.path || ppdb.path || "--"}`
+    : `Índice faltante: ${index.path || ppdb.path || dom.turbulencePpdbIndexPath.value.trim() || "--"}`;
   dom.turbulencePpdbSetupStatus.textContent = `${sourceLabel}. ${indexLabel}.`;
 }
 
@@ -3620,7 +3632,7 @@ async function prepareTurbulencePpdb() {
   dom.prepareTurbulencePpdbButton.disabled = true;
   dom.refreshTurbulencePpdbButton.disabled = true;
   dom.prepareTurbulencePpdbButton.textContent = "Preparando...";
-  dom.turbulencePpdbSetupStatus.textContent = "Leyendo PPDB completo y generando indice compacto. Puede tardar varios minutos.";
+  dom.turbulencePpdbSetupStatus.textContent = "Leyendo PPDB completo y generando índice compacto. Puede tardar varios minutos.";
   try {
     const payload = await requestTurbulenceComparisonJson("/ppdb/prepare", {
       method: "POST",
@@ -3686,8 +3698,13 @@ function readTurbulenceComparisonConfig() {
     referenceText: requiredText(dom.turbulenceReferenceText, "Texto de referencia final"),
     finalFidelityMin,
     finalFidelityMax,
-    ppdbSourcePath: requiredText(dom.turbulencePpdbSourcePath, "Archivo PPDB completo"),
-    ppdbIndexPath: requiredText(dom.turbulencePpdbIndexPath, "Indice compacto PPDB"),
+    usePpdb: dom.turbulenceUsePpdb.checked,
+    ppdbSourcePath: dom.turbulenceUsePpdb.checked
+      ? requiredText(dom.turbulencePpdbSourcePath, "Archivo PPDB completo")
+      : (dom.turbulencePpdbSourcePath.value.trim() || TURBULENCE_PPDB_DEFAULT_SOURCE_PATH),
+    ppdbIndexPath: dom.turbulenceUsePpdb.checked
+      ? requiredText(dom.turbulencePpdbIndexPath, "Índice compacto PPDB")
+      : (dom.turbulencePpdbIndexPath.value.trim() || TURBULENCE_PPDB_DEFAULT_INDEX_PATH),
     operatorParallelism: Math.floor(readClampedNumber(dom.turbulenceOperatorParallelism, "Paralelismo operador", 1, 8)),
     generationParallelism: Math.floor(readClampedNumber(dom.turbulenceGenerationParallelism, "Paralelismo generacion final", 1, 8)),
     lmStudio: {
@@ -5269,6 +5286,7 @@ dom.runInitialComparisonButton.addEventListener("click", runInitialComparison);
 dom.cancelInitialComparisonButton.addEventListener("click", cancelInitialComparisonRun);
 dom.clearInitialComparisonButton.addEventListener("click", resetInitialComparisonUi);
 dom.loadTurbulenceModelsButton.addEventListener("click", loadTurbulenceModels);
+dom.turbulenceUsePpdb.addEventListener("change", refreshTurbulencePpdbStatus);
 dom.refreshTurbulencePpdbButton.addEventListener("click", refreshTurbulencePpdbStatus);
 dom.prepareTurbulencePpdbButton.addEventListener("click", prepareTurbulencePpdb);
 dom.runTurbulenceComparisonButton.addEventListener("click", runTurbulenceComparison);

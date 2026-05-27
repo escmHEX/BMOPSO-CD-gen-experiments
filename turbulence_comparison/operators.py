@@ -312,7 +312,7 @@ class WordNetPPDBOperator(TurbulenceOperator):
         self,
         analyzer: LinguisticAnalyzer,
         ranker: EmbeddingRanker,
-        ppdb: PPDBIndex,
+        ppdb: PPDBIndex | None,
         wordnet: WordNetProvider | None = None,
     ) -> None:
         self.analyzer = analyzer
@@ -326,18 +326,21 @@ class WordNetPPDBOperator(TurbulenceOperator):
             "wordnetQueries": 0,
             "ppdbQueries": 0,
             "ppdbLookupAttempts": 0,
-            "ppdbAvailable": self.ppdb.available,
+            "ppdbAvailable": bool(self.ppdb and self.ppdb.available and config.get("usePpdb", True)),
             "distilbertInferences": 0,
             "llmCalls": 0,
         }
         candidates: list[CandidateRecord] = []
         units = self.analyzer.extract_units(current, include_phrases=True)
+        use_ppdb = bool(config.get("usePpdb", True)) and self.ppdb is not None
 
         def ppdb_lookup(text: str) -> list[str]:
+            if not use_ppdb:
+                return []
             cost["ppdbLookupAttempts"] += 1
-            if self.ppdb.available:
+            if self.ppdb and self.ppdb.available:
                 cost["ppdbQueries"] += 1
-            return self.ppdb.lookup(text)
+            return self.ppdb.lookup(text) if self.ppdb else []
 
         for unit in units:
             replacements: list[tuple[str, str]] = []

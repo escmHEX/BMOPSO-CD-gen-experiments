@@ -301,6 +301,7 @@ class TurbulenceComparisonService:
             "finalFidelityMax": 0.99,
             "operatorParallelism": 1,
             "generationParallelism": 1,
+            "usePpdb": True,
             "ppdbSourcePath": DEFAULT_PPDB_SOURCE_PATH,
             "ppdbIndexPath": DEFAULT_PPDB_INDEX_PATH,
             "lmStudio": {
@@ -535,6 +536,7 @@ class TurbulenceComparisonService:
                 "turbulenceRange": [config["turbulenceMinSimilarity"], config["turbulenceMaxSimilarity"]],
                 "embeddingModel": config["embeddingModel"],
                 "distilbertModel": config["distilbertModel"],
+                "usePpdb": config["usePpdb"],
                 "ppdbSourcePath": config["ppdbSourcePath"],
                 "ppdbIndexPath": config["ppdbIndexPath"],
             },
@@ -715,7 +717,8 @@ class TurbulenceComparisonService:
             return LlmTurbulenceOperator(ranker, client)
         analyzer = LinguisticAnalyzer()
         if strategy_id == "wordnet-ppdb-sbert":
-            return WordNetPPDBOperator(analyzer, ranker, PPDBIndex(self._ppdb_index_path(config)))
+            ppdb = PPDBIndex(self._ppdb_index_path(config)) if config.get("usePpdb", True) else None
+            return WordNetPPDBOperator(analyzer, ranker, ppdb)
         if strategy_id == "distilbert-sbert":
             return DistilBertOperator(analyzer, ranker, DistilBertProvider(config["distilbertModel"]))
         raise ValueError(f"Estrategia no soportada: {strategy_id}")
@@ -766,8 +769,9 @@ class TurbulenceComparisonService:
             "finalFidelityMax": final_max,
             "operatorParallelism": int(clamp_number(payload.get("operatorParallelism", defaults["operatorParallelism"]), 1, 8)),
             "generationParallelism": int(clamp_number(payload.get("generationParallelism", defaults["generationParallelism"]), 1, 8)),
-            "ppdbSourcePath": safe_path_text(payload.get("ppdbSourcePath", defaults["ppdbSourcePath"]), "ppdbSourcePath"),
-            "ppdbIndexPath": safe_path_text(payload.get("ppdbIndexPath", defaults["ppdbIndexPath"]), "ppdbIndexPath"),
+            "usePpdb": read_bool(payload.get("usePpdb", defaults["usePpdb"])),
+            "ppdbSourcePath": safe_path_text(payload.get("ppdbSourcePath") or defaults["ppdbSourcePath"], "ppdbSourcePath"),
+            "ppdbIndexPath": safe_path_text(payload.get("ppdbIndexPath") or defaults["ppdbIndexPath"], "ppdbIndexPath"),
             "lmStudio": {
                 "baseUrl": safe_text(lm_payload.get("baseUrl", defaults["lmStudio"]["baseUrl"]), "baseUrl").rstrip("/"),
                 "apiMode": api_mode,
@@ -815,10 +819,19 @@ class TurbulenceComparisonService:
 
     def _ppdb_index_path(self, payload: dict[str, Any] | None = None) -> Path:
         payload = payload or {}
-        return self._resolve_local_path(safe_path_text(payload.get("ppdbIndexPath", DEFAULT_PPDB_INDEX_PATH), "ppdbIndexPath"))
+        return self._resolve_local_path(safe_path_text(payload.get("ppdbIndexPath") or DEFAULT_PPDB_INDEX_PATH, "ppdbIndexPath"))
 
     def _ppdb_status(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
+        if not read_bool(payload.get("usePpdb", True)):
+            return {
+                "enabled": False,
+                "available": False,
+                "path": str(self._ppdb_index_path(payload)),
+                "message": "PPDB desactivado; la estrategia WordNet+PPDB+SBERT usará solo WordNet.",
+                "source": {},
+                "index": {},
+            }
         source_path = self._ppdb_source_path(payload)
         index_path = self._ppdb_index_path(payload)
         source = {
@@ -830,24 +843,26 @@ class TurbulenceComparisonService:
         }
         if not index_path.exists():
             return {
+                "enabled": True,
                 "available": False,
                 "path": str(index_path),
-                "message": "Indice compacto PPDB no preparado.",
+                "message": "Índice compacto PPDB no preparado.",
                 "source": source,
                 "index": {
                     "path": str(index_path),
                     "exists": False,
                     "available": False,
-                    "message": "Prepara el indice desde el PPDB completo local.",
+                    "message": "Prepara el índice desde el PPDB completo local.",
                 },
             }
         try:
             index = PPDBIndex(index_path)
         except Exception as error:
             return {
+                "enabled": True,
                 "available": False,
                 "path": str(index_path),
-                "message": f"Indice PPDB invalido: {error}",
+                "message": f"Índice PPDB inválido: {error}",
                 "source": source,
                 "index": {
                     "path": str(index_path),
@@ -857,17 +872,18 @@ class TurbulenceComparisonService:
                 },
             }
         return {
+            "enabled": True,
             "available": index.available,
             "path": str(index_path),
             "entries": len(index.entries),
-            "message": f"Indice compacto PPDB disponible con {len(index.entries)} clave(s).",
+            "message": f"Índice compacto PPDB disponible con {len(index.entries)} clave(s).",
             "source": source,
             "index": {
                 "path": str(index_path),
                 "exists": True,
                 "available": index.available,
                 "entries": len(index.entries),
-                "message": "Indice compacto cargado correctamente.",
+                "message": "Índice compacto cargado correctamente.",
             },
         }
 
@@ -1254,6 +1270,7 @@ def aggregate_turbulence_repetitions(repetitions: list[dict[str, Any]], config: 
             "turbulenceRange": [config["turbulenceMinSimilarity"], config["turbulenceMaxSimilarity"]],
             "embeddingModel": config["embeddingModel"],
             "distilbertModel": config["distilbertModel"],
+            "usePpdb": config.get("usePpdb", True),
         },
     }
 
@@ -1412,6 +1429,16 @@ def safe_text(value: Any, field: str) -> str:
     if not text:
         raise ValueError(f"{field} es obligatorio.")
     return text
+
+
+def read_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "0", "false", "no", "off"}
+    return bool(value)
 
 
 def safe_path_text(value: Any, field: str) -> str:

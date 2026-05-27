@@ -158,6 +158,13 @@ class TurbulenceComparisonTests(unittest.TestCase):
         parsed = service._read_config(config_payload)
         self.assertIn("prompt-component rewriting module", parsed["llmTurbulenceSystemPrompt"])
 
+    def test_config_accepts_disabled_ppdb(self):
+        service = TurbulenceComparisonService(Path("."))
+        payload = service.default_config()
+        payload["usePpdb"] = False
+        parsed = service._read_config(payload)
+        self.assertFalse(parsed["usePpdb"])
+
     def test_mocked_sbert_ranking_selects_valid_candidate(self):
         operator = DummyOperator()
         scored, embedding_cost = operator.score_candidates(
@@ -214,6 +221,22 @@ class TurbulenceComparisonTests(unittest.TestCase):
         self.assertEqual(result.cost["ppdbLookupAttempts"], 1)
         self.assertEqual(result.cost["ppdbQueries"], 1)
         self.assertTrue(result.cost["ppdbAvailable"])
+
+    def test_ppdb_disabled_uses_wordnet_only(self):
+        unit = MutableUnit("help", "help", "NOUN", 23, 27, "word")
+        operator = WordNetPPDBOperator(
+            FakeAnalyzer([unit]),
+            FakeRanker([]),
+            FakeAvailablePPDB(),
+            wordnet=FakeWordNet([]),
+        )
+        payload = config()
+        payload["usePpdb"] = False
+        result = operator.apply("request urgent shelter help", payload)
+        self.assertFalse(result.coverage)
+        self.assertEqual(result.cost["ppdbLookupAttempts"], 0)
+        self.assertEqual(result.cost["ppdbQueries"], 0)
+        self.assertFalse(result.cost["ppdbAvailable"])
 
     def test_distilbert_strategy_filters_by_similarity_range(self):
         unit = MutableUnit("help", "help", "NOUN", 23, 27, "word")
@@ -333,6 +356,14 @@ class TurbulenceComparisonTests(unittest.TestCase):
             self.assertFalse(status["available"])
             self.assertFalse(status["source"]["exists"])
             self.assertFalse(status["index"]["exists"])
+
+    def test_ppdb_status_can_be_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = TurbulenceComparisonService(Path(directory))
+            status = service.ppdb_status({"usePpdb": False})
+            self.assertFalse(status["enabled"])
+            self.assertFalse(status["available"])
+            self.assertIn("desactivado", status["message"])
 
     def test_ppdb_prepare_from_local_file_marks_index_available(self):
         with tempfile.TemporaryDirectory() as directory:

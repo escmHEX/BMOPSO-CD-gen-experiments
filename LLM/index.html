@@ -1692,21 +1692,25 @@ Output rules:
             <article class="panel">
               <div class="panel-title">
                 <h2>PPDB local</h2>
-                <span>Dataset completo fuera de Git + indice compacto para la estrategia WordNet+PPDB+SBERT</span>
+                <span>Dataset completo fuera de Git + índice compacto para la estrategia WordNet+PPDB+SBERT</span>
               </div>
               <div class="form-grid">
+                <label class="checkbox-line span-2">
+                  <input id="turbulenceUsePpdb" type="checkbox" checked>
+                  <span>Usar PPDB en WordNet+PPDB+SBERT</span>
+                </label>
                 <label class="span-2">
                   <span>Archivo PPDB completo</span>
                   <input id="turbulencePpdbSourcePath" type="text" value="data/external/ppdb/ppdb-2.0-s-all" autocomplete="off">
                 </label>
                 <label class="span-2">
-                  <span>Indice compacto PPDB</span>
+                  <span>Índice compacto PPDB</span>
                   <input id="turbulencePpdbIndexPath" type="text" value="data/turbulence/ppdb_index.json" autocomplete="off">
                 </label>
               </div>
               <div class="inline-actions">
                 <button id="refreshTurbulencePpdbButton" class="secondary" type="button">Verificar PPDB</button>
-                <button id="prepareTurbulencePpdbButton" class="secondary" type="button">Preparar indice desde PPDB local</button>
+                <button id="prepareTurbulencePpdbButton" class="secondary" type="button">Preparar índice desde PPDB local</button>
               </div>
               <p id="turbulencePpdbSetupStatus" class="muted-text">Descarga PPDB desde Kaggle y deja el archivo en data/external/ppdb/ppdb-2.0-s-all.</p>
               <p class="muted-text">
