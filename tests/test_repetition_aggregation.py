@@ -89,7 +89,7 @@ class RepetitionAggregationTests(unittest.TestCase):
             "kCandidates": 5,
             "operatorParallelism": 1,
             "generationParallelism": 1,
-            "turbulenceMinSimilarity": 0.55,
+            "turbulenceMinSimilarity": 0.65,
             "turbulenceMaxSimilarity": 0.9,
             "embeddingModel": "fake",
             "distilbertModel": "fake",

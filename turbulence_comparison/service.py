@@ -290,7 +290,7 @@ class TurbulenceComparisonService:
             "seed": 42,
             "repetitionsK": 1,
             "kCandidates": 5,
-            "turbulenceMinSimilarity": 0.55,
+            "turbulenceMinSimilarity": 0.65,
             "turbulenceMaxSimilarity": 0.9,
             "minWords": 2,
             "maxWords": 8,
@@ -575,6 +575,7 @@ class TurbulenceComparisonService:
                 "componentDefinition": movement.component_definition,
                 "otherComponents": other_components,
                 "selectionSeed": movement_selection_seed(config["seed"], strategy_id, movement.number),
+                "unitSelectionSeed": unit_selection_seed(config["seed"], movement.number),
             }
             try:
                 result = operator.apply(current, operator_config)
@@ -956,6 +957,10 @@ def create_movement_plan(individuals: list[dict[str, Any]], seed: int) -> list[M
 def movement_selection_seed(seed: int, strategy_id: str, movement_number: int) -> int:
     strategy_offset = sum((index + 1) * ord(char) for index, char in enumerate(strategy_id))
     return (int(seed) * 1_000_003 + strategy_offset * 9_176 + int(movement_number)) & 0xFFFFFFFF
+
+
+def unit_selection_seed(seed: int, movement_number: int) -> int:
+    return (int(seed) * 1_000_003 + int(movement_number) * 97_531) & 0xFFFFFFFF
 
 
 def pso_other_components(position: dict[str, str], component_key: str) -> str:

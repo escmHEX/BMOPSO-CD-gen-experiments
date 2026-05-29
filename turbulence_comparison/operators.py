@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 import re
 import string
 import threading
@@ -27,6 +28,11 @@ WORDNET_POS = {
     "ADV": "r",
 }
 MODIFIABLE_POS = {"NOUN", "PROPN", "VERB", "ADJ", "ADV"}
+PREFERRED_POS_BY_COMPONENT = {
+    "role": {"NOUN", "PROPN", "ADJ"},
+    "topic": {"NOUN", "PROPN", "ADJ"},
+    "action": {"VERB", "NOUN", "PROPN"},
+}
 
 
 @dataclass(frozen=True)
@@ -194,21 +200,33 @@ class WordNetProvider:
                     self._wn = wn
         return self._wn
 
-    def lookup(self, lemma: str, pos: str | None = None) -> list[str]:
+    def synset_replacements(self, lemma: str, pos: str | None = None) -> list[list[str]]:
         wn = self._load()
         wn_pos = WORDNET_POS.get(pos or "")
         synsets = wn.synsets(lemma, pos=wn_pos) if wn_pos else wn.synsets(lemma)
-        replacements: set[str] = set()
         normalized_original = normalize_text(lemma)
+        groups: list[list[str]] = []
         for synset in synsets:
+            replacements: list[str] = []
             for lemma_item in synset.lemmas():
                 value = lemma_item.name().replace("_", " ").strip()
                 if not value:
                     continue
                 if normalize_text(value) == normalized_original:
                     continue
-                replacements.add(value)
-        return sorted(replacements, key=str.lower)
+                replacements.append(value)
+            clean = dedupe(replacements)
+            if clean:
+                groups.append(clean)
+        return groups
+
+    def lookup(self, lemma: str, pos: str | None = None) -> list[str]:
+        replacements = [
+            replacement
+            for group in self.synset_replacements(lemma, pos)
+            for replacement in group
+        ]
+        return sorted(set(replacements), key=str.lower)
 
 
 class DistilBertProvider:
@@ -229,6 +247,14 @@ class DistilBertProvider:
                         self.pipeline_factory = pipeline
                     self._pipeline = self.pipeline_factory("fill-mask", model=self.model_name)
         return self._pipeline
+
+    def is_single_token(self, text: str) -> bool:
+        pipe = self._load()
+        tokenizer = getattr(pipe, "tokenizer", None)
+        if tokenizer is None:
+            return is_simple_distilbert_token(text)
+        encoded = tokenizer.encode(text, add_special_tokens=False)
+        return len(encoded) == 1
 
     def predict(self, masked_text: str, top_k: int) -> list[str]:
         pipe = self._load()
@@ -322,6 +348,8 @@ class WordNetPPDBOperator(TurbulenceOperator):
 
     def apply(self, current: str, config: dict[str, Any]) -> OperatorResult:
         started = time.perf_counter()
+        k_candidates = int(config["kCandidates"])
+        unit_seed = int(config.get("unitSelectionSeed", config.get("selectionSeed", 0)))
         cost = {
             "wordnetQueries": 0,
             "ppdbQueries": 0,
@@ -330,8 +358,22 @@ class WordNetPPDBOperator(TurbulenceOperator):
             "distilbertInferences": 0,
             "llmCalls": 0,
         }
-        candidates: list[CandidateRecord] = []
-        units = self.analyzer.extract_units(current, include_phrases=True)
+        general_units = [unit for unit in self.analyzer.extract_units(current, include_phrases=False) if unit.kind == "word"]
+        eligible_units = component_preferred_units(general_units, str(config.get("componentName") or ""))
+        diagnostics: dict[str, Any] = {
+            "local": {
+                "strategy": self.strategy_id,
+                "componentName": config.get("componentName"),
+                "unitSelectionSeed": unit_seed,
+                "unitsGeneral": units_to_diagnostics(general_units),
+                "unitsEligible": units_to_diagnostics(eligible_units),
+            }
+        }
+        if not eligible_units:
+            return local_failure_result(current, started, cost, "no_units", diagnostics)
+
+        unit = select_uniform_unit(eligible_units, unit_seed)
+        diagnostics["local"]["selectedUnit"] = unit_to_diagnostics(unit)
         use_ppdb = bool(config.get("usePpdb", True)) and self.ppdb is not None
 
         def ppdb_lookup(text: str) -> list[str]:
@@ -342,26 +384,46 @@ class WordNetPPDBOperator(TurbulenceOperator):
                 cost["ppdbQueries"] += 1
             return self.ppdb.lookup(text) if self.ppdb else []
 
-        for unit in units:
-            replacements: list[tuple[str, str]] = []
-            if unit.kind == "word":
-                cost["wordnetQueries"] += 1
-                wordnet_values = self.wordnet.lookup(unit.lemma or unit.text, unit.pos)
-                replacements.extend((value, "wordnet") for value in wordnet_values)
-                if not wordnet_values:
-                    replacements.extend((value, "ppdb") for value in ppdb_lookup(unit.text))
-            else:
-                replacements.extend((value, "ppdb") for value in ppdb_lookup(unit.text))
+        cost["wordnetQueries"] += 1
+        synset_groups = wordnet_synset_groups(self.wordnet, unit.lemma or unit.text, unit.pos)
+        wordnet_replacements = balanced_lexical_replacements(synset_groups, k_candidates, unit_seed, unit.text)
+        replacements: list[tuple[str, str]] = [(value, "wordnet") for value in wordnet_replacements]
+        diagnostics["local"]["wordnet"] = {
+            "query": unit.lemma or unit.text,
+            "pos": unit.pos,
+            "synsetGroupCount": len(synset_groups),
+            "replacements": wordnet_replacements,
+        }
 
-            for replacement, source in replacements:
-                candidate = replace_span(current, unit, replacement)
-                if candidate_validation_reason(candidate, current, int(config["minWords"]), int(config["maxWords"])) != "valid":
-                    continue
-                candidates.append(CandidateRecord(candidate=candidate, source=source, unit=unit))
-                if len(candidates) >= int(config["kCandidates"]):
-                    break
-            if len(candidates) >= int(config["kCandidates"]):
-                break
+        ppdb_lookup_keys: list[str] = []
+        ppdb_replacements: list[str] = []
+        if len(replacements) < k_candidates and use_ppdb:
+            ppdb_lookup_keys = dedupe([unit.text, unit.lemma])
+            ppdb_values = [
+                value
+                for lookup_key in ppdb_lookup_keys
+                for value in ppdb_lookup(lookup_key)
+            ]
+            ppdb_replacements = ordered_lexical_replacements(
+                ppdb_values,
+                k_candidates - len(replacements),
+                unit_seed,
+                unit.text,
+                used={value for value, _ in replacements},
+            )
+            replacements.extend((value, "ppdb") for value in ppdb_replacements)
+        diagnostics["local"]["ppdb"] = {
+            "enabled": bool(config.get("usePpdb", True)),
+            "available": bool(self.ppdb and self.ppdb.available),
+            "lookupKeys": ppdb_lookup_keys,
+            "replacements": ppdb_replacements,
+        }
+
+        candidates = build_candidate_records(current, unit, replacements, config)
+        diagnostics["local"]["candidateStage"] = {
+            "replacementCount": len(replacements),
+            "candidateCount": len(candidates),
+        }
 
         scored, embedding_cost = self.score_candidates(current, candidates, config, self.ranker)
         cost.update(sum_costs(cost, embedding_cost))
@@ -375,7 +437,8 @@ class WordNetPPDBOperator(TurbulenceOperator):
             coverage=bool(candidates),
             elapsed_seconds=elapsed,
             cost=cost,
-            status="ok" if selected else "no_valid_candidate",
+            status=operator_status(candidates, scored, selected),
+            diagnostics=diagnostics,
         )
 
 
@@ -395,6 +458,8 @@ class DistilBertOperator(TurbulenceOperator):
 
     def apply(self, current: str, config: dict[str, Any]) -> OperatorResult:
         started = time.perf_counter()
+        k_candidates = int(config["kCandidates"])
+        unit_seed = int(config.get("unitSelectionSeed", config.get("selectionSeed", 0)))
         cost = {
             "wordnetQueries": 0,
             "ppdbQueries": 0,
@@ -403,24 +468,51 @@ class DistilBertOperator(TurbulenceOperator):
             "distilbertInferences": 0,
             "llmCalls": 0,
         }
-        candidates: list[CandidateRecord] = []
-        units = [unit for unit in self.analyzer.extract_units(current, include_phrases=False) if unit.kind == "word"]
+        general_units = [unit for unit in self.analyzer.extract_units(current, include_phrases=False) if unit.kind == "word"]
+        eligible_units = component_preferred_units(general_units, str(config.get("componentName") or ""))
+        compatible_units = [unit for unit in eligible_units if self.provider.is_single_token(unit.text)]
+        diagnostics: dict[str, Any] = {
+            "local": {
+                "strategy": self.strategy_id,
+                "componentName": config.get("componentName"),
+                "unitSelectionSeed": unit_seed,
+                "unitsGeneral": units_to_diagnostics(general_units),
+                "unitsEligible": units_to_diagnostics(eligible_units),
+                "unitsCompatible": units_to_diagnostics(compatible_units),
+            }
+        }
+        if not general_units:
+            return local_failure_result(current, started, cost, "no_units", diagnostics)
+        if not compatible_units:
+            return local_failure_result(current, started, cost, "no_compatible_units", diagnostics)
 
-        for unit in units:
-            if not is_simple_distilbert_token(unit.text):
-                continue
-            masked = replace_span(current, unit, "[MASK]")
-            cost["distilbertInferences"] += 1
-            replacements = self.provider.predict(masked, max(int(config["kCandidates"]) * 2, int(config["kCandidates"])))
-            for replacement in replacements:
-                candidate = replace_span(current, unit, replacement)
-                if candidate_validation_reason(candidate, current, int(config["minWords"]), int(config["maxWords"])) != "valid":
-                    continue
-                candidates.append(CandidateRecord(candidate=candidate, source="distilbert", unit=unit))
-                if len(candidates) >= int(config["kCandidates"]):
-                    break
-            if len(candidates) >= int(config["kCandidates"]):
-                break
+        unit = select_uniform_unit(compatible_units, unit_seed)
+        masked = replace_span(current, unit, "[MASK]")
+        top_k = 3 * k_candidates
+        cost["distilbertInferences"] += 1
+        predictions = self.provider.predict(masked, top_k)
+        replacements = ordered_lexical_replacements(predictions, k_candidates, unit_seed, unit.text, preserve_order=True)
+        candidates = build_candidate_records(
+            current,
+            unit,
+            [(replacement, "distilbert") for replacement in replacements],
+            config,
+        )
+        diagnostics["local"].update(
+            {
+                "selectedUnit": unit_to_diagnostics(unit),
+                "distilbert": {
+                    "maskedText": masked,
+                    "topK": top_k,
+                    "predictions": predictions,
+                    "replacements": replacements,
+                },
+                "candidateStage": {
+                    "replacementCount": len(replacements),
+                    "candidateCount": len(candidates),
+                },
+            }
+        )
 
         scored, embedding_cost = self.score_candidates(current, candidates, config, self.ranker)
         cost.update(sum_costs(cost, embedding_cost))
@@ -434,7 +526,8 @@ class DistilBertOperator(TurbulenceOperator):
             coverage=bool(candidates),
             elapsed_seconds=elapsed,
             cost=cost,
-            status="ok" if selected else "no_valid_candidate",
+            status=operator_status(candidates, scored, selected),
+            diagnostics=diagnostics,
         )
 
 
@@ -461,6 +554,175 @@ def dedupe(values: Iterable[str]) -> list[str]:
 
 def replace_span(text: str, unit: MutableUnit, replacement: str) -> str:
     return re.sub(r"\s+", " ", f"{text[:unit.start]}{replacement}{text[unit.end:]}".strip())
+
+
+def component_preferred_units(units: list[MutableUnit], component_name: str) -> list[MutableUnit]:
+    general = [unit for unit in units if unit.kind == "word" and unit.pos in MODIFIABLE_POS]
+    preferred_pos = PREFERRED_POS_BY_COMPONENT.get(component_name)
+    if not preferred_pos:
+        return general
+    preferred = [unit for unit in general if unit.pos in preferred_pos]
+    return preferred or general
+
+
+def select_uniform_unit(units: list[MutableUnit], seed: int) -> MutableUnit:
+    return random.Random(seed).choice(units)
+
+
+def unit_to_diagnostics(unit: MutableUnit | None) -> dict[str, Any] | None:
+    if unit is None:
+        return None
+    return {
+        "text": unit.text,
+        "lemma": unit.lemma,
+        "pos": unit.pos,
+        "start": unit.start,
+        "end": unit.end,
+        "kind": unit.kind,
+    }
+
+
+def units_to_diagnostics(units: list[MutableUnit]) -> list[dict[str, Any]]:
+    return [payload for unit in units if (payload := unit_to_diagnostics(unit)) is not None]
+
+
+def wordnet_synset_groups(provider: Any, lemma: str, pos: str | None) -> list[list[str]]:
+    if hasattr(provider, "synset_replacements"):
+        return provider.synset_replacements(lemma, pos)
+    if hasattr(provider, "lookup"):
+        values = provider.lookup(lemma, pos)
+        return [values] if values else []
+    return []
+
+
+def is_basic_lexical_replacement(value: str, original: str, used_keys: set[str] | None = None) -> bool:
+    used_keys = used_keys or set()
+    text = re.sub(r"\s+", " ", value.strip())
+    if not text:
+        return False
+    if PROMPT_MARKER_RE.search(text):
+        return False
+    if normalize_text(text) == normalize_text(original):
+        return False
+    if normalize_text(text) in used_keys:
+        return False
+    if word_count(text) != 1:
+        return False
+    return is_simple_distilbert_token(text)
+
+
+def ordered_lexical_replacements(
+    values: Iterable[str],
+    limit: int,
+    seed: int,
+    original: str,
+    used: set[str] | None = None,
+    preserve_order: bool = False,
+) -> list[str]:
+    used_keys = {normalize_text(item) for item in (used or set())}
+    replacements: list[str] = []
+    for value in values:
+        text = re.sub(r"\s+", " ", str(value).strip())
+        if not is_basic_lexical_replacement(text, original, used_keys):
+            continue
+        used_keys.add(normalize_text(text))
+        replacements.append(text)
+    if not preserve_order:
+        random.Random(seed).shuffle(replacements)
+    return replacements[:limit]
+
+
+def balanced_lexical_replacements(
+    synset_groups: list[list[str]],
+    limit: int,
+    seed: int,
+    original: str,
+) -> list[str]:
+    rng = random.Random(seed)
+    groups = [
+        ordered_lexical_replacements(group, len(group), seed + index + 1, original)
+        for index, group in enumerate(synset_groups)
+    ]
+    groups = [group for group in groups if group]
+    rng.shuffle(groups)
+
+    replacements: list[str] = []
+    seen: set[str] = set()
+    depth = 0
+    while len(replacements) < limit:
+        progressed = False
+        for group in groups:
+            if depth >= len(group):
+                continue
+            value = group[depth]
+            key = normalize_text(value)
+            if key in seen:
+                continue
+            seen.add(key)
+            replacements.append(value)
+            progressed = True
+            if len(replacements) >= limit:
+                break
+        if not progressed:
+            break
+        depth += 1
+    return replacements
+
+
+def build_candidate_records(
+    current: str,
+    unit: MutableUnit,
+    replacements: list[tuple[str, str]],
+    config: dict[str, Any],
+) -> list[CandidateRecord]:
+    candidates: list[CandidateRecord] = []
+    seen: set[str] = set()
+    for replacement, source in replacements:
+        candidate = replace_span(current, unit, replacement)
+        key = normalize_text(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate_validation_reason(candidate, current, int(config["minWords"]), int(config["maxWords"])) != "valid":
+            continue
+        candidates.append(CandidateRecord(candidate=candidate, source=source, unit=unit))
+        if len(candidates) >= int(config["kCandidates"]):
+            break
+    return candidates
+
+
+def operator_status(
+    candidates: list[CandidateRecord],
+    scored: list[ScoredCandidate],
+    selected: ScoredCandidate | None,
+) -> str:
+    if selected:
+        return "ok"
+    if not candidates:
+        return "no_candidates"
+    if scored and all(candidate.reason in {"too_distant_from_current", "too_close_to_current"} for candidate in scored):
+        return "semantic_range_failed"
+    return "no_valid_candidate"
+
+
+def local_failure_result(
+    current: str,
+    started: float,
+    cost: dict[str, Any],
+    status: str,
+    diagnostics: dict[str, Any],
+) -> OperatorResult:
+    return OperatorResult(
+        output=current,
+        selected=None,
+        candidates=[],
+        raw_candidate_count=0,
+        coverage=False,
+        elapsed_seconds=time.perf_counter() - started,
+        cost=cost,
+        status=status,
+        diagnostics=diagnostics,
+    )
 
 
 def candidate_validation_reason(candidate: str, current: str, min_words: int, max_words: int) -> str:

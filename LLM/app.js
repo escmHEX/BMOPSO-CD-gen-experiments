@@ -4170,6 +4170,7 @@ function openTurbulenceCandidateModal(row) {
       </div>
     ` : ""}
     ${turbulenceLlmDiagnosticsBlock(row.diagnostics?.llm)}
+    ${turbulenceLocalDiagnosticsBlock(row.diagnostics?.local)}
     <div class="diagnostic-block">
       <h3>Candidatos generados internamente</h3>
       ${candidates.length ? turbulenceCandidateDiagnosticsTable(candidates) : '<p>No se generaron candidatos parseables antes del filtro semántico.</p>'}
@@ -4195,6 +4196,51 @@ function turbulenceLlmDiagnosticsBlock(llm) {
       ${turbulencePromptCopyBlock("user", "User prompt exacto", llm.userPrompt || "")}
     </div>
   `;
+}
+
+function turbulenceLocalDiagnosticsBlock(local) {
+  if (!local) return "";
+  const selected = local.selectedUnit;
+  const unitLabel = selected
+    ? `${selected.text || "--"} (${selected.pos || "--"}, lemma ${selected.lemma || "--"})`
+    : "--";
+  const wordnet = local.wordnet || {};
+  const ppdb = local.ppdb || {};
+  const distilbert = local.distilbert || {};
+  const candidateStage = local.candidateStage || {};
+  return `
+    <div class="diagnostic-block">
+      <h3>Diagnóstico operador local</h3>
+      <dl class="diagnostic-summary diagnostic-summary-compact">
+        <div><dt>Semilla unidad</dt><dd>${escapeHtml(String(local.unitSelectionSeed ?? "--"))}</dd></div>
+        <div><dt>Unidad seleccionada</dt><dd>${escapeHtml(unitLabel)}</dd></div>
+        <div><dt>Unidades generales</dt><dd>${escapeHtml(String((local.unitsGeneral || []).length))}</dd></div>
+        <div><dt>Unidades elegibles</dt><dd>${escapeHtml(String((local.unitsEligible || []).length))}</dd></div>
+        ${local.unitsCompatible ? `<div><dt>Compatibles DistilBERT</dt><dd>${escapeHtml(String(local.unitsCompatible.length))}</dd></div>` : ""}
+        <div><dt>Reemplazos</dt><dd>${escapeHtml(String(candidateStage.replacementCount ?? "--"))}</dd></div>
+        <div><dt>Variantes C_K</dt><dd>${escapeHtml(String(candidateStage.candidateCount ?? "--"))}</dd></div>
+      </dl>
+      ${wordnet.query ? `
+        <p><strong>WordNet:</strong> query ${escapeHtml(wordnet.query || "--")} / POS ${escapeHtml(wordnet.pos || "--")} / synsets ${escapeHtml(String(wordnet.synsetGroupCount ?? 0))}.</p>
+        <p><strong>Reemplazos WordNet:</strong> ${escapeHtml(shortList(wordnet.replacements || []))}</p>
+      ` : ""}
+      ${ppdb.enabled !== undefined ? `
+        <p><strong>PPDB:</strong> ${ppdb.enabled ? "activado" : "desactivado"}; ${ppdb.available ? "índice disponible" : "índice no disponible"}; claves ${escapeHtml(shortList(ppdb.lookupKeys || []))}.</p>
+        <p><strong>Reemplazos PPDB:</strong> ${escapeHtml(shortList(ppdb.replacements || []))}</p>
+      ` : ""}
+      ${distilbert.maskedText ? `
+        <p><strong>DistilBERT:</strong> top_k ${escapeHtml(String(distilbert.topK ?? "--"))}; máscara <code>${escapeHtml(distilbert.maskedText)}</code>.</p>
+        <p><strong>Predicciones usadas:</strong> ${escapeHtml(shortList(distilbert.replacements || []))}</p>
+      ` : ""}
+    </div>
+  `;
+}
+
+function shortList(values, limit = 12) {
+  if (!Array.isArray(values) || !values.length) return "--";
+  const visible = values.slice(0, limit).map((value) => String(value));
+  const suffix = values.length > limit ? `, ... +${values.length - limit}` : "";
+  return `${visible.join(", ")}${suffix}`;
 }
 
 function turbulencePromptCopyBlock(key, title, text) {
@@ -4250,6 +4296,10 @@ function turbulenceReasonDescription(reason) {
     valid: "El candidato pasó los filtros de forma, longitud y rango semántico de turbulencia.",
     ok: "El operador aplicó un candidato válido.",
     no_valid_candidate: "La estrategia generó candidatos, pero ninguno pasó todos los filtros configurados.",
+    no_units: "No hubo tokens lingüísticos modificables para el tipo de componente seleccionado.",
+    no_compatible_units: "Hubo tokens modificables, pero ninguno se representa como un único token WordPiece para DistilBERT.",
+    no_candidates: "La estrategia no pudo construir variantes válidas después de filtrar reemplazos básicos.",
+    semantic_range_failed: "La estrategia construyó variantes, pero ninguna quedó dentro del rango semántico de turbulencia configurado.",
     error: "La estrategia falló antes de completar la evaluación del movimiento.",
     empty: "El candidato está vacío.",
     line_break: "El candidato trae saltos de línea; se esperaba una sola unidad textual.",

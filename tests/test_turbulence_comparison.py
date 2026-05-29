@@ -13,6 +13,7 @@ from turbulence_comparison.operators import (
     TurbulenceOperator,
     WordNetPPDBOperator,
     candidate_validation_reason,
+    component_preferred_units,
 )
 from turbulence_comparison.service import (
     TurbulenceComparisonService,
@@ -21,6 +22,7 @@ from turbulence_comparison.service import (
     parse_candidates,
     recommend_strategy,
     summarize_operator_rows,
+    unit_selection_seed,
     unparsed_candidate_diagnostics,
 )
 from turbulence_comparison.service import LlmTurbulenceOperator
@@ -49,11 +51,17 @@ class FakeRanker:
 
 
 class FakeWordNet:
-    def __init__(self, values):
+    def __init__(self, values=None, groups=None):
+        self.groups = groups
         self.values = values
 
     def lookup(self, lemma, pos=None):
-        return list(self.values)
+        return list(self.values or [])
+
+    def synset_replacements(self, lemma, pos=None):
+        if self.groups is not None:
+            return [list(group) for group in self.groups]
+        return [list(self.values or [])] if self.values else []
 
 
 class FakePPDB:
@@ -66,15 +74,26 @@ class FakePPDB:
 class FakeAvailablePPDB:
     available = True
 
+    def __init__(self, values=None):
+        self.values = values or {"help": ["aid"]}
+        self.queries = []
+
     def lookup(self, text):
-        return ["aid"] if text == "help" else []
+        self.queries.append(text)
+        return list(self.values.get(text, []))
 
 
 class FakeDistilBert:
-    def __init__(self, values):
+    def __init__(self, values, multi_token=None):
         self.values = values
+        self.multi_token = set(multi_token or [])
+        self.calls = []
+
+    def is_single_token(self, text):
+        return text not in self.multi_token
 
     def predict(self, masked_text, top_k):
+        self.calls.append((masked_text, top_k))
         return self.values[:top_k]
 
 
@@ -103,8 +122,9 @@ def config():
         "kCandidates": 5,
         "minWords": 1,
         "maxWords": 8,
-        "turbulenceMinSimilarity": 0.55,
+        "turbulenceMinSimilarity": 0.65,
         "turbulenceMaxSimilarity": 0.9,
+        "componentName": "action",
     }
 
 
@@ -157,6 +177,7 @@ class TurbulenceComparisonTests(unittest.TestCase):
         config_payload["strategies"] = ["llm"]
         parsed = service._read_config(config_payload)
         self.assertIn("prompt-component rewriting module", parsed["llmTurbulenceSystemPrompt"])
+        self.assertEqual(parsed["turbulenceMinSimilarity"], 0.65)
 
     def test_config_accepts_disabled_ppdb(self):
         service = TurbulenceComparisonService(Path("."))
@@ -164,6 +185,21 @@ class TurbulenceComparisonTests(unittest.TestCase):
         payload["usePpdb"] = False
         parsed = service._read_config(payload)
         self.assertFalse(parsed["usePpdb"])
+
+    def test_component_preferred_units_by_component_type(self):
+        units = [
+            MutableUnit("urgent", "urgent", "ADJ", 0, 6, "word"),
+            MutableUnit("request", "request", "VERB", 7, 14, "word"),
+            MutableUnit("shelter", "shelter", "NOUN", 15, 22, "word"),
+            MutableUnit("quickly", "quickly", "ADV", 23, 30, "word"),
+        ]
+        self.assertEqual([unit.text for unit in component_preferred_units(units, "role")], ["urgent", "shelter"])
+        self.assertEqual([unit.text for unit in component_preferred_units(units, "topic")], ["urgent", "shelter"])
+        self.assertEqual([unit.text for unit in component_preferred_units(units, "action")], ["request", "shelter"])
+        self.assertEqual([unit.text for unit in component_preferred_units([units[-1]], "action")], ["quickly"])
+
+    def test_unit_selection_seed_is_strategy_independent(self):
+        self.assertEqual(unit_selection_seed(42, 3), unit_selection_seed(42, 3))
 
     def test_mocked_sbert_ranking_selects_valid_candidate(self):
         operator = DummyOperator()
@@ -185,15 +221,29 @@ class TurbulenceComparisonTests(unittest.TestCase):
         unit = MutableUnit("help", "help", "NOUN", 23, 27, "word")
         operator = WordNetPPDBOperator(
             FakeAnalyzer([unit]),
-            FakeRanker([0.72, 0.91]),
+            FakeRanker([0.72]),
             FakePPDB(),
-            wordnet=FakeWordNet(["aid", "assistance"]),
+            wordnet=FakeWordNet(["aid"]),
         )
         result = operator.apply("request urgent shelter help", config())
         self.assertEqual(result.output, "request urgent shelter aid")
         self.assertTrue(result.coverage)
         self.assertEqual(result.cost["wordnetQueries"], 1)
         self.assertFalse(result.cost["ppdbAvailable"])
+        self.assertEqual(result.diagnostics["local"]["selectedUnit"]["text"], "help")
+
+    def test_wordnet_strategy_ignores_phrase_units(self):
+        phrase = MutableUnit("urgent shelter help", "urgent shelter help", "NOUN", 8, 27, "phrase")
+        word = MutableUnit("help", "help", "NOUN", 23, 27, "word")
+        operator = WordNetPPDBOperator(
+            FakeAnalyzer([phrase, word]),
+            FakeRanker([0.72]),
+            FakePPDB(),
+            wordnet=FakeWordNet(["aid"]),
+        )
+        result = operator.apply("request urgent shelter help", config())
+        general_units = result.diagnostics["local"]["unitsGeneral"]
+        self.assertEqual([unit["text"] for unit in general_units], ["help"])
 
     def test_ppdb_unavailable_counts_attempts_not_queries(self):
         unit = MutableUnit("help", "help", "NOUN", 23, 27, "word")
@@ -222,6 +272,38 @@ class TurbulenceComparisonTests(unittest.TestCase):
         self.assertEqual(result.cost["ppdbQueries"], 1)
         self.assertTrue(result.cost["ppdbAvailable"])
 
+    def test_ppdb_used_only_to_complete_wordnet_replacements(self):
+        unit = MutableUnit("help", "help", "NOUN", 23, 27, "word")
+        ppdb = FakeAvailablePPDB({"help": ["support", "relief"]})
+        payload = config()
+        payload["kCandidates"] = 3
+        operator = WordNetPPDBOperator(
+            FakeAnalyzer([unit]),
+            FakeRanker([0.72, 0.73, 0.74]),
+            ppdb,
+            wordnet=FakeWordNet(["aid"]),
+        )
+        result = operator.apply("request urgent shelter help", payload)
+        self.assertEqual(result.raw_candidate_count, 3)
+        self.assertEqual(result.cost["ppdbLookupAttempts"], 1)
+        self.assertEqual(result.diagnostics["local"]["wordnet"]["replacements"], ["aid"])
+        self.assertEqual(len(result.diagnostics["local"]["ppdb"]["replacements"]), 2)
+
+    def test_ppdb_not_used_when_wordnet_reaches_k(self):
+        unit = MutableUnit("help", "help", "NOUN", 23, 27, "word")
+        ppdb = FakeAvailablePPDB({"help": ["relief"]})
+        payload = config()
+        payload["kCandidates"] = 1
+        operator = WordNetPPDBOperator(
+            FakeAnalyzer([unit]),
+            FakeRanker([0.72]),
+            ppdb,
+            wordnet=FakeWordNet(["aid"]),
+        )
+        result = operator.apply("request urgent shelter help", payload)
+        self.assertEqual(result.cost["ppdbLookupAttempts"], 0)
+        self.assertEqual(ppdb.queries, [])
+
     def test_ppdb_disabled_uses_wordnet_only(self):
         unit = MutableUnit("help", "help", "NOUN", 23, 27, "word")
         operator = WordNetPPDBOperator(
@@ -233,22 +315,59 @@ class TurbulenceComparisonTests(unittest.TestCase):
         payload = config()
         payload["usePpdb"] = False
         result = operator.apply("request urgent shelter help", payload)
-        self.assertFalse(result.coverage)
+        self.assertEqual(result.status, "no_candidates")
         self.assertEqual(result.cost["ppdbLookupAttempts"], 0)
         self.assertEqual(result.cost["ppdbQueries"], 0)
         self.assertFalse(result.cost["ppdbAvailable"])
 
     def test_distilbert_strategy_filters_by_similarity_range(self):
         unit = MutableUnit("help", "help", "NOUN", 23, 27, "word")
+        provider = FakeDistilBert(["support", "aid"])
         operator = DistilBertOperator(
             FakeAnalyzer([unit]),
             FakeRanker([0.94, 0.66]),
-            FakeDistilBert(["support", "aid"]),
+            provider,
         )
         result = operator.apply("request urgent shelter help", config())
         self.assertEqual(result.output, "request urgent shelter aid")
         self.assertEqual(result.candidates[0].reason, "too_close_to_current")
         self.assertEqual(result.cost["distilbertInferences"], 1)
+        self.assertEqual(provider.calls[0][1], 15)
+        self.assertEqual(result.diagnostics["local"]["distilbert"]["maskedText"], "request urgent shelter [MASK]")
+
+    def test_distilbert_discards_multi_token_units_before_selection(self):
+        multi = MutableUnit("shelter", "shelter", "NOUN", 15, 22, "word")
+        single = MutableUnit("help", "help", "NOUN", 23, 27, "word")
+        provider = FakeDistilBert(["aid"], multi_token={"shelter"})
+        operator = DistilBertOperator(
+            FakeAnalyzer([multi, single]),
+            FakeRanker([0.72]),
+            provider,
+        )
+        result = operator.apply("request urgent shelter help", config())
+        self.assertEqual(result.diagnostics["local"]["selectedUnit"]["text"], "help")
+        self.assertEqual(result.output, "request urgent shelter aid")
+
+    def test_distilbert_reports_no_compatible_units(self):
+        unit = MutableUnit("shelter", "shelter", "NOUN", 15, 22, "word")
+        operator = DistilBertOperator(
+            FakeAnalyzer([unit]),
+            FakeRanker([]),
+            FakeDistilBert(["aid"], multi_token={"shelter"}),
+        )
+        result = operator.apply("request urgent shelter help", config())
+        self.assertEqual(result.status, "no_compatible_units")
+        self.assertFalse(result.coverage)
+
+    def test_semantic_range_failure_status_is_explicit(self):
+        unit = MutableUnit("help", "help", "NOUN", 23, 27, "word")
+        operator = DistilBertOperator(
+            FakeAnalyzer([unit]),
+            FakeRanker([0.95]),
+            FakeDistilBert(["aid"]),
+        )
+        result = operator.apply("request urgent shelter help", config())
+        self.assertEqual(result.status, "semantic_range_failed")
 
     def test_llm_strategy_reads_nested_lm_studio_config(self):
         client = FakeLlmClient()
