@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import json
 import os
 import runpy
@@ -246,6 +247,54 @@ def wrap_ollama_method(metrics: OllamaMetrics, method_label: str, original: Any)
     return sync_wrapper
 
 
+def install_evolmd_bertscore_guard() -> None:
+    """Keep EVOLMD's BERTScore evaluator from crashing on empty LLM outputs."""
+    try:
+        if importlib.util.find_spec("metrics.bert") is None:
+            return
+        bert_module = importlib.import_module("metrics.bert")
+    except Exception:
+        return
+
+    original = getattr(bert_module, "bertscore_individuos", None)
+    if original is None or getattr(original, "_baseline_empty_guard", False):
+        return
+
+    def guarded_bertscore_individuos(
+        individuos: list[dict[str, Any]],
+        ref_text: str,
+        model_type: str,
+        lang: str = "en",
+    ) -> list[dict[str, Any]]:
+        if not individuos:
+            return individuos
+
+        reference = str(ref_text or "").strip()
+        if not reference:
+            for individuo in individuos:
+                individuo["fitness"] = 0.0
+                individuo["fitness_status"] = "empty_reference_text"
+            return individuos
+
+        valid_individuos: list[dict[str, Any]] = []
+        for individuo in individuos:
+            generated_text = str(individuo.get("generated_data") or "").strip()
+            if not generated_text:
+                individuo["fitness"] = 0.0
+                individuo["fitness_status"] = "empty_generated_data"
+                continue
+            valid_individuos.append(individuo)
+
+        if valid_individuos:
+            original(valid_individuos, reference, model_type, lang=lang)
+            for individuo in valid_individuos:
+                individuo["fitness_status"] = "ok"
+        return individuos
+
+    guarded_bertscore_individuos._baseline_empty_guard = True
+    setattr(bert_module, "bertscore_individuos", guarded_bertscore_individuos)
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit("Usage: bootstrap.py <script> [args...]")
@@ -288,6 +337,7 @@ def main() -> None:
             pass
 
     install_ollama_metrics()
+    install_evolmd_bertscore_guard()
 
     sys.argv = [str(script_path), *sys.argv[2:]]
     runpy.run_path(str(script_path), run_name="__main__")

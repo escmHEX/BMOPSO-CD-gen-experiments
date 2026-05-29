@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from baselines import comparator as comparator_module
+from baselines.bootstrap import install_evolmd_bertscore_guard
 from baselines.comparator import ComparatorService, PROPOSALS, aggregate_proposal_repetitions
+from baselines.comparator import mark_non_dominated
 from initial_population.comparison import InitialPopulationComparisonService
 from turbulence_comparison.service import aggregate_turbulence_repetitions
 
@@ -77,6 +83,106 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(aggregated["metrics"]["bestObjectiveLabel"], "[0.700000]")
         self.assertEqual(aggregated["cost"]["llmCalls"], 5)
         self.assertEqual(aggregated["rows"][0]["repetitionSeed"], 10)
+
+    def test_evolmd_bertscore_guard_assigns_zero_to_empty_outputs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metrics_dir = Path(temp_dir) / "metrics"
+            metrics_dir.mkdir()
+            (metrics_dir / "__init__.py").write_text("", encoding="utf-8")
+            (metrics_dir / "bert.py").write_text(
+                "\n".join(
+                    [
+                        "def bertscore_individuos(individuos, ref_text, model_type, lang='en'):",
+                        "    if any(not item.get('generated_data') for item in individuos):",
+                        "        raise RuntimeError('empty candidate reached BERTScore')",
+                        "    for item in individuos:",
+                        "        item['fitness'] = 0.7",
+                        "    return individuos",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            sys.path.insert(0, temp_dir)
+            previous_metrics = sys.modules.pop("metrics", None)
+            previous_bert = sys.modules.pop("metrics.bert", None)
+            try:
+                install_evolmd_bertscore_guard()
+                import metrics.bert as bert_module
+
+                rows = [{"generated_data": ""}, {"generated_data": "valid text"}]
+                result = bert_module.bertscore_individuos(
+                    rows,
+                    "reference text",
+                    "bert-base-uncased",
+                )
+                self.assertIs(result, rows)
+                self.assertEqual(rows[0]["fitness"], 0.0)
+                self.assertEqual(rows[0]["fitness_status"], "empty_generated_data")
+                self.assertEqual(rows[1]["fitness"], 0.7)
+                self.assertEqual(rows[1]["fitness_status"], "ok")
+            finally:
+                sys.path.remove(temp_dir)
+                sys.modules.pop("metrics", None)
+                sys.modules.pop("metrics.bert", None)
+                if previous_metrics is not None:
+                    sys.modules["metrics"] = previous_metrics
+                if previous_bert is not None:
+                    sys.modules["metrics.bert"] = previous_bert
+
+    def test_non_dominated_excludes_invalid_rows(self):
+        rows = [
+            {"status": "empty_generated_data", "objectiveVector": [1.0, 1.0]},
+            {"status": "ok", "objectiveVector": [0.8, 0.8]},
+            {"status": "ok", "objectiveVector": [0.6, 0.6]},
+        ]
+        mark_non_dominated(rows)
+        self.assertFalse(rows[0]["nonDominated"])
+        self.assertTrue(rows[1]["nonDominated"])
+        self.assertFalse(rows[2]["nonDominated"])
+
+    def test_evolmd_posthoc_diagnostics_excludes_invalid_rows(self):
+        service = ComparatorService(Path("."))
+        rows = [
+            {
+                "status": "ok",
+                "objectiveVector": [0.8],
+                "generatedText": "valid text",
+            },
+            {
+                "status": "empty_generated_data",
+                "objectiveVector": [0.0],
+                "generatedText": "",
+            },
+        ]
+
+        with patch.object(comparator_module, "calculate_posthoc_semantic_diversity", return_value=[0.25]) as mocked:
+            service._attach_evolmd_posthoc_diagnostics(rows)
+
+        mocked.assert_called_once_with(["valid text"])
+        self.assertEqual(rows[0]["diagnosticObjectiveVector"], [0.8, 0.25])
+        self.assertTrue(rows[0]["postHocNonDominated"])
+        self.assertNotIn("diagnosticObjectiveVector", rows[1])
+        self.assertFalse(rows[1]["postHocNonDominated"])
+
+    def test_mo_metrics_exclude_invalid_rows_with_high_objectives(self):
+        service = ComparatorService(Path("."))
+        proposal = PROPOSALS[1]
+        rows = service._normalize_rows(
+            proposal,
+            [
+                {"generated_data": "", "objetivos": [1.0, 1.0]},
+                {"generated_data": "valid text", "objetivos": [0.5, 0.5]},
+            ],
+            top_k=10,
+        )
+        invalid = next(row for row in rows if row["status"] != "ok")
+        valid = next(row for row in rows if row["status"] == "ok")
+        self.assertFalse(invalid["nonDominated"])
+        self.assertTrue(valid["nonDominated"])
+
+        metrics = service._summarize_rows(proposal, rows, Path("out"))
+        self.assertEqual(metrics["completedRows"], 1)
+        self.assertAlmostEqual(metrics["hypervolume"], 0.375)
 
     def test_turbulence_aggregates_rates_and_final_deltas(self):
         config = {

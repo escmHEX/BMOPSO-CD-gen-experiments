@@ -101,8 +101,13 @@ def is_dominated(row: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
 
 
 def mark_non_dominated(rows: list[dict[str, Any]]) -> None:
+    valid_rows = [row for row in rows if row.get("status") == "ok"]
     for row in rows:
-        row["nonDominated"] = len(row.get("objectiveVector") or []) >= 2 and not is_dominated(row, rows)
+        row["nonDominated"] = (
+            row.get("status") == "ok"
+            and len(row.get("objectiveVector") or []) >= 2
+            and not is_dominated(row, valid_rows)
+        )
 
 
 def is_diagnostic_dominated(row: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
@@ -123,10 +128,12 @@ def is_diagnostic_dominated(row: dict[str, Any], rows: list[dict[str, Any]]) -> 
 
 
 def mark_posthoc_non_dominated(rows: list[dict[str, Any]]) -> None:
+    valid_rows = [row for row in rows if row.get("status") == "ok"]
     for row in rows:
         row["postHocNonDominated"] = (
-            len(row.get("diagnosticObjectiveVector") or []) >= 2
-            and not is_diagnostic_dominated(row, rows)
+            row.get("status") == "ok"
+            and len(row.get("diagnosticObjectiveVector") or []) >= 2
+            and not is_diagnostic_dominated(row, valid_rows)
         )
 
 
@@ -1276,8 +1283,11 @@ class ComparatorService:
         return rows
 
     def _attach_evolmd_posthoc_diagnostics(self, rows: list[dict[str, Any]]) -> None:
-        scores = calculate_posthoc_semantic_diversity([row.get("generatedText") or "" for row in rows])
-        for row, diversity_score in zip(rows, scores):
+        valid_rows = [row for row in rows if row.get("status") == "ok"]
+        scores = calculate_posthoc_semantic_diversity([row.get("generatedText") or "" for row in valid_rows])
+        for row in rows:
+            row["postHocNonDominated"] = False
+        for row, diversity_score in zip(valid_rows, scores):
             diagnostic_vector = [finite_float(row["objectiveVector"][0]), diversity_score]
             row["diagnosticObjectiveVector"] = diagnostic_vector
             row["diagnosticObjectiveLabel"] = objective_label(diagnostic_vector)
@@ -1287,7 +1297,7 @@ class ComparatorService:
                 "semanticDiversityModel": POSTHOC_EMBEDDING_MODEL,
                 "note": "Diagnostic only; EVOLMD selection remains single-objective.",
             }
-        mark_posthoc_non_dominated(rows)
+        mark_posthoc_non_dominated(valid_rows)
 
     def _normalize_evolmd_row(
         self,
