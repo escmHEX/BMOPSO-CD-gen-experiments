@@ -364,10 +364,13 @@ let latestSolutionRows = [];
 let psoDatabase = null;
 let comparatorPollTimer = null;
 let currentComparatorRunId = null;
+let latestComparatorRun = null;
 let comparatorProposals = [];
 let comparatorCharts = [];
 let comparatorChartSignature = "";
 let comparatorChoiceInstances = [];
+let comparatorChartFilterIds = new Set();
+let comparatorChartFilterSignature = "";
 let initialPopulationPollTimer = null;
 let currentInitialPopulationRunId = null;
 let initialComparisonPollTimer = null;
@@ -709,6 +712,7 @@ const dom = {
   comparatorProgressDetails: document.querySelector("#comparatorProgressDetails"),
   comparatorProposalCards: document.querySelector("#comparatorProposalCards"),
   comparatorResultsBody: document.querySelector("#comparatorResultsBody"),
+  comparatorChartProposalFilters: document.querySelector("#comparatorChartProposalFilters"),
   comparatorParetoCharts: document.querySelector("#comparatorParetoCharts"),
   comparatorCombinedParetoChart: document.querySelector("#comparatorCombinedParetoChart"),
   comparatorGlobalNonDominatedChart: document.querySelector("#comparatorGlobalNonDominatedChart"),
@@ -4494,6 +4498,7 @@ async function copyComparatorLog() {
 function resetComparatorUi() {
   stopComparatorPolling();
   currentComparatorRunId = null;
+  latestComparatorRun = null;
   dom.comparatorRunStatus.textContent = "--";
   dom.comparatorProgressPercent.textContent = "--";
   dom.comparatorProgressSummary.textContent = "Sin corrida activa.";
@@ -4508,6 +4513,9 @@ function resetComparatorUi() {
   dom.comparatorConnectionDot.classList.remove("is-busy", "is-error");
   dom.comparatorResultsBody.innerHTML = '<tr><td colspan="8">Sin resultados todavia.</td></tr>';
   dom.comparatorParetoCharts.replaceChildren();
+  if (dom.comparatorChartProposalFilters) {
+    dom.comparatorChartProposalFilters.innerHTML = '<span class="muted-text">Ejecuta una comparacion para activar filtros.</span>';
+  }
   dom.comparatorCombinedParetoChart.innerHTML = "";
   dom.comparatorGlobalNonDominatedChart.innerHTML = "";
   dom.comparatorHvChart.innerHTML = "";
@@ -4515,6 +4523,8 @@ function resetComparatorUi() {
   dom.comparatorSpreadChart.innerHTML = "";
   renderComparatorCostDetails(null);
   comparatorChartSignature = "";
+  comparatorChartFilterIds = new Set();
+  comparatorChartFilterSignature = "";
   disposeComparatorCharts();
   dom.comparatorProposalCards.innerHTML = `
     <article class="proposal-card">
@@ -4985,6 +4995,8 @@ async function runComparator() {
 
   stopComparatorPolling();
   comparatorChartSignature = "";
+  comparatorChartFilterIds = new Set();
+  comparatorChartFilterSignature = "";
   setComparatorRunning(true);
   dom.comparatorResultsBody.innerHTML = '<tr><td colspan="8">Esperando resultados.</td></tr>';
   dom.comparatorProposalCards.innerHTML = "";
@@ -5145,6 +5157,7 @@ function renderComparatorCostSummary(costSummary) {
 }
 
 function renderComparatorRun(run) {
+  latestComparatorRun = run;
   const rows = flattenComparatorRows(run);
   const progress = run.progress || {};
   const completedProposals = progress.completedProposals ?? (run.proposals || []).filter((proposal) => proposal.status === "completed").length;
@@ -5458,17 +5471,20 @@ function renderComparatorCharts(run) {
   comparatorChartSignature = signature;
   disposeComparatorCharts();
   const proposals = (run.proposals || []).filter((proposal) => proposal.status === "completed");
-  renderComparatorParetoCharts(proposals);
-  renderComparatorCombinedSelectedChart(proposals);
-  renderComparatorGlobalNonDominatedChart(proposals);
-  renderComparatorMetricLine(dom.comparatorHvChart, proposals, "hypervolume", "HV por iteracion");
-  renderComparatorMetricLine(dom.comparatorNonDominatedChart, proposals, "nonDominatedRows", "Soluciones no dominadas");
-  renderComparatorMetricLine(dom.comparatorSpreadChart, proposals, "spread", "Spread por iteracion");
+  renderComparatorChartFilters(proposals);
+  const filteredProposals = comparatorFilteredProposals(proposals);
+  renderComparatorParetoCharts(filteredProposals);
+  renderComparatorCombinedSelectedChart(filteredProposals);
+  renderComparatorGlobalNonDominatedChart(filteredProposals);
+  renderComparatorMetricLine(dom.comparatorHvChart, filteredProposals, "hypervolume", "HV por iteracion");
+  renderComparatorMetricLine(dom.comparatorNonDominatedChart, filteredProposals, "nonDominatedRows", "Soluciones no dominadas");
+  renderComparatorMetricLine(dom.comparatorSpreadChart, filteredProposals, "spread", "Spread por iteracion");
 }
 
 function comparatorChartsSignature(run) {
   return JSON.stringify({
     runId: run.runId || "",
+    filters: Array.from(comparatorChartFilterIds).sort(),
     proposals: (run.proposals || []).map((proposal) => ({
       proposalId: proposal.proposalId,
       status: proposal.status,
@@ -5481,7 +5497,64 @@ function comparatorChartsSignature(run) {
   });
 }
 
+function comparatorFilterSignature(proposals) {
+  return proposals.map((proposal) => `${proposal.proposalId}:${proposal.displayName || proposal.proposalId}`).join("|");
+}
+
+function renderComparatorChartFilters(proposals) {
+  if (!dom.comparatorChartProposalFilters) return;
+  const signature = comparatorFilterSignature(proposals);
+  if (!proposals.length) {
+    comparatorChartFilterSignature = signature;
+    comparatorChartFilterIds = new Set();
+    dom.comparatorChartProposalFilters.innerHTML = '<span class="muted-text">Sin propuestas completadas para filtrar.</span>';
+    return;
+  }
+  if (signature === comparatorChartFilterSignature) {
+    return;
+  }
+  comparatorChartFilterSignature = signature;
+  comparatorChartFilterIds = new Set(proposals.map((proposal) => proposal.proposalId));
+  dom.comparatorChartProposalFilters.replaceChildren(
+    ...proposals.map((proposal, index) => {
+      const label = document.createElement("label");
+      label.className = "chart-filter-option";
+      label.innerHTML = `
+        <input type="checkbox" data-comparator-chart-filter="${escapeHtml(proposal.proposalId)}" checked>
+        <span class="chart-filter-swatch" style="background: ${chartPalette(index)}"></span>
+        <span>${escapeHtml(proposal.displayName || proposal.proposalId)}</span>
+      `;
+      return label;
+    }),
+  );
+}
+
+function comparatorFilteredProposals(proposals) {
+  if (!proposals.length) return [];
+  if (!comparatorChartFilterIds.size) return [];
+  return proposals.filter((proposal) => comparatorChartFilterIds.has(proposal.proposalId));
+}
+
+function onComparatorChartFilterChange(event) {
+  const input = event.target.closest("[data-comparator-chart-filter]");
+  if (!input || !dom.comparatorChartProposalFilters?.contains(input)) return;
+  const proposalId = input.dataset.comparatorChartFilter;
+  if (input.checked) {
+    comparatorChartFilterIds.add(proposalId);
+  } else {
+    comparatorChartFilterIds.delete(proposalId);
+  }
+  comparatorChartSignature = "";
+  if (latestComparatorRun) {
+    renderComparatorCharts(latestComparatorRun);
+  }
+}
+
 function renderComparatorParetoCharts(proposals) {
+  if (!proposals.length) {
+    dom.comparatorParetoCharts.innerHTML = '<article class="panel"><p class="muted-text">Sin propuestas seleccionadas para mostrar frentes de Pareto.</p></article>';
+    return;
+  }
   dom.comparatorParetoCharts.replaceChildren(
     ...proposals.map((proposal) => {
       const article = document.createElement("article");
@@ -5512,6 +5585,7 @@ function renderComparatorCombinedSelectedChart(proposals) {
       name: proposal.displayName,
       type: "scatter",
       symbolSize: 14,
+      label: { show: false },
       data: comparatorProposalChartPoints(proposal, "selected").map((point) =>
         comparatorChartPointData(point, color, {
           globallyNonDominated: comparatorIsGloballyNonDominated(point, comparisonPool),
@@ -5539,11 +5613,8 @@ function renderComparatorGlobalNonDominatedChart(proposals) {
       name: `${proposal.displayName} (${countsByProposal.get(proposal.proposalId) || 0})`,
       type: "scatter",
       symbolSize: 13,
-      data: points.map((point) =>
-        comparatorChartPointData(point, color, {
-          globallyNonDominated: true,
-        }),
-      ),
+      label: { show: false },
+      data: points.map((point) => comparatorChartPointData(point, color)),
       itemStyle: { color },
     };
   });
@@ -5578,12 +5649,13 @@ function renderComparatorMetricLine(container, proposals, metricKey, title) {
   chart.setOption({
     title: { text: title, subtext: metadata.description, left: 8, top: 6, textStyle: { fontSize: 13 }, subtextStyle: { fontSize: 11, color: "#64748b" } },
     tooltip: safeChartTooltip("axis", comparatorLineTooltipFormatter),
-    legend: { top: 48 },
-    grid: { left: 48, right: 16, top: 92, bottom: 42 },
-    toolbox: { feature: { saveAsImage: {}, dataZoom: {} }, right: 8 },
-    dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 8 }],
-    xAxis: { type: "value", name: "Iteracion", minInterval: 1 },
+    legend: { top: 60, type: "scroll" },
+    grid: { left: 52, right: 22, top: 106, bottom: 70, containLabel: true },
+    toolbox: { feature: { saveAsImage: {}, dataZoom: {} }, right: 8, top: 38 },
+    dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 10 }],
+    xAxis: { type: "value", name: "Iteracion", nameLocation: "middle", nameGap: 34, minInterval: 1 },
     yAxis: { type: "value", scale: true },
+    graphic: comparatorEmptyChartGraphic(series, "Sin datos para las propuestas filtradas."),
     series,
   });
 }
@@ -5602,8 +5674,8 @@ function paretoChartOption(title, charts) {
     rank: point.rank,
   }));
   return baseScatterOption(title, [
-    { name: "Individuos", type: "scatter", symbolSize: 8, data: allPoints, itemStyle: { color: "#60a5fa", opacity: 0.72 } },
-    { name: "Seleccionadas", type: "scatter", symbol: "diamond", symbolSize: 15, data: selectedPoints, itemStyle: { color: "#b42318" } },
+    { name: "Individuos", type: "scatter", symbolSize: 8, data: allPoints, label: { show: false }, itemStyle: { color: "#60a5fa", opacity: 0.72 } },
+    { name: "Seleccionadas", type: "scatter", symbol: "diamond", symbolSize: 15, data: selectedPoints, label: { show: false }, itemStyle: { color: "#b42318" } },
   ], {
     description: "Mayor fidelidad y diversidad es mejor.",
   });
@@ -5622,12 +5694,13 @@ function baseScatterOption(title, series, options = {}) {
       subtextStyle: { fontSize: 11, color: "#64748b" },
     },
     tooltip: safeChartTooltip("item", comparatorScatterTooltipFormatter),
-    legend: { top: 48 },
-    grid: { left: 48, right: 16, top: 92, bottom: 42 },
-    toolbox: { feature: { saveAsImage: {}, dataZoom: {} }, right: 8 },
-    dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 8 }],
-    xAxis: { type: "value", name: "Fidelidad", scale: true },
-    yAxis: { type: "value", name: "Diversidad", scale: true },
+    legend: { top: 62, type: "scroll" },
+    grid: { left: 58, right: 24, top: 112, bottom: 78, containLabel: true },
+    toolbox: { feature: { saveAsImage: {}, dataZoom: {} }, right: 8, top: 38 },
+    dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 12 }],
+    xAxis: { type: "value", name: "Fidelidad", nameLocation: "middle", nameGap: 42, scale: true },
+    yAxis: { type: "value", name: "Diversidad", nameLocation: "middle", nameGap: 44, scale: true },
+    graphic: comparatorEmptyChartGraphic(renderedSeries, "Sin datos para las propuestas filtradas."),
     series: renderedSeries,
   };
 }
@@ -5704,6 +5777,25 @@ function comparatorMetricReferenceLines(values, higherIsBetter) {
       },
     ],
   };
+}
+
+function comparatorEmptyChartGraphic(series, message) {
+  const hasData = series.some((item) => (item.data || []).length > 0);
+  if (hasData) return [];
+  return [
+    {
+      type: "text",
+      left: "center",
+      top: "middle",
+      silent: true,
+      style: {
+        text: message,
+        fill: "#64748b",
+        fontSize: 13,
+        fontWeight: 600,
+      },
+    },
+  ];
 }
 
 function safeChartTooltip(trigger, formatter) {
@@ -6384,6 +6476,7 @@ dom.runComparatorButton.addEventListener("click", runComparator);
 dom.cancelComparatorButton.addEventListener("click", cancelComparatorRun);
 dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
 dom.copyComparatorLogButton.addEventListener("click", copyComparatorLog);
+dom.comparatorChartProposalFilters?.addEventListener("change", onComparatorChartFilterChange);
 dom.comparatorExecutionMode.addEventListener("change", () => syncComparatorExecutionModeControls(false));
 document.querySelectorAll(".comparator-tab").forEach((button) => {
   button.addEventListener("click", () => activateComparatorTab(button.dataset.comparatorTab));
