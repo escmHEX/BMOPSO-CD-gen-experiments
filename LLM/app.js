@@ -716,6 +716,7 @@ const dom = {
   comparatorSpreadChart: document.querySelector("#comparatorSpreadChart"),
   comparatorCostDetails: document.querySelector("#comparatorCostDetails"),
   comparatorLogOutput: document.querySelector("#comparatorLogOutput"),
+  copyComparatorLogButton: document.querySelector("#copyComparatorLogButton"),
   comparatorIntegrationDetails: document.querySelector("#comparatorIntegrationDetails"),
   embeddingModelLabel: document.querySelector("#embeddingModelLabel"),
   embeddingModelSelect: document.querySelector("#embeddingModelSelect"),
@@ -4458,6 +4459,33 @@ function stopComparatorPolling() {
   }
 }
 
+function setComparatorLogCopyButton(hasLogs) {
+  if (!dom.copyComparatorLogButton) return;
+  dom.copyComparatorLogButton.disabled = !hasLogs;
+  dom.copyComparatorLogButton.textContent = "Copiar log";
+}
+
+async function copyComparatorLog() {
+  const text = dom.comparatorLogOutput.textContent || "";
+  if (!text.trim() || text === "Sin logs todavia.") {
+    setComparatorLogCopyButton(false);
+    return;
+  }
+  dom.copyComparatorLogButton.disabled = true;
+  try {
+    await copyTextToClipboard(text);
+    dom.copyComparatorLogButton.textContent = "Copiado";
+  } catch (error) {
+    dom.copyComparatorLogButton.textContent = "Error";
+  } finally {
+    window.setTimeout(() => {
+      const hasLogs = (dom.comparatorLogOutput.textContent || "").trim() !== ""
+        && dom.comparatorLogOutput.textContent !== "Sin logs todavia.";
+      setComparatorLogCopyButton(hasLogs);
+    }, 1200);
+  }
+}
+
 function resetComparatorUi() {
   stopComparatorPolling();
   currentComparatorRunId = null;
@@ -4490,6 +4518,7 @@ function resetComparatorUi() {
     </article>
   `;
   dom.comparatorLogOutput.textContent = "Sin logs todavia.";
+  setComparatorLogCopyButton(false);
   renderComparatorProgress(null);
   setComparatorRunning(false);
   setStatus(
@@ -4955,6 +4984,7 @@ async function runComparator() {
   dom.comparatorResultsBody.innerHTML = '<tr><td colspan="8">Esperando resultados.</td></tr>';
   dom.comparatorProposalCards.innerHTML = "";
   dom.comparatorLogOutput.textContent = "Iniciando corrida...";
+  setComparatorLogCopyButton(false);
   dom.comparatorConnectionDot.classList.add("is-busy");
   dom.comparatorConnectionDot.classList.remove("is-error");
   dom.comparatorConnectionText.textContent = "Ejecutando";
@@ -5588,12 +5618,14 @@ function renderComparatorRows(rows) {
 function renderComparatorLogs(logs) {
   if (!logs.length) {
     dom.comparatorLogOutput.textContent = "Sin logs todavia.";
+    setComparatorLogCopyButton(false);
     return;
   }
   dom.comparatorLogOutput.textContent = logs
     .slice(-40)
     .map((entry) => `[${entry.proposalId}] ${entry.message}`)
     .join("\n");
+  setComparatorLogCopyButton(true);
 }
 
 async function loadPsoDatabase() {
@@ -6174,6 +6206,7 @@ dom.turbulenceCandidateModalBody.addEventListener("click", async (event) => {
 dom.runComparatorButton.addEventListener("click", runComparator);
 dom.cancelComparatorButton.addEventListener("click", cancelComparatorRun);
 dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
+dom.copyComparatorLogButton.addEventListener("click", copyComparatorLog);
 dom.comparatorExecutionMode.addEventListener("change", () => syncComparatorExecutionModeControls(false));
 document.querySelectorAll(".comparator-tab").forEach((button) => {
   button.addEventListener("click", () => activateComparatorTab(button.dataset.comparatorTab));
