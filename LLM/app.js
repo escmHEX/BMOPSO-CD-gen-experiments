@@ -1,3 +1,12 @@
+import {
+  comparatorCountByProposal,
+  comparatorGlobalNonDominatedFront,
+  comparatorIsGloballyNonDominated,
+  comparatorMetricExtremes,
+  comparatorMetricMetadata,
+  comparatorPointCoordinates,
+} from "./comparator_chart_helpers.mjs";
+
 const EMBEDDING_MODELS = {
   "all-MiniLM-L6-v2": {
     displayName: "all-MiniLM-L6-v2",
@@ -701,6 +710,7 @@ const dom = {
   comparatorResultsBody: document.querySelector("#comparatorResultsBody"),
   comparatorParetoCharts: document.querySelector("#comparatorParetoCharts"),
   comparatorCombinedParetoChart: document.querySelector("#comparatorCombinedParetoChart"),
+  comparatorGlobalNonDominatedChart: document.querySelector("#comparatorGlobalNonDominatedChart"),
   comparatorHvChart: document.querySelector("#comparatorHvChart"),
   comparatorNonDominatedChart: document.querySelector("#comparatorNonDominatedChart"),
   comparatorSpreadChart: document.querySelector("#comparatorSpreadChart"),
@@ -4466,6 +4476,7 @@ function resetComparatorUi() {
   dom.comparatorResultsBody.innerHTML = '<tr><td colspan="8">Sin resultados todavia.</td></tr>';
   dom.comparatorParetoCharts.replaceChildren();
   dom.comparatorCombinedParetoChart.innerHTML = "";
+  dom.comparatorGlobalNonDominatedChart.innerHTML = "";
   dom.comparatorHvChart.innerHTML = "";
   dom.comparatorNonDominatedChart.innerHTML = "";
   dom.comparatorSpreadChart.innerHTML = "";
@@ -5242,6 +5253,7 @@ function renderComparatorCharts(run) {
   const proposals = (run.proposals || []).filter((proposal) => proposal.status === "completed");
   renderComparatorParetoCharts(proposals);
   renderComparatorCombinedSelectedChart(proposals);
+  renderComparatorGlobalNonDominatedChart(proposals);
   renderComparatorMetricLine(dom.comparatorHvChart, proposals, "hypervolume", "HV por iteracion");
   renderComparatorMetricLine(dom.comparatorNonDominatedChart, proposals, "nonDominatedRows", "Soluciones no dominadas");
   renderComparatorMetricLine(dom.comparatorSpreadChart, proposals, "spread", "Spread por iteracion");
@@ -5255,6 +5267,7 @@ function comparatorChartsSignature(run) {
       status: proposal.status,
       pareto: ((proposal.charts || {}).pareto || []).length,
       selected: ((proposal.charts || {}).selected || []).length,
+      nonDominated: ((proposal.charts || {}).nonDominated || []).length,
       series: (proposal.series || []).length,
       rows: (proposal.rows || []).length,
     })),
@@ -5285,24 +5298,59 @@ function renderComparatorParetoCharts(proposals) {
 }
 
 function renderComparatorCombinedSelectedChart(proposals) {
-  const selectedSeries = proposals.map((proposal, index) => ({
-    name: proposal.displayName,
-    type: "scatter",
-    symbolSize: 14,
-    data: ((proposal.charts || {}).selected || []).map((point) => ({
-      value: [point.x, point.y],
-      labelText: point.label,
-      prompt: point.prompt,
-      rank: point.rank,
-    })),
-    itemStyle: { color: chartPalette(index) },
-  }));
+  const comparisonPool = comparatorAllNonDominatedPoints(proposals);
+  const selectedSeries = proposals.map((proposal, index) => {
+    const color = chartPalette(index);
+    return {
+      name: proposal.displayName,
+      type: "scatter",
+      symbolSize: 14,
+      data: comparatorProposalChartPoints(proposal, "selected").map((point) =>
+        comparatorChartPointData(point, color, {
+          globallyNonDominated: comparatorIsGloballyNonDominated(point, comparisonPool),
+        }),
+      ),
+      itemStyle: { color },
+    };
+  });
   const chart = window.echarts.init(dom.comparatorCombinedParetoChart);
   comparatorCharts.push(chart);
-  chart.setOption(baseScatterOption("Top 5 combinado", selectedSeries));
+  chart.setOption(
+    baseScatterOption("Top 5 combinado", selectedSeries, {
+      description: "Mayor fidelidad y diversidad es mejor. Borde rojo: no dominada frente a la union de propuestas.",
+    }),
+  );
+}
+
+function renderComparatorGlobalNonDominatedChart(proposals) {
+  const globalFront = comparatorGlobalNonDominatedPoints(proposals);
+  const countsByProposal = comparatorCountByProposal(globalFront);
+  const series = proposals.map((proposal, index) => {
+    const color = chartPalette(index);
+    const points = globalFront.filter((point) => point.proposalId === proposal.proposalId);
+    return {
+      name: `${proposal.displayName} (${countsByProposal.get(proposal.proposalId) || 0})`,
+      type: "scatter",
+      symbolSize: 13,
+      data: points.map((point) =>
+        comparatorChartPointData(point, color, {
+          globallyNonDominated: true,
+        }),
+      ),
+      itemStyle: { color },
+    };
+  });
+  const chart = window.echarts.init(dom.comparatorGlobalNonDominatedChart);
+  comparatorCharts.push(chart);
+  chart.setOption(
+    baseScatterOption("No dominadas globales", series, {
+      description: `${globalFront.length} soluciones globalmente no dominadas. Mayor fidelidad y diversidad es mejor.`,
+    }),
+  );
 }
 
 function renderComparatorMetricLine(container, proposals, metricKey, title) {
+  const metadata = comparatorMetricMetadata(metricKey);
   const series = proposals.map((proposal, index) => ({
     name: proposal.displayName,
     type: "line",
@@ -5313,13 +5361,18 @@ function renderComparatorMetricLine(container, proposals, metricKey, title) {
       .map((point) => [point.generation, point[metricKey]]),
     itemStyle: { color: chartPalette(index) },
   }));
+  const metricValues = series.flatMap((item) => item.data.map((point) => point[1])).filter(Number.isFinite);
+  const referenceTarget = series.find((item) => item.data.length > 0);
+  if (referenceTarget && metricValues.length > 0) {
+    referenceTarget.markLine = comparatorMetricReferenceLines(metricValues, metadata.higherIsBetter);
+  }
   const chart = window.echarts.init(container);
   comparatorCharts.push(chart);
   chart.setOption({
-    title: { text: title, left: 8, top: 6, textStyle: { fontSize: 13 } },
-    tooltip: { trigger: "axis" },
-    legend: { top: 32 },
-    grid: { left: 48, right: 16, top: 72, bottom: 42 },
+    title: { text: title, subtext: metadata.description, left: 8, top: 6, textStyle: { fontSize: 13 }, subtextStyle: { fontSize: 11, color: "#64748b" } },
+    tooltip: safeChartTooltip("axis", comparatorLineTooltipFormatter),
+    legend: { top: 48 },
+    grid: { left: 48, right: 16, top: 92, bottom: 42 },
     toolbox: { feature: { saveAsImage: {}, dataZoom: {} }, right: 8 },
     dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 8 }],
     xAxis: { type: "value", name: "Iteracion", minInterval: 1 },
@@ -5344,34 +5397,145 @@ function paretoChartOption(title, charts) {
   return baseScatterOption(title, [
     { name: "Individuos", type: "scatter", symbolSize: 8, data: allPoints, itemStyle: { color: "#60a5fa", opacity: 0.72 } },
     { name: "Seleccionadas", type: "scatter", symbol: "diamond", symbolSize: 15, data: selectedPoints, itemStyle: { color: "#b42318" } },
-  ]);
+  ], {
+    description: "Mayor fidelidad y diversidad es mejor.",
+  });
 }
 
-function baseScatterOption(title, series) {
+function baseScatterOption(title, series, options = {}) {
+  const idealSeries = comparatorIdealSeries(series);
+  const renderedSeries = idealSeries ? [...series, idealSeries] : series;
   return {
-    title: { text: title, left: 8, top: 6, textStyle: { fontSize: 13 } },
-    tooltip: {
-      trigger: "item",
-      formatter(params) {
-        const data = params.data || {};
-        const value = params.value || [];
-        return `
-          <strong>${escapeHtml(params.seriesName)}</strong><br>
-          F1: ${formatOptionalNumber(value[0], 6)}<br>
-          F2: ${formatOptionalNumber(value[1], 6)}<br>
-          Rank: ${escapeHtml(String(data.rank ?? "--"))}<br>
-          ${escapeHtml(String(data.labelText || "")).slice(0, 220)}
-        `;
-      },
+    title: {
+      text: title,
+      subtext: options.description || "Mayor fidelidad y diversidad es mejor.",
+      left: 8,
+      top: 6,
+      textStyle: { fontSize: 13 },
+      subtextStyle: { fontSize: 11, color: "#64748b" },
     },
-    legend: { top: 32 },
-    grid: { left: 48, right: 16, top: 72, bottom: 42 },
+    tooltip: safeChartTooltip("item", comparatorScatterTooltipFormatter),
+    legend: { top: 48 },
+    grid: { left: 48, right: 16, top: 92, bottom: 42 },
     toolbox: { feature: { saveAsImage: {}, dataZoom: {} }, right: 8 },
     dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 8 }],
     xAxis: { type: "value", name: "Fidelidad", scale: true },
     yAxis: { type: "value", name: "Diversidad", scale: true },
-    series,
+    series: renderedSeries,
   };
+}
+
+function comparatorProposalChartPoints(proposal, chartKey) {
+  return (((proposal.charts || {})[chartKey]) || []).map((point) => ({
+    ...point,
+    proposalId: point.proposalId || proposal.proposalId,
+    displayName: point.displayName || proposal.displayName,
+  }));
+}
+
+function comparatorAllNonDominatedPoints(proposals) {
+  return proposals.flatMap((proposal) => comparatorProposalChartPoints(proposal, "nonDominated"));
+}
+
+function comparatorGlobalNonDominatedPoints(proposals) {
+  return comparatorGlobalNonDominatedFront(comparatorAllNonDominatedPoints(proposals));
+}
+
+function comparatorChartPointData(point, color, options = {}) {
+  const borderColor = options.globallyNonDominated ? "#dc2626" : color;
+  const borderWidth = options.globallyNonDominated ? 3 : 0;
+  return {
+    value: [point.x, point.y],
+    labelText: point.label,
+    prompt: point.prompt,
+    rank: point.rank,
+    proposalId: point.proposalId,
+    displayName: point.displayName,
+    sourceIndex: point.sourceIndex,
+    repetitionIndex: point.repetitionIndex,
+    globallyNonDominated: Boolean(options.globallyNonDominated),
+    itemStyle: { color, borderColor, borderWidth },
+  };
+}
+
+function comparatorIdealSeries(series) {
+  const points = series.flatMap((item) => item.data || []);
+  const coordinates = points.map(comparatorPointCoordinates).filter(Boolean);
+  if (coordinates.length === 0) return null;
+  const idealX = Math.max(1, ...coordinates.map((point) => point.x));
+  const idealY = Math.max(1, ...coordinates.map((point) => point.y));
+  return {
+    name: "Punto ideal",
+    type: "scatter",
+    symbol: "star",
+    symbolSize: 20,
+    silent: false,
+    data: [{ value: [idealX, idealY], labelText: "Referencia ideal visual", rank: "--" }],
+    itemStyle: { color: "#f59e0b", borderColor: "#92400e", borderWidth: 1.5 },
+    z: 5,
+  };
+}
+
+function comparatorMetricReferenceLines(values, higherIsBetter) {
+  const extremes = comparatorMetricExtremes(values, higherIsBetter);
+  if (!extremes) return null;
+  return {
+    symbol: "none",
+    silent: true,
+    data: [
+      {
+        name: "Mejor",
+        yAxis: extremes.bestValue,
+        lineStyle: { color: "#16a34a", type: "dashed", width: 2 },
+        label: { color: "#166534", formatter: "Mejor: {c}" },
+      },
+      {
+        name: "Peor",
+        yAxis: extremes.worstValue,
+        lineStyle: { color: "#dc2626", type: "dashed", width: 2 },
+        label: { color: "#991b1b", formatter: "Peor: {c}" },
+      },
+    ],
+  };
+}
+
+function safeChartTooltip(trigger, formatter) {
+  return {
+    trigger,
+    confine: true,
+    appendToBody: false,
+    borderColor: "#d7e1ea",
+    extraCssText: [
+      "max-width: 360px",
+      "white-space: normal",
+      "overflow-wrap: anywhere",
+      "word-break: break-word",
+      "line-height: 1.35",
+      "box-shadow: 0 12px 32px rgba(15, 35, 55, 0.18)",
+    ].join(";"),
+    formatter,
+  };
+}
+
+function comparatorScatterTooltipFormatter(params) {
+  const data = params.data || {};
+  const value = params.value || [];
+  const frontNote = data.globallyNonDominated ? "<br><strong>Globalmente no dominada</strong>" : "";
+  return `
+    <strong>${escapeHtml(params.seriesName)}</strong><br>
+    F1: ${formatOptionalNumber(value[0], 6)}<br>
+    F2: ${formatOptionalNumber(value[1], 6)}<br>
+    Rank: ${escapeHtml(String(data.rank ?? "--"))}${frontNote}<br>
+    ${escapeHtml(String(data.labelText || "")).slice(0, 300)}
+  `;
+}
+
+function comparatorLineTooltipFormatter(params) {
+  const items = Array.isArray(params) ? params : [params];
+  return items.map((item) => {
+    const value = item.value || [];
+    return `${item.marker || ""}${escapeHtml(item.seriesName)}: ${formatOptionalNumber(value[1], 6)}<br><small>Iteracion ${escapeHtml(String(value[0] ?? "--"))}</small>`;
+  }).join("<br>");
 }
 
 function chartPalette(index) {

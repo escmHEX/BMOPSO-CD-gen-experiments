@@ -1,0 +1,54 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import {
+  comparatorCountByProposal,
+  comparatorGlobalNonDominatedFront,
+  comparatorIsGloballyNonDominated,
+  comparatorMetricExtremes,
+} from "../LLM/comparator_chart_helpers.mjs";
+
+test("global non-dominated front is computed from all proposal points", () => {
+  const points = [
+    { proposalId: "evolmd", x: 0.7, y: 0.4, label: "dominated" },
+    { proposalId: "evolmd-mo", x: 0.8, y: 0.5, label: "front-a" },
+    { proposalId: "binary-mopso-cd", x: 0.6, y: 0.8, label: "front-b" },
+    { proposalId: "binary-mopso-cd", x: 0.8, y: 0.5, label: "duplicate-front-a" },
+  ];
+
+  const front = comparatorGlobalNonDominatedFront(points);
+
+  assert.deepEqual(front.map((point) => point.label), ["front-a", "front-b", "duplicate-front-a"]);
+});
+
+test("selected points are marked against the global non-dominated pool", () => {
+  const pool = [
+    { proposalId: "evolmd-mo", x: 0.8, y: 0.5 },
+    { proposalId: "binary-mopso-cd", x: 0.6, y: 0.8 },
+  ];
+
+  assert.equal(comparatorIsGloballyNonDominated({ x: 0.7, y: 0.4 }, pool), false);
+  assert.equal(comparatorIsGloballyNonDominated({ x: 0.7, y: 0.7 }, pool), true);
+});
+
+test("global front counts are grouped by proposal", () => {
+  const counts = comparatorCountByProposal([
+    { proposalId: "evolmd" },
+    { proposalId: "binary-mopso-cd" },
+    { proposalId: "binary-mopso-cd" },
+  ]);
+
+  assert.equal(counts.get("evolmd"), 1);
+  assert.equal(counts.get("binary-mopso-cd"), 2);
+});
+
+test("metric extremes respect best direction", () => {
+  assert.deepEqual(comparatorMetricExtremes([0.2, 0.8, 0.4], true), {
+    bestValue: 0.8,
+    worstValue: 0.2,
+  });
+  assert.deepEqual(comparatorMetricExtremes([0.2, 0.8, 0.4], false), {
+    bestValue: 0.2,
+    worstValue: 0.8,
+  });
+});

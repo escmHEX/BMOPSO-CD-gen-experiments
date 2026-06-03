@@ -11,6 +11,7 @@ from baselines.bootstrap import install_evolmd_bertscore_guard
 from baselines.comparator import ComparatorService, PROPOSALS, aggregate_proposal_repetitions
 from baselines.comparator import aggregate_series
 from baselines.comparator import mark_non_dominated
+from baselines.comparator_metrics import build_charts_from_rows
 from initial_population.comparison import InitialPopulationComparisonService
 from turbulence_comparison.service import aggregate_turbulence_repetitions
 
@@ -574,6 +575,60 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertTrue(metrics["postHocDiagnostic"])
         self.assertEqual(metrics["postHocNonDominatedRows"], 2)
         self.assertEqual(metrics["nonDominatedRows"], 2)
+
+    def test_charts_use_posthoc_non_dominated_rows_for_evolmd(self):
+        rows = [
+            {
+                "proposalId": "evolmd",
+                "displayName": "EVOLMD",
+                "status": "ok",
+                "objectiveVector": [0.6],
+                "diagnosticObjectiveVector": [0.6, 0.4],
+                "generatedText": "single objective front",
+                "postHocNonDominated": True,
+                "nonDominated": False,
+            },
+            {
+                "proposalId": "evolmd",
+                "displayName": "EVOLMD",
+                "status": "ok",
+                "objectiveVector": [0.5],
+                "diagnosticObjectiveVector": [0.5, 0.2],
+                "generatedText": "dominated diagnostic row",
+                "postHocNonDominated": False,
+                "nonDominated": True,
+            },
+        ]
+        charts = build_charts_from_rows(rows, [], [])
+        self.assertEqual(len(charts["nonDominated"]), 1)
+        self.assertEqual(charts["nonDominated"][0]["label"], "single objective front")
+        self.assertEqual(charts["nonDominated"][0]["proposalId"], "evolmd")
+
+    def test_charts_use_native_non_dominated_rows_for_multiobjective_proposals(self):
+        rows = [
+            {
+                "proposalId": "binary-mopso-cd",
+                "displayName": "Binary MOPSO-CD",
+                "status": "ok",
+                "objectiveVector": [0.7, 0.5],
+                "generatedText": "native front",
+                "nonDominated": True,
+                "postHocNonDominated": False,
+            },
+            {
+                "proposalId": "evolmd-mo",
+                "displayName": "EVOLMD-MO",
+                "status": "ok",
+                "objectiveVector": [0.6, 0.3],
+                "generatedText": "native dominated",
+                "nonDominated": False,
+                "postHocNonDominated": True,
+            },
+        ]
+        charts = build_charts_from_rows(rows, [], [])
+        self.assertEqual(len(charts["nonDominated"]), 1)
+        self.assertEqual(charts["nonDominated"][0]["label"], "native front")
+        self.assertEqual(charts["nonDominated"][0]["proposalId"], "binary-mopso-cd")
 
     def test_binary_summary_uses_native_diversity_scale_for_hypervolume(self):
         service = ComparatorService(Path("."))

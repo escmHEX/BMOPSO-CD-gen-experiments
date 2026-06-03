@@ -233,17 +233,37 @@ def chart_point_from_row(row: dict[str, Any], selected: bool = False) -> dict[st
     return {
         "x": finite_float(vector[0]),
         "y": finite_float(vector[1]),
+        "proposalId": row.get("proposalId") or "",
+        "displayName": row.get("displayName") or "",
         "label": row.get("generatedText") or "",
         "prompt": row.get("prompt") or "",
         "rank": row.get("selectionRank") if selected else row.get("rank"),
         "selected": selected or bool(row.get("selected")),
+        "status": row.get("status") or "",
+        "sourceIndex": row.get("sourceIndex"),
         "repetitionIndex": row.get("repetitionIndex"),
     }
+
+
+def row_is_chart_non_dominated(row: dict[str, Any]) -> bool:
+    if row.get("status") != "ok":
+        return False
+    proposal_id = str(row.get("proposalId") or "").lower()
+    if proposal_id == "evolmd":
+        return bool(row.get("postHocNonDominated"))
+    return bool(row.get("nonDominated"))
 
 
 def build_charts_from_rows(rows: list[dict[str, Any]], selected_rows: list[dict[str, Any]], series: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "pareto": [point for row in rows for point in [chart_point_from_row(row)] if point is not None],
         "selected": [point for row in selected_rows for point in [chart_point_from_row(row, selected=True)] if point is not None],
+        "nonDominated": [
+            point
+            for row in rows
+            if row_is_chart_non_dominated(row)
+            for point in [chart_point_from_row(row)]
+            if point is not None
+        ],
         "series": series,
     }

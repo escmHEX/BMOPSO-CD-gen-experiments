@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import http.server
 import json
+import mimetypes
 import os
 import socketserver
 import subprocess
@@ -27,6 +28,10 @@ DEFAULT_PORT = 4173
 DEFAULT_LM_STUDIO = "http://127.0.0.1:1234"
 PROXY_PREFIX = "/lmstudio"
 COMPARATOR_PREFIX = "/api/comparator"
+MIMETYPES = {".mjs": "application/javascript"}
+
+for extension, content_type in MIMETYPES.items():
+    mimetypes.add_type(content_type, extension)
 INITIAL_POPULATION_PREFIX = "/api/initial-population"
 INITIAL_POPULATION_COMPARISON_PREFIX = "/api/initial-population-comparison"
 REFERENCE_TEXTS_PREFIX = "/api/reference-texts"
