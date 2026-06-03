@@ -25,11 +25,12 @@ from baselines.comparator_metrics import build_charts_from_rows
 from baselines.comparator_metrics import calculate_hypervolume
 from baselines.comparator_metrics import calculate_spread
 from baselines.comparator_metrics import canonical_generated_text
+from baselines.comparator_metrics import COMPARABLE_OBJECTIVE_NAMES
+from baselines.comparator_metrics import comparable_point
 from baselines.comparator_metrics import entropy_weights
 from baselines.comparator_metrics import mark_non_dominated
 from baselines.comparator_metrics import mark_posthoc_non_dominated
-from baselines.comparator_metrics import normalized_mo_point
-from baselines.comparator_metrics import normalized_posthoc_point
+from baselines.comparator_metrics import normalized_objective_vector
 from baselines.comparator_metrics import topsis_scores
 from sbert_service import shared_sbert_service
 
@@ -199,18 +200,35 @@ def comparator_status_message(status: str) -> str:
     }.get(status, status)
 
 
-def calculate_posthoc_semantic_diversity(generated_texts: list[str]) -> list[float]:
-    if len(generated_texts) <= 1:
-        return [0.0] * len(generated_texts)
-
+def calculate_posthoc_semantic_scores(generated_texts: list[str], reference_text: str) -> list[dict[str, float]]:
+    if not generated_texts:
+        return []
     texts = [text if text.strip() else "[texto vacio]" for text in generated_texts]
-    embeddings, _ = shared_sbert_service().encode_texts(POSTHOC_EMBEDDING_MODEL, texts)
-    similarity_matrix = embeddings @ embeddings.T
-    scores: list[float] = []
+    reference = reference_text.strip() or "[texto referencia vacio]"
+    embeddings, _ = shared_sbert_service().encode_texts(POSTHOC_EMBEDDING_MODEL, [reference, *texts])
+    reference_embedding = embeddings[0]
+    text_embeddings = embeddings[1:]
+    fidelity_scores = text_embeddings @ reference_embedding
+    if len(generated_texts) <= 1:
+        return [
+            {
+                "semanticFidelity": clamp(finite_float(fidelity), -1.0, 1.0),
+                "semanticDiversity": 0.0,
+            }
+            for fidelity in fidelity_scores
+        ]
+
+    similarity_matrix = text_embeddings @ text_embeddings.T
+    scores: list[dict[str, float]] = []
     for index in range(len(texts)):
         sum_similarity = float(similarity_matrix[index].sum()) - 1.0
         average_similarity = sum_similarity / (len(texts) - 1)
-        scores.append(clamp(1.0 - average_similarity, 0.0, 1.0))
+        scores.append(
+            {
+                "semanticFidelity": clamp(finite_float(fidelity_scores[index]), -1.0, 1.0),
+                "semanticDiversity": clamp(1.0 - average_similarity, 0.0, 2.0),
+            }
+        )
     return scores
 
 
@@ -287,6 +305,8 @@ def empty_cost_metrics() -> dict[str, Any]:
         "promptEvalCount": 0,
         "evalCount": 0,
         "totalTokens": 0,
+        "hasTokenReport": False,
+        "hasOllamaDurationReport": False,
         "returnCode": None,
         "timedOut": False,
         "cancelled": False,
@@ -302,6 +322,7 @@ def build_cost_metrics(
 ) -> dict[str, Any]:
     summary = llm_payload.get("summary") if isinstance(llm_payload, dict) else {}
     summary = summary if isinstance(summary, dict) else {}
+    calls = llm_payload.get("calls") if isinstance(llm_payload, dict) and isinstance(llm_payload.get("calls"), list) else []
     runtime = parse_runtime_file(output_dir / "runtime.txt") if output_dir else {}
     algorithm_runtime = runtime.get("total_sec")
     if algorithm_runtime is None:
@@ -309,6 +330,11 @@ def build_cost_metrics(
     if algorithm_runtime is None:
         algorithm_runtime = runtime.get("grand_total_sec")
     llm_calls = int(finite_float(summary.get("totalCalls")))
+    has_token_report = llm_calls_have_token_report(calls) or int(finite_float(summary.get("totalTokens"))) > 0
+    has_ollama_duration_report = (
+        llm_calls_have_ollama_duration_report(calls)
+        or finite_float(summary.get("ollamaTotalDurationSeconds")) > 0
+    )
     llm_client_seconds = finite_float(summary.get("clientWallClockSeconds"))
     average_call_seconds = llm_client_seconds / llm_calls if llm_calls > 0 else None
     cost = empty_cost_metrics()
@@ -338,6 +364,8 @@ def build_cost_metrics(
             "promptEvalCount": int(finite_float(summary.get("promptEvalCount"))),
             "evalCount": int(finite_float(summary.get("evalCount"))),
             "totalTokens": int(finite_float(summary.get("totalTokens"))),
+            "hasTokenReport": has_token_report,
+            "hasOllamaDurationReport": has_ollama_duration_report,
             "returnCode": process_cost.get("returnCode"),
             "timedOut": bool(process_cost.get("timedOut")),
             "cancelled": cancelled,
@@ -364,6 +392,44 @@ def read_llm_calls_jsonl(path: Path) -> list[dict[str, Any]]:
     return calls
 
 
+def llm_calls_have_token_report(calls: list[dict[str, Any]]) -> bool:
+    return any(
+        any(key in call for key in ("promptEvalCount", "evalCount", "totalTokens", "prompt_eval_count", "eval_count"))
+        for call in calls
+    )
+
+
+def llm_calls_have_ollama_duration_report(calls: list[dict[str, Any]]) -> bool:
+    return any(
+        any(
+            key in call
+            for key in (
+                "ollamaTotalDurationSeconds",
+                "ollama_total_duration_seconds",
+                "total_duration",
+            )
+        )
+        for call in calls
+    )
+
+
+def call_int_metric(call: dict[str, Any], *keys: str) -> int:
+    for key in keys:
+        if key in call:
+            return int(finite_float(call.get(key)))
+    return 0
+
+
+def call_ollama_total_duration_seconds(call: dict[str, Any]) -> float:
+    if "ollamaTotalDurationSeconds" in call:
+        return finite_float(call.get("ollamaTotalDurationSeconds"))
+    if "ollama_total_duration_seconds" in call:
+        return finite_float(call.get("ollama_total_duration_seconds"))
+    if "total_duration" in call:
+        return finite_float(call.get("total_duration")) / 1_000_000_000.0
+    return 0.0
+
+
 def build_binary_cost_metrics(
     process_cost: dict[str, Any],
     output_dir: Path | None,
@@ -373,6 +439,9 @@ def build_binary_cost_metrics(
     calls = read_llm_calls_jsonl(output_dir / "llm_calls.jsonl") if output_dir else []
     llm_seconds = sum(finite_float(call.get("elapsed_seconds")) for call in calls)
     llm_calls = len(calls)
+    prompt_eval_count = sum(call_int_metric(call, "promptEvalCount", "prompt_eval_count") for call in calls)
+    eval_count = sum(call_int_metric(call, "evalCount", "eval_count") for call in calls)
+    ollama_duration_seconds = sum(call_ollama_total_duration_seconds(call) for call in calls)
     algorithm_runtime = runtime.get("runtime_seconds") or runtime.get("total_sec") or runtime.get("grand_total_sec")
     cost = empty_cost_metrics()
     cost.update(
@@ -390,6 +459,13 @@ def build_binary_cost_metrics(
             "llmClientWallClockLabel": label_from_seconds(llm_seconds),
             "llmAverageCallSeconds": (llm_seconds / llm_calls) if llm_calls else None,
             "llmAverageCallLabel": label_from_seconds((llm_seconds / llm_calls) if llm_calls else None),
+            "ollamaTotalDurationSeconds": ollama_duration_seconds,
+            "ollamaTotalDurationLabel": label_from_seconds(ollama_duration_seconds),
+            "promptEvalCount": prompt_eval_count,
+            "evalCount": eval_count,
+            "totalTokens": prompt_eval_count + eval_count,
+            "hasTokenReport": llm_calls_have_token_report(calls),
+            "hasOllamaDurationReport": llm_calls_have_ollama_duration_report(calls),
             "returnCode": process_cost.get("returnCode"),
             "timedOut": bool(process_cost.get("timedOut")),
             "cancelled": cancelled,
@@ -439,6 +515,8 @@ def summarize_costs(proposals: list[dict[str, Any]], run_elapsed_seconds: float)
     )
     prompt_tokens = sum(int(cost.get("promptEvalCount") or 0) for cost in costs)
     completion_tokens = sum(int(cost.get("evalCount") or 0) for cost in costs)
+    has_token_report = any(bool(cost.get("hasTokenReport")) for cost in costs)
+    has_ollama_duration_report = any(bool(cost.get("hasOllamaDurationReport")) for cost in costs)
     average_call_seconds = llm_client_seconds / llm_calls if llm_calls > 0 else None
     return {
         "runWallClockSeconds": run_elapsed_seconds,
@@ -467,6 +545,8 @@ def summarize_costs(proposals: list[dict[str, Any]], run_elapsed_seconds: float)
         "promptEvalCount": prompt_tokens,
         "evalCount": completion_tokens,
         "totalTokens": prompt_tokens + completion_tokens,
+        "hasTokenReport": has_token_report,
+        "hasOllamaDurationReport": has_ollama_duration_report,
     }
 
 
@@ -517,6 +597,8 @@ def aggregate_comparator_costs(results: list[dict[str, Any]]) -> dict[str, Any]:
         for cost in costs
     )
     ollama_seconds = sum(finite_float(cost.get("ollamaTotalDurationSeconds")) for cost in costs)
+    has_token_report = any(bool(cost.get("hasTokenReport")) for cost in costs)
+    has_ollama_duration_report = any(bool(cost.get("hasOllamaDurationReport")) for cost in costs)
     average_call_seconds = llm_client_seconds / llm_calls if llm_calls > 0 else None
     return {
         "processWallClockSeconds": process_seconds,
@@ -543,6 +625,8 @@ def aggregate_comparator_costs(results: list[dict[str, Any]]) -> dict[str, Any]:
         "promptEvalCount": sum(int(finite_float(cost.get("promptEvalCount"))) for cost in costs),
         "evalCount": sum(int(finite_float(cost.get("evalCount"))) for cost in costs),
         "totalTokens": sum(int(finite_float(cost.get("totalTokens"))) for cost in costs),
+        "hasTokenReport": has_token_report,
+        "hasOllamaDurationReport": has_ollama_duration_report,
         "returnCode": next((cost.get("returnCode") for cost in reversed(costs) if cost.get("returnCode") is not None), None),
         "timedOut": any(bool(cost.get("timedOut")) for cost in costs),
         "cancelled": any(bool(cost.get("cancelled")) for cost in costs),
@@ -560,6 +644,9 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
             "objectiveNames": [],
             "bestObjectiveVector": [],
             "bestObjectiveLabel": "--",
+            "comparableObjectiveNames": list(COMPARABLE_OBJECTIVE_NAMES),
+            "bestComparableObjectiveVector": [],
+            "bestComparableObjectiveLabel": "--",
             "nonDominatedRows": 0,
             "hypervolume": None,
             "hypervolumeLabel": "No aplica",
@@ -573,6 +660,10 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
         metrics.get("bestDiagnosticObjectiveVector")
         for metrics in metrics_list
     ])
+    best_comparable_vector = average_vector([
+        metrics.get("bestComparableObjectiveVector")
+        for metrics in metrics_list
+    ])
     hypervolume = average_present([metrics.get("hypervolume") for metrics in metrics_list])
     spread = average_present([metrics.get("spread") for metrics in metrics_list])
     first_metrics = next((metrics for metrics in metrics_list if metrics), {})
@@ -582,6 +673,9 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
         "objectiveNames": first_metrics.get("objectiveNames") or [],
         "bestObjectiveVector": best_vector,
         "bestObjectiveLabel": objective_label(best_vector),
+        "comparableObjectiveNames": first_metrics.get("comparableObjectiveNames") or list(COMPARABLE_OBJECTIVE_NAMES),
+        "bestComparableObjectiveVector": best_comparable_vector,
+        "bestComparableObjectiveLabel": objective_label(best_comparable_vector),
         "nonDominatedRows": average_present([metrics.get("nonDominatedRows") for metrics in metrics_list]),
         "hypervolume": hypervolume,
         "hypervolumeLabel": f"{hypervolume:.6f}" if hypervolume is not None else "No aplica",
@@ -2086,7 +2180,12 @@ class ComparatorService:
 
         try:
             extraction_started = time.perf_counter()
-            rows = self._normalize_rows(proposal, read_json(result_path), run["config"]["topK"])
+            rows = self._normalize_rows(
+                proposal,
+                read_json(result_path),
+                run["config"]["topK"],
+                reference_text=run["config"]["referenceText"],
+            )
             cost = self._build_cost(proposal, process_cost, llm_payload, output_dir, False)
             add_cost_timing(cost, "metricExtractionSeconds", time.perf_counter() - extraction_started)
 
@@ -2097,7 +2196,7 @@ class ComparatorService:
             metrics_started = time.perf_counter()
             self._mark_selected_rows(rows, selected_rows)
             metrics = self._summarize_rows(proposal, rows, output_dir)
-            series = self._build_metric_series(proposal, output_dir, rows)
+            series = self._build_metric_series(proposal, output_dir, rows, run["config"]["referenceText"])
             add_cost_timing(cost, "metricExtractionSeconds", time.perf_counter() - metrics_started)
 
             plot_started = time.perf_counter()
@@ -2198,7 +2297,8 @@ class ComparatorService:
         if not candidates:
             return []
         vectors = [
-            row["diagnosticObjectiveVector"] if use_diagnostic else row["objectiveVector"]
+            row.get("comparableObjectiveVector")
+            or (row["diagnosticObjectiveVector"] if use_diagnostic else row["objectiveVector"])
             for row in candidates
         ]
         matrix = [[finite_float(vector[0]), finite_float(vector[1] if len(vector) > 1 else 0.0)] for vector in vectors]
@@ -2243,6 +2343,9 @@ class ComparatorService:
             "objectiveLabel": row.get("objectiveLabel") or "--",
             "diagnosticObjectiveVector": row.get("diagnosticObjectiveVector"),
             "diagnosticObjectiveLabel": row.get("diagnosticObjectiveLabel"),
+            "comparableObjectiveVector": row.get("comparableObjectiveVector") or [],
+            "comparableObjectiveLabel": row.get("comparableObjectiveLabel") or "--",
+            "comparableObjectiveNames": row.get("comparableObjectiveNames") or list(COMPARABLE_OBJECTIVE_NAMES),
             "topsisScore": finite_float(topsis_score, None) if topsis_score is not None else None,
         }
 
@@ -2265,6 +2368,7 @@ class ComparatorService:
         proposal: ProposalDefinition,
         output_dir: Path,
         final_rows: list[dict[str, Any]],
+        reference_text: str,
     ) -> list[dict[str, Any]]:
         if proposal.kind == "binary-mopso-cd":
             series = self._read_binary_metric_series(output_dir)
@@ -2272,7 +2376,7 @@ class ComparatorService:
                 return series
         history = self._read_population_history(output_dir)
         if history:
-            return [self._history_entry_metrics(proposal, entry) for entry in history]
+            return [self._history_entry_metrics(proposal, entry, reference_text) for entry in history]
         csv_series = self._read_legacy_metric_series(proposal, output_dir)
         if csv_series:
             return csv_series
@@ -2336,9 +2440,9 @@ class ComparatorService:
                 entries.append(payload)
         return entries
 
-    def _history_entry_metrics(self, proposal: ProposalDefinition, entry: dict[str, Any]) -> dict[str, Any]:
+    def _history_entry_metrics(self, proposal: ProposalDefinition, entry: dict[str, Any], reference_text: str) -> dict[str, Any]:
         population = entry.get("population") if isinstance(entry.get("population"), list) else []
-        rows = self._normalize_rows(proposal, population, top_k=len(population) or 1)
+        rows = self._normalize_rows(proposal, population, top_k=len(population) or 1, reference_text=reference_text)
         metrics = self._summarize_rows(proposal, rows, Path("."))
         return {
             "generation": int(finite_float(entry.get("generation"))),
@@ -2887,6 +2991,7 @@ class ComparatorService:
         proposal: ProposalDefinition,
         raw_rows: Any,
         top_k: int,
+        reference_text: str | None = None,
     ) -> list[dict[str, Any]]:
         if not isinstance(raw_rows, list):
             raise ValueError("Expected a JSON list.")
@@ -2897,7 +3002,7 @@ class ComparatorService:
             if isinstance(row, dict)
         ]
         if proposal.single_objective:
-            self._attach_evolmd_posthoc_diagnostics(rows)
+            self._attach_evolmd_posthoc_diagnostics(rows, reference_text or "")
 
         mark_non_dominated(rows)
         if proposal.single_objective:
@@ -2928,20 +3033,30 @@ class ComparatorService:
             return self._normalize_evolmd_row(proposal, row, index)
         return self._normalize_evolmd_mo_row(proposal, row, index)
 
-    def _attach_evolmd_posthoc_diagnostics(self, rows: list[dict[str, Any]]) -> None:
+    def _attach_evolmd_posthoc_diagnostics(self, rows: list[dict[str, Any]], reference_text: str) -> None:
         valid_rows = [row for row in rows if row.get("status") == "ok"]
-        scores = calculate_posthoc_semantic_diversity([row.get("generatedText") or "" for row in valid_rows])
+        scores = calculate_posthoc_semantic_scores(
+            [row.get("generatedText") or "" for row in valid_rows],
+            reference_text,
+        )
         for row in rows:
             row["postHocNonDominated"] = False
-        for row, diversity_score in zip(valid_rows, scores):
-            diagnostic_vector = [finite_float(row["objectiveVector"][0]), diversity_score]
+        for row, score in zip(valid_rows, scores):
+            fidelity_score = finite_float(score.get("semanticFidelity"))
+            diversity_score = finite_float(score.get("semanticDiversity"))
+            diagnostic_vector = [fidelity_score, diversity_score]
             row["diagnosticObjectiveVector"] = diagnostic_vector
             row["diagnosticObjectiveLabel"] = objective_label(diagnostic_vector)
-            row["diagnosticObjectiveNames"] = ["fitness", "semantic_diversity_posthoc"]
+            row["diagnosticObjectiveNames"] = ["fidelity_sbert_posthoc", "semantic_diversity_posthoc"]
+            comparable_vector = normalized_objective_vector(diagnostic_vector)
+            row["comparableObjectiveVector"] = comparable_vector or []
+            row["comparableObjectiveLabel"] = objective_label(comparable_vector or [])
+            row["comparableObjectiveNames"] = list(COMPARABLE_OBJECTIVE_NAMES)
             row["postHocDiagnostics"] = {
+                "semanticFidelity": fidelity_score,
                 "semanticDiversity": diversity_score,
                 "semanticDiversityModel": POSTHOC_EMBEDDING_MODEL,
-                "note": "Diagnostic only; EVOLMD selection remains single-objective.",
+                "note": "Diagnostic only; EVOLMD selection remains single-objective with native BERTScore fitness.",
             }
         mark_posthoc_non_dominated(valid_rows)
 
@@ -2983,6 +3098,7 @@ class ComparatorService:
             finite_float(objetivos[0] if len(objetivos) > 0 else metrics_detail.get("fidelity_sbert")),
             finite_float(objetivos[1] if len(objetivos) > 1 else metrics_detail.get("diversity_individual")),
         ]
+        comparable_vector = normalized_objective_vector(vector) or []
         return {
             "proposalId": proposal.proposal_id,
             "displayName": proposal.display_name,
@@ -2993,6 +3109,9 @@ class ComparatorService:
             "objectiveVector": vector,
             "objectiveLabel": objective_label(vector),
             "objectiveNames": list(proposal.objective_names),
+            "comparableObjectiveVector": comparable_vector,
+            "comparableObjectiveLabel": objective_label(comparable_vector),
+            "comparableObjectiveNames": list(COMPARABLE_OBJECTIVE_NAMES),
             "status": "ok" if row.get("generated_data") else "empty_generated_data",
             "nonDominated": False,
             "raw": {
@@ -3014,6 +3133,7 @@ class ComparatorService:
             finite_float(objectives.get("f1")),
             finite_float(objectives.get("f2")),
         ]
+        comparable_vector = normalized_objective_vector(vector) or []
         components = row.get("components") if isinstance(row.get("components"), dict) else {}
         return {
             "proposalId": proposal.proposal_id,
@@ -3025,6 +3145,9 @@ class ComparatorService:
             "objectiveVector": vector,
             "objectiveLabel": objective_label(vector),
             "objectiveNames": list(proposal.objective_names),
+            "comparableObjectiveVector": comparable_vector,
+            "comparableObjectiveLabel": objective_label(comparable_vector),
+            "comparableObjectiveNames": list(COMPARABLE_OBJECTIVE_NAMES),
             "status": "ok" if row.get("generated_text") and objectives else "invalid_solution",
             "nonDominated": False,
             "raw": {
@@ -3043,12 +3166,21 @@ class ComparatorService:
     ) -> dict[str, Any]:
         completed = [row for row in rows if row.get("status") == "ok"]
         best_vector = completed[0]["objectiveVector"] if completed else []
+        best_comparable_row = max(
+            completed,
+            key=lambda row: sum(row.get("comparableObjectiveVector") or []),
+            default=None,
+        )
+        best_comparable_vector = (best_comparable_row.get("comparableObjectiveVector") if best_comparable_row else []) or []
         metrics: dict[str, Any] = {
             "totalRows": len(rows),
             "completedRows": len(completed),
             "objectiveNames": list(proposal.objective_names),
             "bestObjectiveVector": best_vector,
             "bestObjectiveLabel": objective_label(best_vector),
+            "comparableObjectiveNames": list(COMPARABLE_OBJECTIVE_NAMES),
+            "bestComparableObjectiveVector": best_comparable_vector,
+            "bestComparableObjectiveLabel": objective_label(best_comparable_vector),
             "nonDominatedRows": sum(1 for row in rows if row.get("nonDominated")),
             "hypervolume": None,
             "hypervolumeLabel": "No aplica",
@@ -3063,7 +3195,7 @@ class ComparatorService:
                 point
                 for row in diagnostic_rows
                 if row.get("postHocNonDominated")
-                for point in [normalized_posthoc_point(row)]
+                for point in [comparable_point(row)]
                 if point is not None
             ]
             hypervolume = calculate_hypervolume(diagnostic_points)
@@ -3077,9 +3209,12 @@ class ComparatorService:
                 else []
             )
             metrics["postHocDiagnostic"] = True
-            metrics["diagnosticObjectiveNames"] = ["fitness", "semantic_diversity_posthoc"]
+            metrics["diagnosticObjectiveNames"] = ["fidelity_sbert_posthoc", "semantic_diversity_posthoc"]
             metrics["bestDiagnosticObjectiveVector"] = best_diagnostic
             metrics["bestDiagnosticObjectiveLabel"] = objective_label(best_diagnostic)
+            best_comparable = normalized_objective_vector(best_diagnostic)
+            metrics["bestComparableObjectiveVector"] = best_comparable or []
+            metrics["bestComparableObjectiveLabel"] = objective_label(best_comparable or [])
             post_hoc_non_dominated_rows = sum(1 for row in rows if row.get("postHocNonDominated"))
             metrics["postHocNonDominatedRows"] = post_hoc_non_dominated_rows
             metrics["nonDominatedRows"] = post_hoc_non_dominated_rows
@@ -3088,18 +3223,16 @@ class ComparatorService:
             metrics["spread"] = spread
             metrics["spreadLabel"] = f"{spread:.6f}" if spread is not None else "No aplica"
             metrics["moConvention"] = (
-                "Post-hoc diagnostic only; EVOLMD optimized fitness as a single objective. "
-                "Semantic diversity is 1 - average cosine similarity over SBERT embeddings. "
-                "HV uses [fitness, diversity] in [0, 1] with reference point [0, 0]; "
-                "spread is normalized consecutive-distance deviation over the diagnostic non-dominated set."
+                "Comparative diagnostics only; EVOLMD optimized native BERTScore fitness as a single objective. "
+                "Comparable vector uses SBERT fidelity and semantic diversity post-hoc, normalized as "
+                "[(f1 + 1) / 2, f2 / 2]. HV reference point [0, 0]; spread uses the comparable diagnostic front."
             )
         else:
-            diversity_upper_bound = 2.0 if proposal.kind == "binary-mopso-cd" else 1.0
             points = [
                 point
                 for row in rows
                 if row.get("nonDominated")
-                for point in [normalized_mo_point(row, diversity_upper_bound)]
+                for point in [comparable_point(row)]
                 if point is not None
             ]
             hypervolume = calculate_hypervolume(points)
@@ -3108,15 +3241,10 @@ class ComparatorService:
             metrics["hypervolumeLabel"] = f"{hypervolume:.6f}" if hypervolume is not None else "No aplica"
             metrics["spread"] = spread
             metrics["spreadLabel"] = f"{spread:.6f}" if spread is not None else "No aplica"
-            diversity_note = (
-                "Binary MOPSO-CD diversity normalized with diversity / 2 before HV/spread; "
-                if proposal.kind == "binary-mopso-cd"
-                else "diversity clamped to [0, 1]; "
-            )
             metrics["moConvention"] = (
-                "Maximization; fidelity normalized with (fidelity + 1) / 2; "
-                + diversity_note
-                + "HV reference point [0, 0]; spread is normalized consecutive-distance deviation, lower is better."
+                "Maximization. Native objectives are preserved separately; comparative HV/spread use "
+                "the normalized vector [(f1 + 1) / 2, f2 / 2] for every proposal, with reference point [0, 0]. "
+                "Spread is normalized consecutive-distance deviation, lower is better."
             )
 
         return metrics
@@ -3140,6 +3268,9 @@ class ComparatorService:
                 "objectiveNames": list(proposal.objective_names),
                 "bestObjectiveVector": [],
                 "bestObjectiveLabel": "--",
+                "comparableObjectiveNames": list(COMPARABLE_OBJECTIVE_NAMES),
+                "bestComparableObjectiveVector": [],
+                "bestComparableObjectiveLabel": "--",
                 "nonDominatedRows": 0,
                 "hypervolume": None,
                 "hypervolumeLabel": "No aplica",

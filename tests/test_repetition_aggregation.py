@@ -683,6 +683,7 @@ class RepetitionAggregationTests(unittest.TestCase):
         )
         self.assertEqual(rows[0]["proposalId"], "binary-mopso-cd")
         self.assertEqual(rows[0]["objectiveVector"], [0.7, 0.4])
+        self.assertEqual(rows[0]["comparableObjectiveVector"], [0.85, 0.2])
         self.assertTrue(rows[0]["nonDominated"])
 
     def test_single_objective_summary_reports_posthoc_non_dominated_count(self):
@@ -724,6 +725,7 @@ class RepetitionAggregationTests(unittest.TestCase):
                 "status": "ok",
                 "objectiveVector": [0.6],
                 "diagnosticObjectiveVector": [0.6, 0.4],
+                "comparableObjectiveVector": [0.8, 0.2],
                 "generatedText": "single objective front",
                 "postHocNonDominated": True,
                 "nonDominated": False,
@@ -734,6 +736,7 @@ class RepetitionAggregationTests(unittest.TestCase):
                 "status": "ok",
                 "objectiveVector": [0.5],
                 "diagnosticObjectiveVector": [0.5, 0.2],
+                "comparableObjectiveVector": [0.75, 0.1],
                 "generatedText": "dominated diagnostic row",
                 "postHocNonDominated": False,
                 "nonDominated": True,
@@ -743,6 +746,9 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(len(charts["nonDominated"]), 1)
         self.assertEqual(charts["nonDominated"][0]["label"], "single objective front")
         self.assertEqual(charts["nonDominated"][0]["proposalId"], "evolmd")
+        self.assertEqual(charts["nonDominated"][0]["x"], 0.8)
+        self.assertEqual(charts["nonDominated"][0]["y"], 0.2)
+        self.assertEqual(charts["nonDominated"][0]["nativeObjectiveVector"], [0.6, 0.4])
 
     def test_charts_use_native_non_dominated_rows_for_multiobjective_proposals(self):
         rows = [
@@ -769,6 +775,8 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(len(charts["nonDominated"]), 1)
         self.assertEqual(charts["nonDominated"][0]["label"], "native front")
         self.assertEqual(charts["nonDominated"][0]["proposalId"], "binary-mopso-cd")
+        self.assertEqual(charts["nonDominated"][0]["x"], 0.85)
+        self.assertEqual(charts["nonDominated"][0]["y"], 0.25)
 
     def test_binary_summary_uses_native_diversity_scale_for_hypervolume(self):
         service = ComparatorService(Path("."))
@@ -786,6 +794,27 @@ class RepetitionAggregationTests(unittest.TestCase):
         )
         metrics = service._summarize_rows(proposal, rows, Path("out"))
         self.assertAlmostEqual(metrics["hypervolume"], 0.375)
+
+    def test_evolmd_mo_and_binary_share_comparable_hv_normalization(self):
+        service = ComparatorService(Path("."))
+        evolmd_mo = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
+        binary = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+
+        mo_rows = service._normalize_rows(
+            evolmd_mo,
+            [{"generated_data": "Generated", "objetivos": [0.0, 1.5]}],
+            top_k=5,
+        )
+        binary_rows = service._normalize_rows(
+            binary,
+            [{"generated_text": "Generated", "objectives": {"f1": 0.0, "f2": 1.5}}],
+            top_k=5,
+        )
+
+        self.assertEqual(mo_rows[0]["comparableObjectiveVector"], [0.5, 0.75])
+        self.assertEqual(binary_rows[0]["comparableObjectiveVector"], [0.5, 0.75])
+        self.assertAlmostEqual(service._summarize_rows(evolmd_mo, mo_rows, Path("out"))["hypervolume"], 0.375)
+        self.assertAlmostEqual(service._summarize_rows(binary, binary_rows, Path("out"))["hypervolume"], 0.375)
 
     def test_evolmd_bertscore_guard_assigns_zero_to_empty_outputs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -858,11 +887,17 @@ class RepetitionAggregationTests(unittest.TestCase):
             },
         ]
 
-        with patch.object(comparator_module, "calculate_posthoc_semantic_diversity", return_value=[0.25]) as mocked:
-            service._attach_evolmd_posthoc_diagnostics(rows)
+        with patch.object(
+            comparator_module,
+            "calculate_posthoc_semantic_scores",
+            return_value=[{"semanticFidelity": 0.4, "semanticDiversity": 1.2}],
+        ) as mocked:
+            service._attach_evolmd_posthoc_diagnostics(rows, "reference text")
 
-        mocked.assert_called_once_with(["valid text"])
-        self.assertEqual(rows[0]["diagnosticObjectiveVector"], [0.8, 0.25])
+        mocked.assert_called_once_with(["valid text"], "reference text")
+        self.assertEqual(rows[0]["objectiveVector"], [0.8])
+        self.assertEqual(rows[0]["diagnosticObjectiveVector"], [0.4, 1.2])
+        self.assertEqual(rows[0]["comparableObjectiveVector"], [0.7, 0.6])
         self.assertTrue(rows[0]["postHocNonDominated"])
         self.assertNotIn("diagnosticObjectiveVector", rows[1])
         self.assertFalse(rows[1]["postHocNonDominated"])
@@ -885,7 +920,51 @@ class RepetitionAggregationTests(unittest.TestCase):
 
         metrics = service._summarize_rows(proposal, rows, Path("out"))
         self.assertEqual(metrics["completedRows"], 1)
-        self.assertAlmostEqual(metrics["hypervolume"], 0.375)
+        self.assertAlmostEqual(metrics["hypervolume"], 0.1875)
+
+    def test_binary_costs_distinguish_unreported_tokens_from_zero(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "llm_calls.jsonl").write_text(
+                '{"elapsed_seconds": 1.5, "status": "ok"}\n',
+                encoding="utf-8",
+            )
+
+            cost = comparator_module.build_binary_cost_metrics(
+                {"processWallClockSeconds": 2.0, "returnCode": 0},
+                output_dir,
+                False,
+            )
+
+        self.assertEqual(cost["totalTokens"], 0)
+        self.assertFalse(cost["hasTokenReport"])
+        self.assertFalse(cost["hasOllamaDurationReport"])
+
+    def test_binary_costs_sum_reported_ollama_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "llm_calls.jsonl").write_text(
+                "\n".join(
+                    [
+                        '{"elapsed_seconds": 1, "promptEvalCount": 3, "evalCount": 4, "ollamaTotalDurationSeconds": 0.5}',
+                        '{"elapsed_seconds": 2, "prompt_eval_count": 5, "eval_count": 6, "total_duration": 700000000}',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            cost = comparator_module.build_binary_cost_metrics(
+                {"processWallClockSeconds": 4.0, "returnCode": 0},
+                output_dir,
+                False,
+            )
+
+        self.assertEqual(cost["promptEvalCount"], 8)
+        self.assertEqual(cost["evalCount"], 10)
+        self.assertEqual(cost["totalTokens"], 18)
+        self.assertAlmostEqual(cost["ollamaTotalDurationSeconds"], 1.2)
+        self.assertTrue(cost["hasTokenReport"])
+        self.assertTrue(cost["hasOllamaDurationReport"])
 
     def test_turbulence_aggregates_rates_and_final_deltas(self):
         config = {

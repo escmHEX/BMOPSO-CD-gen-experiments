@@ -4,6 +4,13 @@ import math
 from typing import Any
 
 
+COSINE_DISTANCE_UPPER_BOUND = 2.0
+COMPARABLE_OBJECTIVE_NAMES = [
+    "fidelity_sbert_normalized",
+    "semantic_diversity_normalized",
+]
+
+
 def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
 
@@ -70,22 +77,29 @@ def mark_posthoc_non_dominated(rows: list[dict[str, Any]]) -> None:
         )
 
 
-def normalized_mo_point(row: dict[str, Any], diversity_upper_bound: float = 1.0) -> tuple[float, float] | None:
-    vector = row.get("objectiveVector") or []
-    if len(vector) < 2:
+def normalized_objective_vector(vector: Any) -> list[float] | None:
+    if not isinstance(vector, list) or len(vector) < 2:
         return None
     fidelity = finite_float(vector[0])
     diversity = finite_float(vector[1])
-    normalized_fidelity = clamp((fidelity + 1.0) / 2.0, 0.0, 1.0)
-    normalized_diversity = clamp(diversity / max(diversity_upper_bound, 1.0), 0.0, 1.0)
-    return normalized_fidelity, normalized_diversity
+    return [
+        clamp((fidelity + 1.0) / 2.0, 0.0, 1.0),
+        clamp(diversity / COSINE_DISTANCE_UPPER_BOUND, 0.0, 1.0),
+    ]
 
 
-def normalized_posthoc_point(row: dict[str, Any]) -> tuple[float, float] | None:
-    vector = row.get("diagnosticObjectiveVector") or []
-    if len(vector) < 2:
+def comparable_objective_vector(row: dict[str, Any]) -> list[float] | None:
+    vector = row.get("comparableObjectiveVector")
+    if isinstance(vector, list) and len(vector) >= 2:
+        return [clamp(finite_float(vector[0]), 0.0, 1.0), clamp(finite_float(vector[1]), 0.0, 1.0)]
+    return normalized_objective_vector(row.get("diagnosticObjectiveVector") or row.get("objectiveVector") or [])
+
+
+def comparable_point(row: dict[str, Any]) -> tuple[float, float] | None:
+    vector = comparable_objective_vector(row)
+    if not vector or len(vector) < 2:
         return None
-    return clamp(finite_float(vector[0]), 0.0, 1.0), clamp(finite_float(vector[1]), 0.0, 1.0)
+    return vector[0], vector[1]
 
 
 def pareto_points(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -227,12 +241,13 @@ def aggregate_series(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def chart_point_from_row(row: dict[str, Any], selected: bool = False) -> dict[str, Any] | None:
-    vector = row.get("diagnosticObjectiveVector") or row.get("objectiveVector") or []
-    if len(vector) < 2:
+    comparable_vector = comparable_objective_vector(row)
+    if not comparable_vector or len(comparable_vector) < 2:
         return None
+    native_vector = row.get("diagnosticObjectiveVector") or row.get("objectiveVector") or []
     return {
-        "x": finite_float(vector[0]),
-        "y": finite_float(vector[1]),
+        "x": comparable_vector[0],
+        "y": comparable_vector[1],
         "proposalId": row.get("proposalId") or "",
         "displayName": row.get("displayName") or "",
         "label": row.get("generatedText") or "",
@@ -242,6 +257,11 @@ def chart_point_from_row(row: dict[str, Any], selected: bool = False) -> dict[st
         "status": row.get("status") or "",
         "sourceIndex": row.get("sourceIndex"),
         "repetitionIndex": row.get("repetitionIndex"),
+        "nativeObjectiveVector": native_vector,
+        "nativeObjectiveLabel": row.get("diagnosticObjectiveLabel") or row.get("objectiveLabel") or "",
+        "comparableObjectiveVector": comparable_vector,
+        "comparableObjectiveLabel": row.get("comparableObjectiveLabel") or "",
+        "coordinateSpace": "comparable_normalized",
     }
 
 
