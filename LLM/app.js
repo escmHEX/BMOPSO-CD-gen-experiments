@@ -364,6 +364,7 @@ let latestSolutionRows = [];
 let psoDatabase = null;
 let comparatorPollTimer = null;
 let currentComparatorRunId = null;
+let comparatorPollFailureCount = 0;
 let latestComparatorRun = null;
 let comparatorProposals = [];
 let comparatorCharts = [];
@@ -759,6 +760,7 @@ const DEFAULT_SYSTEM_PROMPT_TEMPLATES = {
 
 const COMPARATOR_API = "/api/comparator";
 const COMPARATOR_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const COMPARATOR_MAX_TRANSIENT_POLL_FAILURES = 5;
 const INITIAL_POPULATION_API = "/api/initial-population";
 const INITIAL_POPULATION_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const INITIAL_POPULATION_COMPARISON_API = "/api/initial-population-comparison";
@@ -4994,6 +4996,7 @@ async function runComparator() {
   }
 
   stopComparatorPolling();
+  comparatorPollFailureCount = 0;
   comparatorChartSignature = "";
   comparatorChartFilterIds = new Set();
   comparatorChartFilterSignature = "";
@@ -5040,6 +5043,7 @@ async function refreshComparatorRun(runId) {
 
   try {
     const run = await requestComparatorJson(`/runs/${encodeURIComponent(runId)}`);
+    comparatorPollFailureCount = 0;
     renderComparatorRun(run);
     if (COMPARATOR_TERMINAL_STATUSES.has(run.status)) {
       stopComparatorPolling();
@@ -5050,9 +5054,26 @@ async function refreshComparatorRun(runId) {
       setComparatorRunning(true, Boolean(run.cancelRequested));
     }
   } catch (error) {
+    comparatorPollFailureCount += 1;
+    const shouldRetry = comparatorPollFailureCount < COMPARATOR_MAX_TRANSIENT_POLL_FAILURES;
+    currentComparatorRunId = runId;
+    dom.comparatorConnectionDot.classList.add("is-error");
+    dom.comparatorConnectionText.textContent = shouldRetry ? "Reconectando" : "Error";
+    if (shouldRetry) {
+      setComparatorRunning(true, Boolean(latestComparatorRun?.cancelRequested));
+      setStatus(
+        dom.comparatorStatusTone,
+        dom.comparatorStatusTitle,
+        dom.comparatorStatusDetail,
+        "Reconectando corrida",
+        `No se pudo consultar el backend (${error.message}). Reintento ${comparatorPollFailureCount}/${COMPARATOR_MAX_TRANSIENT_POLL_FAILURES}; se conserva el ultimo estado recibido.`,
+        "busy",
+      );
+      return;
+    }
+
     stopComparatorPolling();
     setComparatorRunning(false);
-    dom.comparatorConnectionDot.classList.add("is-error");
     setStatus(dom.comparatorStatusTone, dom.comparatorStatusTitle, dom.comparatorStatusDetail, "Error al consultar corrida", error.message, "error");
   }
 }
