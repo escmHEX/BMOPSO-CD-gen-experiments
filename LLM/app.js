@@ -693,6 +693,8 @@ const dom = {
   runComparatorButton: document.querySelector("#runComparatorButton"),
   cancelComparatorButton: document.querySelector("#cancelComparatorButton"),
   clearComparatorButton: document.querySelector("#clearComparatorButton"),
+  comparatorResumeRunId: document.querySelector("#comparatorResumeRunId"),
+  resumeComparatorButton: document.querySelector("#resumeComparatorButton"),
   comparatorConnectionDot: document.querySelector("#comparatorConnectionDot"),
   comparatorConnectionText: document.querySelector("#comparatorConnectionText"),
   comparatorRunStatus: document.querySelector("#comparatorRunStatus"),
@@ -761,6 +763,7 @@ const DEFAULT_SYSTEM_PROMPT_TEMPLATES = {
 const COMPARATOR_API = "/api/comparator";
 const COMPARATOR_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const COMPARATOR_MAX_TRANSIENT_POLL_FAILURES = 5;
+const COMPARATOR_LAST_RUN_ID_STORAGE_KEY = "comparator:lastRunId";
 const INITIAL_POPULATION_API = "/api/initial-population";
 const INITIAL_POPULATION_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const INITIAL_POPULATION_COMPARISON_API = "/api/initial-population-comparison";
@@ -4411,6 +4414,9 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
   dom.cancelComparatorButton.disabled = !isRunning || !currentComparatorRunId || cancelRequested;
   dom.cancelComparatorButton.textContent = cancelRequested ? "Cancelando..." : "Cancelar";
   dom.clearComparatorButton.disabled = isRunning;
+  if (dom.resumeComparatorButton) {
+    dom.resumeComparatorButton.disabled = isRunning;
+  }
   [
     dom.comparatorReferencePreset,
     dom.comparatorReferenceSaveLabel,
@@ -4470,6 +4476,37 @@ function stopComparatorPolling() {
   }
 }
 
+function loadStoredComparatorRunId() {
+  try {
+    return window.localStorage.getItem(COMPARATOR_LAST_RUN_ID_STORAGE_KEY) || "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function storeComparatorRunId(runId) {
+  if (!runId) return;
+  if (dom.comparatorResumeRunId) {
+    dom.comparatorResumeRunId.value = runId;
+  }
+  try {
+    window.localStorage.setItem(COMPARATOR_LAST_RUN_ID_STORAGE_KEY, runId);
+  } catch (_error) {
+    // Local storage is optional; the visible input still supports manual reattach.
+  }
+}
+
+function clearStoredComparatorRunId() {
+  if (dom.comparatorResumeRunId) {
+    dom.comparatorResumeRunId.value = "";
+  }
+  try {
+    window.localStorage.removeItem(COMPARATOR_LAST_RUN_ID_STORAGE_KEY);
+  } catch (_error) {
+    // Nothing to clear when local storage is unavailable.
+  }
+}
+
 function setComparatorLogCopyButton(hasLogs) {
   if (!dom.copyComparatorLogButton) return;
   dom.copyComparatorLogButton.disabled = !hasLogs;
@@ -4497,10 +4534,15 @@ async function copyComparatorLog() {
   }
 }
 
-function resetComparatorUi() {
+function resetComparatorUi(options = {}) {
+  const clearStoredRunId = options.clearStoredRunId ?? true;
   stopComparatorPolling();
   currentComparatorRunId = null;
+  comparatorPollFailureCount = 0;
   latestComparatorRun = null;
+  if (clearStoredRunId) {
+    clearStoredComparatorRunId();
+  }
   dom.comparatorRunStatus.textContent = "--";
   dom.comparatorProgressPercent.textContent = "--";
   dom.comparatorProgressSummary.textContent = "Sin corrida activa.";
@@ -5023,6 +5065,7 @@ async function runComparator() {
       body: JSON.stringify(config),
     });
     currentComparatorRunId = run.runId;
+    storeComparatorRunId(run.runId);
     setComparatorRunning(true, Boolean(run.cancelRequested));
     renderComparatorRun(run);
     comparatorPollTimer = window.setInterval(() => refreshComparatorRun(currentComparatorRunId), 2000);
@@ -5038,7 +5081,7 @@ async function runComparator() {
 
 async function refreshComparatorRun(runId) {
   if (!runId) {
-    return;
+    return null;
   }
 
   try {
@@ -5053,6 +5096,7 @@ async function refreshComparatorRun(runId) {
       currentComparatorRunId = run.runId;
       setComparatorRunning(true, Boolean(run.cancelRequested));
     }
+    return run;
   } catch (error) {
     comparatorPollFailureCount += 1;
     const shouldRetry = comparatorPollFailureCount < COMPARATOR_MAX_TRANSIENT_POLL_FAILURES;
@@ -5069,12 +5113,53 @@ async function refreshComparatorRun(runId) {
         `No se pudo consultar el backend (${error.message}). Reintento ${comparatorPollFailureCount}/${COMPARATOR_MAX_TRANSIENT_POLL_FAILURES}; se conserva el ultimo estado recibido.`,
         "busy",
       );
-      return;
+      return null;
     }
 
     stopComparatorPolling();
     setComparatorRunning(false);
     setStatus(dom.comparatorStatusTone, dom.comparatorStatusTitle, dom.comparatorStatusDetail, "Error al consultar corrida", error.message, "error");
+    return null;
+  }
+}
+
+async function resumeComparatorRun() {
+  const runId = (dom.comparatorResumeRunId?.value || loadStoredComparatorRunId()).trim();
+  if (!runId) {
+    setStatus(
+      dom.comparatorStatusTone,
+      dom.comparatorStatusTitle,
+      dom.comparatorStatusDetail,
+      "Run ID requerido",
+      "Ingresa el identificador de la carpeta runs/comparator que quieres reanudar.",
+      "error",
+    );
+    return;
+  }
+
+  stopComparatorPolling();
+  comparatorPollFailureCount = 0;
+  currentComparatorRunId = runId;
+  storeComparatorRunId(runId);
+  setComparatorRunning(true);
+  dom.comparatorConnectionDot.classList.add("is-busy");
+  dom.comparatorConnectionDot.classList.remove("is-error");
+  dom.comparatorConnectionText.textContent = "Consultando";
+  setStatus(
+    dom.comparatorStatusTone,
+    dom.comparatorStatusTitle,
+    dom.comparatorStatusDetail,
+    "Reanudando corrida",
+    `Consultando ${runId}.`,
+    "busy",
+  );
+
+  const run = await refreshComparatorRun(runId);
+  if (!run) {
+    return;
+  }
+  if (!COMPARATOR_TERMINAL_STATUSES.has(run.status)) {
+    comparatorPollTimer = window.setInterval(() => refreshComparatorRun(currentComparatorRunId), 2000);
   }
 }
 
@@ -5180,6 +5265,7 @@ function renderComparatorCostSummary(costSummary) {
 
 function renderComparatorRun(run) {
   latestComparatorRun = run;
+  storeComparatorRunId(run.runId);
   const rows = flattenComparatorRows(run);
   const progress = run.progress || {};
   const completedProposals = progress.completedProposals ?? (run.proposals || []).filter((proposal) => proposal.status === "completed").length;
@@ -6514,6 +6600,7 @@ dom.turbulenceCandidateModalBody.addEventListener("click", async (event) => {
 dom.runComparatorButton.addEventListener("click", runComparator);
 dom.cancelComparatorButton.addEventListener("click", cancelComparatorRun);
 dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
+dom.resumeComparatorButton?.addEventListener("click", resumeComparatorRun);
 dom.copyComparatorLogButton.addEventListener("click", copyComparatorLog);
 dom.comparatorChartProposalFilters?.addEventListener("change", onComparatorChartFilterChange);
 dom.comparatorExecutionMode.addEventListener("change", () => syncComparatorExecutionModeControls(false));
@@ -6594,7 +6681,10 @@ resetInitialComparisonUi();
 loadInitialComparisonStrategies();
 resetTurbulenceComparisonUi();
 refreshTurbulencePpdbStatus();
-resetComparatorUi();
+resetComparatorUi({ clearStoredRunId: false });
+if (dom.comparatorResumeRunId) {
+  dom.comparatorResumeRunId.value = loadStoredComparatorRunId();
+}
 loadComparatorProposals();
 dom.renderedPromptPreview.textContent = renderPrompt();
 updateSimulationModeUi();
