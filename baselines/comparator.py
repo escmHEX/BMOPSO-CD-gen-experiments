@@ -817,8 +817,8 @@ def proposal_python_executable(root: Path, repository: Path, proposal: ProposalD
     if proposal.python_executable:
         configured = resolve_config_path(root, proposal.python_executable)
         return str(configured)
-    if proposal.kind == "binary-mopso-cd":
-        venv_python = repository / ".venv" / "Scripts" / "python.exe"
+    for environment_name in (".venv", "venv"):
+        venv_python = repository / environment_name / "Scripts" / "python.exe"
         if venv_python.exists():
             return str(venv_python)
     return sys.executable

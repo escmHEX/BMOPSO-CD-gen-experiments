@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,6 +18,37 @@ from turbulence_comparison.service import aggregate_turbulence_repetitions
 
 
 class RepetitionAggregationTests(unittest.TestCase):
+    def test_proposal_python_executable_detects_venv_for_any_proposal(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repository = root / "baseline"
+            venv_python = repository / "venv" / "Scripts" / "python.exe"
+            venv_python.parent.mkdir(parents=True)
+            venv_python.touch()
+
+            proposal = replace(PROPOSALS[0], repository_path="baseline", python_executable="")
+
+            self.assertEqual(
+                comparator_module.proposal_python_executable(root, repository, proposal),
+                str(venv_python),
+            )
+
+    def test_configured_proposal_python_executable_overrides_local_venv(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repository = root / "baseline"
+            (repository / ".venv" / "Scripts").mkdir(parents=True)
+            configured_python = root / "custom" / "python.exe"
+            configured_python.parent.mkdir(parents=True)
+            configured_python.touch()
+
+            proposal = replace(PROPOSALS[0], repository_path="baseline", python_executable=str(configured_python))
+
+            self.assertEqual(
+                comparator_module.proposal_python_executable(root, repository, proposal),
+                str(configured_python),
+            )
+
     def test_comparator_config_accepts_seed_and_repetitions(self):
         service = ComparatorService(Path("."))
         parsed = service._read_config(
