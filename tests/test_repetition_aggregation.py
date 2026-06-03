@@ -168,6 +168,114 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(state["generationTotal"], 30)
         self.assertEqual(state["stageLabel"], "Generacion 29/30")
 
+    def test_comparator_eta_uses_evolmd_generation_time_average(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
+        run = {
+            "status": "running",
+            "startedAtEpoch": None,
+            "cancelRequested": False,
+            "config": {"generaciones": 10, "repetitionsK": 1, "executionMode": "fair_sequential"},
+            "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal)},
+        }
+        service._apply_log_progress_unlocked(run, proposal.proposal_id, "Generacion 3/10")
+        service._apply_log_progress_unlocked(run, proposal.proposal_id, "Tiempo Gen: 7.50s")
+
+        timing = run["proposalStates"][proposal.proposal_id]["iterationTiming"]
+        self.assertEqual(timing["completedIterations"], 3)
+        self.assertEqual(timing["totalIterations"], 10)
+        self.assertEqual(timing["remainingIterations"], 7)
+        self.assertAlmostEqual(timing["averageIterationSeconds"], 7.5)
+        self.assertAlmostEqual(run["progress"]["remainingSeconds"], 52.5)
+
+    def test_comparator_eta_uses_binary_elapsed_delta(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        run = {
+            "status": "running",
+            "startedAtEpoch": None,
+            "cancelRequested": False,
+            "config": {"generaciones": 3, "repetitionsK": 1, "executionMode": "fair_sequential"},
+            "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal)},
+        }
+        service._apply_log_progress_unlocked(
+            run,
+            proposal.proposal_id,
+            "2026-06-03 00:05:14 | INFO | run 1/1 | generation 1/3 started | elapsed=00:00:10",
+        )
+        service._apply_log_progress_unlocked(
+            run,
+            proposal.proposal_id,
+            "2026-06-03 00:05:20 | INFO | run 1/1 | generation 1/3 | modified=2/20 | archive=4 | hv=0.1 | spread=0.2 | elapsed=00:00:16",
+        )
+
+        timing = run["proposalStates"][proposal.proposal_id]["iterationTiming"]
+        self.assertEqual(timing["completedIterations"], 1)
+        self.assertEqual(timing["remainingIterations"], 2)
+        self.assertAlmostEqual(timing["averageIterationSeconds"], 6.0)
+        self.assertAlmostEqual(run["progress"]["remainingSeconds"], 12.0)
+
+    def test_comparator_eta_waits_for_first_completed_iteration(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        run = {
+            "status": "running",
+            "startedAtEpoch": None,
+            "cancelRequested": False,
+            "config": {"generaciones": 3, "repetitionsK": 1, "executionMode": "fair_sequential"},
+            "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal)},
+        }
+        service._apply_log_progress_unlocked(
+            run,
+            proposal.proposal_id,
+            "2026-06-03 00:05:14 | INFO | run 1/1 | generation 1/3 started | elapsed=00:00:10",
+        )
+
+        timing = run["proposalStates"][proposal.proposal_id]["iterationTiming"]
+        self.assertEqual(timing["completedIterations"], 0)
+        self.assertIsNone(run["progress"]["remainingSeconds"])
+        self.assertEqual(run["progress"]["remainingLabel"], "Esperando primera iteracion")
+
+    def test_comparator_eta_ignores_duplicate_generation_completion_logs(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        run = {
+            "status": "running",
+            "startedAtEpoch": None,
+            "cancelRequested": False,
+            "config": {"generaciones": 3, "repetitionsK": 1, "executionMode": "fair_sequential"},
+            "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal)},
+        }
+        start_log = "2026-06-03 00:05:14 | INFO | run 1/1 | generation 1/3 started | elapsed=00:00:10"
+        end_log = "2026-06-03 00:05:20 | INFO | run 1/1 | generation 1/3 | modified=2/20 | archive=4 | hv=0.1 | spread=0.2 | elapsed=00:00:16"
+        service._apply_log_progress_unlocked(run, proposal.proposal_id, start_log)
+        service._apply_log_progress_unlocked(run, proposal.proposal_id, end_log)
+        service._apply_log_progress_unlocked(run, proposal.proposal_id, end_log)
+
+        timing = run["proposalStates"][proposal.proposal_id]["iterationTiming"]
+        self.assertEqual(timing["completedIterations"], 1)
+        self.assertEqual(len(timing["durationSamples"]), 1)
+        self.assertAlmostEqual(run["progress"]["remainingSeconds"], 12.0)
+
+    def test_comparator_eta_total_iterations_include_repetitions(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "evolmd")
+        run = {
+            "status": "running",
+            "startedAtEpoch": None,
+            "cancelRequested": False,
+            "config": {"generaciones": 2, "repetitionsK": 3, "executionMode": "fair_sequential"},
+            "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal)},
+        }
+        service._apply_log_progress_unlocked(run, proposal.proposal_id, "Generacion 1/2")
+        service._apply_log_progress_unlocked(run, proposal.proposal_id, "Tiempo Gen: 5.00s")
+
+        timing = run["proposalStates"][proposal.proposal_id]["iterationTiming"]
+        self.assertEqual(timing["completedIterations"], 1)
+        self.assertEqual(timing["totalIterations"], 6)
+        self.assertEqual(timing["remainingIterations"], 5)
+        self.assertAlmostEqual(run["progress"]["remainingSeconds"], 25.0)
+
     def test_comparator_config_rejects_unsafe_repository_update_settings(self):
         service = ComparatorService(Path("."))
         bad_configs = [

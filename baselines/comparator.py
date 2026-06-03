@@ -43,6 +43,9 @@ STATUS_CANCELLED = "cancelled"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 STAGE_RE = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s+(.+)$")
 GENERATION_RE = re.compile(r"(?:Generaci[oó]n|generation)\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
+GENERATION_STARTED_RE = re.compile(r"\bgeneration\s+\d+\s*/\s*\d+\s+started\b", re.IGNORECASE)
+GENERATION_TIME_RE = re.compile(r"Tiempo\s+Gen:\s*([0-9]+(?:[\.,][0-9]+)?)s", re.IGNORECASE)
+ELAPSED_RE = re.compile(r"\belapsed=(\d{1,2}:\d{2}(?::\d{2})?)\b", re.IGNORECASE)
 PERCENT_RE = re.compile(r"(\d{1,3})%")
 TIMESTAMPED_LOG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+\|\s+[A-Z]+\s+\|\s+(.+)$")
 GIT_REMOTE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -126,6 +129,51 @@ def progress_log_payload(message: str) -> str:
     clean_message = clean_log_message(message)
     match = TIMESTAMPED_LOG_RE.match(clean_message)
     return match.group(1).strip() if match else clean_message
+
+
+def parse_elapsed_seconds(value: str) -> float | None:
+    parts = value.strip().split(":")
+    if len(parts) == 2:
+        hours = 0
+        minutes, seconds = parts
+    elif len(parts) == 3:
+        hours, minutes, seconds = parts
+    else:
+        return None
+    try:
+        return float(int(hours) * 3600 + int(minutes) * 60 + int(seconds))
+    except ValueError:
+        return None
+
+
+def log_elapsed_seconds(message: str) -> float | None:
+    match = ELAPSED_RE.search(message)
+    return parse_elapsed_seconds(match.group(1)) if match else None
+
+
+def log_generation_time_seconds(message: str) -> float | None:
+    match = GENERATION_TIME_RE.search(message)
+    if not match:
+        return None
+    return finite_float(match.group(1).replace(",", "."), -1.0)
+
+
+def empty_iteration_timing() -> dict[str, Any]:
+    return {
+        "completedIterations": 0,
+        "totalIterations": None,
+        "remainingIterations": None,
+        "durationSamples": [],
+        "averageIterationSeconds": None,
+        "averageIterationLabel": "No disponible",
+        "lastIterationSeconds": None,
+        "lastIterationLabel": "No disponible",
+        "completedIterationKeys": [],
+        "activeIterationKey": None,
+        "activeStartedAtEpoch": None,
+        "activeElapsedSeconds": None,
+        "previousElapsedSeconds": None,
+    }
 
 
 def format_duration(seconds: float | None) -> str:
@@ -991,6 +1039,7 @@ class ComparatorService:
             "stageTotal": PROPOSAL_TOTALS.get(proposal.proposal_id, 1),
             "generationIndex": None,
             "generationTotal": None,
+            "iterationTiming": empty_iteration_timing(),
             "progress": 0.0,
             "logs": 0,
             "updatedAt": utc_now(),
@@ -1024,6 +1073,8 @@ class ComparatorService:
                 "elapsedLabel": "0s",
                 "remainingSeconds": None,
                 "remainingLabel": "No disponible",
+                "etaBasisLabel": "Esperando primera iteracion completada.",
+                "etaScopeLabel": "No aplica",
             },
             "costSummary": summarize_costs([], 0.0),
             "repositoryUpdates": {},
@@ -1802,6 +1853,15 @@ class ComparatorService:
                     f"Repeticion {repetition_index + 1}/{repetitions_k}",
                     repetition_index / repetitions_k,
                 )
+                state = run["proposalStates"].get(proposal.proposal_id)
+                if state:
+                    state["currentRepetitionIndex"] = repetition_index + 1
+                    timing = self._iteration_timing(state)
+                    timing["activeIterationKey"] = None
+                    timing["activeStartedAtEpoch"] = None
+                    timing["activeElapsedSeconds"] = None
+                    self._refresh_iteration_counts(run, state)
+                    self._refresh_run_progress_unlocked(run)
 
             repetition_seed = self._repetition_seed(run["config"].get("seed"), repetition_index)
             repetition_dir = base_dir / f"rep-{repetition_index + 1:03d}"
@@ -2332,8 +2392,10 @@ class ComparatorService:
                 "proposalId": proposal_id,
                 "displayName": proposal_id,
                 "stageTotal": PROPOSAL_TOTALS.get(proposal_id, 1),
+                "iterationTiming": empty_iteration_timing(),
             },
         )
+        state.setdefault("iterationTiming", empty_iteration_timing())
         state["status"] = status
         state["stageLabel"] = stage_label
         if progress is not None:
@@ -2341,6 +2403,137 @@ class ComparatorService:
         state["updatedAt"] = utc_now()
         run["updatedAt"] = utc_now()
         self._refresh_run_progress_unlocked(run)
+
+    def _iteration_timing(self, state: dict[str, Any]) -> dict[str, Any]:
+        timing = state.get("iterationTiming")
+        if not isinstance(timing, dict):
+            timing = empty_iteration_timing()
+            state["iterationTiming"] = timing
+        defaults = empty_iteration_timing()
+        for key, value in defaults.items():
+            timing.setdefault(key, value)
+        return timing
+
+    def _proposal_iteration_total(
+        self,
+        run: dict[str, Any],
+        state: dict[str, Any],
+        generation_total: int | None = None,
+    ) -> int:
+        config = run.get("config") or {}
+        repetitions = max(1, int(config.get("repetitionsK") or 1))
+        configured_generations = max(0, int(config.get("generaciones") or 0))
+        observed_generations = max(0, int(generation_total or state.get("generationTotal") or 0))
+        per_repetition = configured_generations if configured_generations > 0 else observed_generations
+        return max(0, per_repetition * repetitions)
+
+    def _iteration_key(self, state: dict[str, Any], generation_index: int) -> str:
+        repetition_index = max(1, int(state.get("currentRepetitionIndex") or 1))
+        return f"{repetition_index}:{generation_index}"
+
+    def _global_iteration_index(
+        self,
+        state: dict[str, Any],
+        generation_index: int,
+        generation_total: int,
+    ) -> int:
+        repetition_index = max(1, int(state.get("currentRepetitionIndex") or 1))
+        per_repetition = max(1, int(generation_total or state.get("generationTotal") or 1))
+        return (repetition_index - 1) * per_repetition + generation_index
+
+    def _refresh_iteration_counts(
+        self,
+        run: dict[str, Any],
+        state: dict[str, Any],
+        generation_total: int | None = None,
+    ) -> None:
+        timing = self._iteration_timing(state)
+        total = self._proposal_iteration_total(run, state, generation_total)
+        completed = max(
+            int(timing.get("completedIterations") or 0),
+            len(timing.get("completedIterationKeys") or []),
+        )
+        if total > 0:
+            completed = min(completed, total)
+        timing["completedIterations"] = completed
+        timing["totalIterations"] = total if total > 0 else None
+        timing["remainingIterations"] = max(0, total - completed) if total > 0 else None
+
+    def _mark_generation_started_unlocked(
+        self,
+        run: dict[str, Any],
+        state: dict[str, Any],
+        generation_index: int,
+        generation_total: int,
+        elapsed_seconds: float | None,
+    ) -> None:
+        timing = self._iteration_timing(state)
+        key = self._iteration_key(state, generation_index)
+        timing["activeIterationKey"] = key
+        timing["activeStartedAtEpoch"] = time.time()
+        timing["activeElapsedSeconds"] = elapsed_seconds
+        self._refresh_iteration_counts(run, state, generation_total)
+
+    def _record_iteration_duration_unlocked(
+        self,
+        run: dict[str, Any],
+        state: dict[str, Any],
+        generation_index: int,
+        generation_total: int,
+        duration_seconds: float | None = None,
+        elapsed_seconds: float | None = None,
+    ) -> bool:
+        timing = self._iteration_timing(state)
+        key = self._iteration_key(state, generation_index)
+        completed_keys = timing.setdefault("completedIterationKeys", [])
+        if key in completed_keys:
+            if elapsed_seconds is not None:
+                timing["previousElapsedSeconds"] = elapsed_seconds
+            self._refresh_iteration_counts(run, state, generation_total)
+            return False
+
+        duration = duration_seconds if duration_seconds is not None and duration_seconds >= 0 else None
+        active_key = timing.get("activeIterationKey")
+        if duration is None and elapsed_seconds is not None:
+            active_elapsed = timing.get("activeElapsedSeconds")
+            if active_key == key and isinstance(active_elapsed, (int, float)) and elapsed_seconds > active_elapsed:
+                duration = elapsed_seconds - active_elapsed
+            else:
+                previous_elapsed = timing.get("previousElapsedSeconds")
+                if isinstance(previous_elapsed, (int, float)) and elapsed_seconds > previous_elapsed:
+                    duration = elapsed_seconds - previous_elapsed
+
+        if duration is None and active_key == key:
+            started_at = timing.get("activeStartedAtEpoch")
+            if isinstance(started_at, (int, float)):
+                duration = max(0.0, time.time() - started_at)
+
+        if duration is None or not math.isfinite(duration) or duration < 0:
+            if elapsed_seconds is not None:
+                timing["previousElapsedSeconds"] = elapsed_seconds
+            self._refresh_iteration_counts(run, state, generation_total)
+            return False
+
+        samples = timing.setdefault("durationSamples", [])
+        samples.append(float(duration))
+        completed_keys.append(key)
+        timing["completedIterations"] = max(
+            int(timing.get("completedIterations") or 0),
+            self._global_iteration_index(state, generation_index, generation_total),
+        )
+        average = sum(samples) / len(samples)
+        timing["averageIterationSeconds"] = average
+        timing["averageIterationLabel"] = format_duration(average)
+        timing["lastIterationSeconds"] = float(duration)
+        timing["lastIterationLabel"] = format_duration(duration)
+        if active_key == key:
+            timing["activeIterationKey"] = None
+            timing["activeStartedAtEpoch"] = None
+            timing["activeElapsedSeconds"] = None
+        if elapsed_seconds is not None:
+            timing["previousElapsedSeconds"] = elapsed_seconds
+        self._refresh_iteration_counts(run, state, generation_total)
+        return True
 
     def _apply_log_progress_unlocked(self, run: dict[str, Any], proposal_id: str, message: str) -> None:
         if proposal_id == "system":
@@ -2370,6 +2563,21 @@ class ComparatorService:
             self._refresh_run_progress_unlocked(run)
             return
 
+        generation_time = log_generation_time_seconds(progress_message)
+        if generation_time is not None and generation_time >= 0:
+            generation_index = state.get("generationIndex")
+            generation_total = state.get("generationTotal")
+            if generation_index and generation_total:
+                self._record_iteration_duration_unlocked(
+                    run,
+                    state,
+                    int(generation_index),
+                    int(generation_total),
+                    duration_seconds=generation_time,
+                )
+            self._refresh_run_progress_unlocked(run)
+            return
+
         generation_match = GENERATION_RE.search(progress_message)
         if generation_match:
             generation_index = int(generation_match.group(1))
@@ -2381,6 +2589,23 @@ class ComparatorService:
             state["generationTotal"] = generation_total
             state["stageLabel"] = f"Generacion {generation_index}/{generation_total}"
             state["progress"] = clamp(base + (generation_index / max(generation_total, 1)) / stage_total, 0.0, 0.98)
+            elapsed_seconds = log_elapsed_seconds(progress_message)
+            if proposal_id == "binary-mopso-cd" and not GENERATION_STARTED_RE.search(progress_message):
+                self._record_iteration_duration_unlocked(
+                    run,
+                    state,
+                    generation_index,
+                    generation_total,
+                    elapsed_seconds=elapsed_seconds,
+                )
+            else:
+                self._mark_generation_started_unlocked(
+                    run,
+                    state,
+                    generation_index,
+                    generation_total,
+                    elapsed_seconds,
+                )
             self._refresh_run_progress_unlocked(run)
             return
 
@@ -2396,6 +2621,91 @@ class ComparatorService:
             state["stageLabel"] = progress_message[:120]
         self._refresh_run_progress_unlocked(run)
 
+    def _state_iteration_eta_seconds(self, state: dict[str, Any]) -> float | None:
+        timing = self._iteration_timing(state)
+        average = timing.get("averageIterationSeconds")
+        remaining_iterations = timing.get("remainingIterations")
+        completed_iterations = int(timing.get("completedIterations") or 0)
+        if (
+            completed_iterations <= 0
+            or not isinstance(average, (int, float))
+            or not math.isfinite(float(average))
+            or remaining_iterations is None
+        ):
+            return None
+        return max(0.0, float(average) * max(0, int(remaining_iterations)))
+
+    def _iteration_basis_label(self, states: list[dict[str, Any]]) -> str:
+        if not states:
+            return "Sin propuesta activa."
+        if len(states) > 1:
+            ready = sum(1 for state in states if self._state_iteration_eta_seconds(state) is not None)
+            return f"{ready}/{len(states)} propuesta(s) activa(s) con muestras de iteracion."
+
+        timing = self._iteration_timing(states[0])
+        completed = int(timing.get("completedIterations") or 0)
+        total = timing.get("totalIterations")
+        remaining = timing.get("remainingIterations")
+        average_label = timing.get("averageIterationLabel") or "No disponible"
+        if completed <= 0:
+            total_label = f"0/{total}" if total else "0"
+            return f"Esperando primera iteracion completada ({total_label})."
+        if total:
+            return f"{average_label} promedio/iteracion; {completed}/{total} completadas; {remaining or 0} restantes."
+        return f"{average_label} promedio/iteracion; {completed} completada(s)."
+
+    def _iteration_eta_fields(
+        self,
+        run: dict[str, Any],
+        active_states: list[dict[str, Any]],
+        queued: int,
+    ) -> dict[str, Any]:
+        base = {
+            "remainingSeconds": None,
+            "remainingLabel": "No disponible",
+            "etaBasisLabel": self._iteration_basis_label(active_states),
+            "etaScopeLabel": "No aplica",
+        }
+        if run.get("status") != STATUS_RUNNING:
+            return base
+        if not active_states:
+            base["etaScopeLabel"] = "Sin propuesta activa."
+            return base
+
+        estimates = [self._state_iteration_eta_seconds(state) for state in active_states]
+        missing_estimate = any(value is None for value in estimates)
+        mode = (run.get("config") or {}).get("executionMode") or EXECUTION_MODE_FAIR_SEQUENTIAL
+
+        if mode == EXECUTION_MODE_EXPLORATORY_PARALLEL:
+            if missing_estimate:
+                base["remainingLabel"] = "Esperando primera iteracion"
+                base["etaScopeLabel"] = "Paralelo exploratorio; faltan muestras de propuestas activas."
+                return base
+            remaining = max(float(value) for value in estimates if value is not None)
+            base["remainingSeconds"] = remaining
+            base["remainingLabel"] = format_duration(remaining)
+            base["etaScopeLabel"] = (
+                "Maximo entre propuestas activas; cola no estimada."
+                if queued
+                else "Maximo entre propuestas activas."
+            )
+            return base
+
+        active_remaining = estimates[0]
+        if active_remaining is None:
+            base["remainingLabel"] = "Esperando primera iteracion"
+            base["etaScopeLabel"] = "Propuesta activa sin muestras suficientes."
+            return base
+
+        base["remainingSeconds"] = float(active_remaining)
+        base["remainingLabel"] = format_duration(float(active_remaining))
+        base["etaScopeLabel"] = (
+            "Propuesta activa; cola no estimada."
+            if queued
+            else "Corrida activa estimable por iteraciones."
+        )
+        return base
+
     def _refresh_run_progress_unlocked(self, run: dict[str, Any]) -> None:
         states = list((run.get("proposalStates") or {}).values())
         if not states:
@@ -2405,7 +2715,8 @@ class ComparatorService:
         percent = int(round(100 * progress_sum / len(states)))
         percent = int(clamp(percent, 0, 100))
 
-        active = next((state for state in states if state.get("status") == STATUS_RUNNING), None)
+        active_states = [state for state in states if state.get("status") == STATUS_RUNNING]
+        active = active_states[0] if active_states else None
         queued = sum(1 for state in states if state.get("status") == STATUS_QUEUED)
         completed = sum(1 for state in states if state.get("status") == STATUS_COMPLETED)
         failed = sum(1 for state in states if state.get("status") == STATUS_FAILED)
@@ -2413,9 +2724,7 @@ class ComparatorService:
 
         started_at = run.get("startedAtEpoch")
         elapsed = max(0.0, time.time() - started_at) if started_at else 0.0
-        remaining = None
-        if run.get("status") == STATUS_RUNNING and percent > 0 and percent < 100:
-            remaining = elapsed * (100 - percent) / percent
+        eta_fields = self._iteration_eta_fields(run, active_states, queued)
 
         if active:
             detail = f"{active.get('displayName', active.get('proposalId'))}: {active.get('stageLabel', 'Ejecutando')}"
@@ -2429,8 +2738,10 @@ class ComparatorService:
             "detail": detail,
             "elapsedSeconds": elapsed,
             "elapsedLabel": format_duration(elapsed),
-            "remainingSeconds": remaining,
-            "remainingLabel": format_duration(remaining),
+            "remainingSeconds": eta_fields["remainingSeconds"],
+            "remainingLabel": eta_fields["remainingLabel"],
+            "etaBasisLabel": eta_fields["etaBasisLabel"],
+            "etaScopeLabel": eta_fields["etaScopeLabel"],
             "activeProposalId": active.get("proposalId") if active else None,
             "activeProposalName": active.get("displayName") if active else None,
             "queuedProposals": queued,

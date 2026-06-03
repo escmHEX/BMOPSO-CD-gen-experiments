@@ -5101,6 +5101,8 @@ function renderComparatorProgress(progress, config = null) {
     renderDefinitionList(dom.comparatorProgressDetails, [
       ["Tiempo transcurrido", "--"],
       ["Tiempo restante", "--"],
+      ["Base estimacion", "--"],
+      ["Alcance ETA", "--"],
       ["Propuesta activa", "--"],
       ["Cola", "--"],
     ]);
@@ -5115,6 +5117,8 @@ function renderComparatorProgress(progress, config = null) {
   renderDefinitionList(dom.comparatorProgressDetails, [
     ["Tiempo transcurrido", progress.elapsedLabel || "--"],
     ["Tiempo restante estimado", progress.remainingLabel || "No disponible"],
+    ["Base estimacion", progress.etaBasisLabel || "No disponible"],
+    ["Alcance ETA", progress.etaScopeLabel || "No disponible"],
     ["Propuesta activa", progress.activeProposalName || "--"],
     ["Modo ejecucion", config?.executionPolicy?.label || config?.executionMode || "--"],
     ["Paralelismo efectivo", config?.executionPolicy ? `${config.executionPolicy.effectiveParallelism} de ${config.executionPolicy.requestedParallelism} solicitado(s)` : "--"],
