@@ -9,26 +9,45 @@
     "seed": 42,
     "repetitionsK": 1,
     "proposalParallelism": 1,
-    "timeoutMinutes": 60
+    "timeoutMinutes": 60,
+    "updateRepositoriesBeforeRun": true
   },
   "proposals": {
     "evolmd": {
       "repositoryPath": "baselines/external/evolmd",
       "pythonExecutable": "",
       "pythonPathEntries": [],
-      "requiredModules": ["torch", "bert_score", "ollama", "nltk", "pydantic", "tqdm"]
+      "requiredModules": ["torch", "bert_score", "ollama", "nltk", "pydantic", "tqdm"],
+      "git": {
+        "remote": "origin",
+        "branch": "main",
+        "pullMode": "ff-only",
+        "expectedRemoteUrl": "https://github.com/escmHEX/MDPI-EVOLMD.git"
+      }
     },
     "evolmd-mo": {
       "repositoryPath": "baselines/external/evolmd-mo",
       "pythonExecutable": "",
       "pythonPathEntries": [],
-      "requiredModules": ["torch", "bert_score", "sentence_transformers", "sklearn", "pandas", "numpy", "spacy", "pymoo", "ollama"]
+      "requiredModules": ["torch", "bert_score", "sentence_transformers", "sklearn", "pandas", "numpy", "spacy", "pymoo", "ollama"],
+      "git": {
+        "remote": "origin",
+        "branch": "main",
+        "pullMode": "ff-only",
+        "expectedRemoteUrl": "https://github.com/escmHEX/EVOLMD-MO.git"
+      }
     },
     "binary-mopso-cd": {
       "repositoryPath": "C:\\Users\\Admin\\Desktop\\Implementaci\u00f3n\\Binary MOPSO-CD",
       "pythonExecutable": "C:\\Users\\Admin\\Desktop\\Implementaci\u00f3n\\Binary MOPSO-CD\\.venv\\Scripts\\python.exe",
       "pythonPathEntries": [],
-      "requiredModules": ["torch", "sentence_transformers", "sklearn", "numpy", "spacy", "ollama"]
+      "requiredModules": ["torch", "sentence_transformers", "sklearn", "numpy", "spacy", "ollama"],
+      "git": {
+        "remote": "origin",
+        "branch": "dev",
+        "pullMode": "ff-only",
+        "expectedRemoteUrl": "https://github.com/escmHEX/BMOPSO-CD.git"
+      }
     }
   },
   "charting": {

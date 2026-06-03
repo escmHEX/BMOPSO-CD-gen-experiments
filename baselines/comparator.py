@@ -44,6 +44,9 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 STAGE_RE = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s+(.+)$")
 GENERATION_RE = re.compile(r"(?:Generaci[oó]n|generation)\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
 PERCENT_RE = re.compile(r"(\d{1,3})%")
+GIT_REMOTE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+SUPPORTED_GIT_PULL_MODES = {"ff-only"}
 PROPOSAL_TOTALS = {proposal_id: total for proposal_id, total in (("evolmd", 6), ("evolmd-mo", 5), ("binary-mopso-cd", 6))}
 COMPARATOR_CONFIG_PATH = Path(os.environ.get("COMPARATOR_CONFIG_PATH", Path(__file__).with_name("comparator_config.json")))
 
@@ -58,11 +61,34 @@ def load_comparator_config() -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def config_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "si"}:
+        return True
+    if text in {"false", "0", "no"}:
+        return False
+    return default
+
+
+def normalized_git_url(value: Any) -> str:
+    url = str(value or "").strip().replace("\\", "/")
+    if url.endswith("/"):
+        url = url[:-1]
+    if url.endswith(".git"):
+        url = url[:-4]
+    return url.lower()
+
+
 COMPARATOR_CONFIG = load_comparator_config()
 COMPARATOR_DEFAULTS = COMPARATOR_CONFIG.get("defaults") if isinstance(COMPARATOR_CONFIG.get("defaults"), dict) else {}
 COMPARATOR_PROPOSAL_CONFIG = COMPARATOR_CONFIG.get("proposals") if isinstance(COMPARATOR_CONFIG.get("proposals"), dict) else {}
 POSTHOC_EMBEDDING_MODEL = str(COMPARATOR_DEFAULTS.get("posthocEmbeddingModel") or "all-MiniLM-L6-v2")
 DEFAULT_SELECTED_PROPOSALS = tuple(COMPARATOR_DEFAULTS.get("selectedProposalIds") or ("evolmd", "evolmd-mo", "binary-mopso-cd"))
+DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN = config_bool(COMPARATOR_DEFAULTS.get("updateRepositoriesBeforeRun"), False)
 
 
 def utc_now() -> str:
@@ -585,6 +611,11 @@ def proposal_config(proposal_id: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def proposal_git_defaults(proposal_id: str) -> dict[str, Any]:
+    value = proposal_config(proposal_id).get("git")
+    return value if isinstance(value, dict) else {}
+
+
 def tuple_from_config(value: Any) -> tuple[str, ...]:
     if not isinstance(value, list):
         return ()
@@ -610,6 +641,10 @@ class ProposalDefinition:
     python_executable: str = ""
     python_path_entries: tuple[str, ...] = ()
     required_modules: tuple[str, ...] = ()
+    git_remote: str = "origin"
+    git_branch: str = "main"
+    git_pull_mode: str = "ff-only"
+    git_expected_remote_url: str = ""
 
 
 PROPOSALS: tuple[ProposalDefinition, ...] = (
@@ -641,6 +676,10 @@ PROPOSALS: tuple[ProposalDefinition, ...] = (
         python_executable=str(proposal_config("evolmd").get("pythonExecutable") or ""),
         python_path_entries=tuple_from_config(proposal_config("evolmd").get("pythonPathEntries")),
         required_modules=tuple_from_config(proposal_config("evolmd").get("requiredModules")),
+        git_remote=str(proposal_git_defaults("evolmd").get("remote") or "origin"),
+        git_branch=str(proposal_git_defaults("evolmd").get("branch") or "main"),
+        git_pull_mode=str(proposal_git_defaults("evolmd").get("pullMode") or "ff-only"),
+        git_expected_remote_url=str(proposal_git_defaults("evolmd").get("expectedRemoteUrl") or ""),
     ),
     ProposalDefinition(
         proposal_id="evolmd-mo",
@@ -670,6 +709,10 @@ PROPOSALS: tuple[ProposalDefinition, ...] = (
         python_executable=str(proposal_config("evolmd-mo").get("pythonExecutable") or ""),
         python_path_entries=tuple_from_config(proposal_config("evolmd-mo").get("pythonPathEntries")),
         required_modules=tuple_from_config(proposal_config("evolmd-mo").get("requiredModules")),
+        git_remote=str(proposal_git_defaults("evolmd-mo").get("remote") or "origin"),
+        git_branch=str(proposal_git_defaults("evolmd-mo").get("branch") or "main"),
+        git_pull_mode=str(proposal_git_defaults("evolmd-mo").get("pullMode") or "ff-only"),
+        git_expected_remote_url=str(proposal_git_defaults("evolmd-mo").get("expectedRemoteUrl") or ""),
     ),
     ProposalDefinition(
         proposal_id="binary-mopso-cd",
@@ -732,6 +775,10 @@ PROPOSALS: tuple[ProposalDefinition, ...] = (
         python_executable=str(proposal_config("binary-mopso-cd").get("pythonExecutable") or ""),
         python_path_entries=tuple_from_config(proposal_config("binary-mopso-cd").get("pythonPathEntries")),
         required_modules=tuple_from_config(proposal_config("binary-mopso-cd").get("requiredModules")),
+        git_remote=str(proposal_git_defaults("binary-mopso-cd").get("remote") or "origin"),
+        git_branch=str(proposal_git_defaults("binary-mopso-cd").get("branch") or "dev"),
+        git_pull_mode=str(proposal_git_defaults("binary-mopso-cd").get("pullMode") or "ff-only"),
+        git_expected_remote_url=str(proposal_git_defaults("binary-mopso-cd").get("expectedRemoteUrl") or ""),
     ),
 )
 
@@ -882,34 +929,45 @@ class ComparatorService:
     def list_proposals(self) -> list[dict[str, Any]]:
         proposals = []
         for proposal in PROPOSALS:
+            repository = resolve_repository(self.root, proposal)
             entrypoint_available = proposal_entrypoint_exists(self.root, proposal)
             dependencies = check_proposal_dependencies(self.root, proposal) if entrypoint_available else {
                 "ok": False,
                 "missing": list(proposal.required_modules),
-                "pythonExecutable": proposal_python_executable(self.root, resolve_repository(self.root, proposal), proposal),
+                "pythonExecutable": proposal_python_executable(self.root, repository, proposal),
                 "error": "Proposal entrypoint is missing.",
             }
+            git_config = self._default_git_config(proposal)
             proposals.append(
                 {
-                "proposalId": proposal.proposal_id,
-                "displayName": proposal.display_name,
-                "description": proposal.description,
-                "repositoryPath": str(resolve_repository(self.root, proposal)),
-                "pythonExecutable": dependencies.get("pythonExecutable"),
-                "objectiveNames": list(proposal.objective_names),
-                "singleObjective": proposal.single_objective,
-                "kind": proposal.kind,
-                "resultFile": proposal.result_file,
-                "finalSelectionFile": proposal.final_selection_file,
-                "metricsSeriesFile": proposal.metrics_series_file,
-                "supportsHistoryExport": proposal.supports_history_export,
-                "entrypointAvailable": entrypoint_available,
-                "dependencyStatus": dependencies,
-                "cliOptions": list(proposal.cli_options),
-                "available": entrypoint_available and bool(dependencies.get("ok")),
-            }
+                    "proposalId": proposal.proposal_id,
+                    "displayName": proposal.display_name,
+                    "description": proposal.description,
+                    "repositoryPath": str(repository),
+                    "pythonExecutable": dependencies.get("pythonExecutable"),
+                    "objectiveNames": list(proposal.objective_names),
+                    "singleObjective": proposal.single_objective,
+                    "kind": proposal.kind,
+                    "resultFile": proposal.result_file,
+                    "finalSelectionFile": proposal.final_selection_file,
+                    "metricsSeriesFile": proposal.metrics_series_file,
+                    "supportsHistoryExport": proposal.supports_history_export,
+                    "entrypointAvailable": entrypoint_available,
+                    "dependencyStatus": dependencies,
+                    "cliOptions": list(proposal.cli_options),
+                    "git": {
+                        **git_config,
+                        "snapshot": self._repository_git_snapshot(repository, git_config),
+                    },
+                    "available": entrypoint_available and bool(dependencies.get("ok")),
+                }
             )
         return proposals
+
+    def public_defaults(self) -> dict[str, Any]:
+        return {
+            "updateRepositoriesBeforeRun": DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN,
+        }
 
     def _initial_proposal_state(self, proposal: ProposalDefinition) -> dict[str, Any]:
         return {
@@ -956,6 +1014,7 @@ class ComparatorService:
                 "remainingLabel": "No disponible",
             },
             "costSummary": summarize_costs([], 0.0),
+            "repositoryUpdates": {},
             "error": None,
             "cancelRequested": False,
             "activeProcesses": {},
@@ -1016,6 +1075,11 @@ class ComparatorService:
             "timeoutMinutes": self._int_between(payload.get("timeoutMinutes", COMPARATOR_DEFAULTS.get("timeoutMinutes", 60)), "timeoutMinutes", 1, 1440),
             "selectedProposalIds": selected,
             "proposalConfigs": self._proposal_configs(payload.get("proposalConfigs"), selected),
+            "updateRepositoriesBeforeRun": self._bool_config_value(
+                payload.get("updateRepositoriesBeforeRun", DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN),
+                "updateRepositoriesBeforeRun",
+            ),
+            "proposalGitConfigs": self._proposal_git_configs(payload.get("proposalGitConfigs"), selected),
         }
 
     def _selected_proposal_ids(self, value: Any) -> list[str]:
@@ -1062,6 +1126,78 @@ class ComparatorService:
                 "cliValues": self._normalize_cli_values(proposal, cli_values),
             }
         return result
+
+    def _proposal_git_configs(self, value: Any, selected: list[str]) -> dict[str, dict[str, str]]:
+        if value is None:
+            value = {}
+        if not isinstance(value, dict):
+            raise ValueError("proposalGitConfigs must be an object.")
+
+        result: dict[str, dict[str, str]] = {}
+        for proposal_id in selected:
+            proposal = PROPOSAL_BY_ID[proposal_id]
+            raw = value.get(proposal_id) or {}
+            if not isinstance(raw, dict):
+                raise ValueError(f"proposalGitConfigs.{proposal_id} must be an object.")
+            defaults = self._default_git_config(proposal)
+            remote = self._safe_git_remote(raw.get("remote", defaults["remote"]), f"proposalGitConfigs.{proposal_id}.remote")
+            branch = self._safe_git_branch(raw.get("branch", defaults["branch"]), f"proposalGitConfigs.{proposal_id}.branch")
+            pull_mode = str(raw.get("pullMode", defaults["pullMode"]) or "").strip()
+            if pull_mode not in SUPPORTED_GIT_PULL_MODES:
+                raise ValueError(
+                    f"proposalGitConfigs.{proposal_id}.pullMode must be one of: "
+                    + ", ".join(sorted(SUPPORTED_GIT_PULL_MODES))
+                )
+            result[proposal_id] = {
+                "remote": remote,
+                "branch": branch,
+                "pullMode": pull_mode,
+                "expectedRemoteUrl": str(raw.get("expectedRemoteUrl", defaults.get("expectedRemoteUrl") or "") or "").strip(),
+            }
+        return result
+
+    def _default_git_config(self, proposal: ProposalDefinition) -> dict[str, str]:
+        return {
+            "remote": proposal.git_remote,
+            "branch": proposal.git_branch,
+            "pullMode": proposal.git_pull_mode,
+            "expectedRemoteUrl": proposal.git_expected_remote_url,
+        }
+
+    def _bool_config_value(self, value: Any, label: str) -> bool:
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"true", "1", "yes", "si"}:
+            return True
+        if text in {"false", "0", "no"}:
+            return False
+        raise ValueError(f"{label} must be true or false.")
+
+    def _safe_git_remote(self, value: Any, label: str) -> str:
+        remote = str(value or "").strip()
+        if not remote:
+            raise ValueError(f"{label} is required.")
+        if not GIT_REMOTE_RE.fullmatch(remote):
+            raise ValueError(f"{label} has unsupported characters.")
+        return remote
+
+    def _safe_git_branch(self, value: Any, label: str) -> str:
+        branch = str(value or "").strip()
+        if not branch:
+            raise ValueError(f"{label} is required.")
+        invalid = (
+            not GIT_BRANCH_RE.fullmatch(branch)
+            or ".." in branch
+            or "@{" in branch
+            or "\\" in branch
+            or branch.startswith("/")
+            or branch.endswith("/")
+            or branch.endswith(".")
+        )
+        if invalid:
+            raise ValueError(f"{label} is not a safe branch name.")
+        return branch
 
     def _configurable_cli_options(self, proposal: ProposalDefinition) -> dict[str, dict[str, Any]]:
         return {
@@ -1240,6 +1376,216 @@ class ComparatorService:
                 detail = f"missing modules: {missing}" if missing else dependency_status.get("error") or "dependency check failed"
                 raise ValueError(f"{proposal.display_name} is not available: {detail}.")
 
+    def _run_git(self, repository: Path, args: list[str], timeout_seconds: int = 30) -> dict[str, Any]:
+        command = ["git", "-C", str(repository), *args]
+        started = time.perf_counter()
+        try:
+            completed = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_seconds,
+                check=False,
+            )
+            return {
+                "command": command_label(command),
+                "returnCode": completed.returncode,
+                "stdout": completed.stdout.strip(),
+                "stderr": completed.stderr.strip(),
+                "durationSeconds": time.perf_counter() - started,
+            }
+        except FileNotFoundError:
+            return {
+                "command": command_label(command),
+                "returnCode": 127,
+                "stdout": "",
+                "stderr": "git executable was not found.",
+                "durationSeconds": time.perf_counter() - started,
+            }
+        except subprocess.TimeoutExpired as error:
+            return {
+                "command": command_label(command),
+                "returnCode": 124,
+                "stdout": (error.stdout or "").strip() if isinstance(error.stdout, str) else "",
+                "stderr": (error.stderr or "").strip() if isinstance(error.stderr, str) else "",
+                "durationSeconds": time.perf_counter() - started,
+            }
+
+    def _git_stdout(self, repository: Path, args: list[str], timeout_seconds: int = 10) -> str | None:
+        result = self._run_git(repository, args, timeout_seconds)
+        if result["returnCode"] != 0:
+            return None
+        return str(result.get("stdout") or "").strip() or None
+
+    def _repository_git_snapshot(self, repository: Path, git_config: dict[str, str]) -> dict[str, Any]:
+        snapshot: dict[str, Any] = {
+            "repositoryPath": str(repository),
+            "remote": git_config.get("remote"),
+            "configuredBranch": git_config.get("branch"),
+            "isGit": False,
+            "branch": None,
+            "commit": None,
+            "shortCommit": None,
+            "dirty": False,
+            "dirtyCount": 0,
+            "upstream": None,
+            "remoteUrl": None,
+            "error": None,
+        }
+        if not repository.exists():
+            snapshot["error"] = "Repository path does not exist."
+            return snapshot
+
+        inside = self._run_git(repository, ["rev-parse", "--is-inside-work-tree"], 10)
+        if inside["returnCode"] != 0 or str(inside.get("stdout") or "").strip().lower() != "true":
+            snapshot["error"] = inside.get("stderr") or "Path is not a Git work tree."
+            return snapshot
+
+        snapshot["isGit"] = True
+        snapshot["branch"] = self._git_stdout(repository, ["rev-parse", "--abbrev-ref", "HEAD"], 10)
+        snapshot["commit"] = self._git_stdout(repository, ["rev-parse", "HEAD"], 10)
+        snapshot["shortCommit"] = self._git_stdout(repository, ["rev-parse", "--short", "HEAD"], 10)
+        snapshot["upstream"] = self._git_stdout(repository, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], 10)
+        snapshot["remoteUrl"] = self._git_stdout(repository, ["remote", "get-url", str(git_config.get("remote") or "origin")], 10)
+        status = self._run_git(repository, ["status", "--porcelain"], 10)
+        if status["returnCode"] == 0:
+            status_lines = [line for line in str(status.get("stdout") or "").splitlines() if line.strip()]
+            snapshot["dirty"] = bool(status_lines)
+            snapshot["dirtyCount"] = len(status_lines)
+        else:
+            snapshot["error"] = status.get("stderr") or "Could not read Git status."
+        return snapshot
+
+    def _repository_update_disabled(self, proposal: ProposalDefinition, git_config: dict[str, str]) -> dict[str, Any]:
+        repository = resolve_repository(self.root, proposal)
+        snapshot = self._repository_git_snapshot(repository, git_config)
+        return {
+            "proposalId": proposal.proposal_id,
+            "displayName": proposal.display_name,
+            "repositoryPath": str(repository),
+            "remote": git_config["remote"],
+            "branch": git_config["branch"],
+            "pullMode": git_config["pullMode"],
+            "expectedRemoteUrl": git_config.get("expectedRemoteUrl") or "",
+            "status": "disabled",
+            "message": "Repository update is disabled for this run.",
+            "before": snapshot,
+            "after": snapshot,
+            "fetch": None,
+            "pull": None,
+            "durationSeconds": 0.0,
+        }
+
+    def _update_repository_for_proposal(
+        self,
+        proposal: ProposalDefinition,
+        git_config: dict[str, str],
+    ) -> dict[str, Any]:
+        repository = resolve_repository(self.root, proposal)
+        started = time.perf_counter()
+        result: dict[str, Any] = {
+            "proposalId": proposal.proposal_id,
+            "displayName": proposal.display_name,
+            "repositoryPath": str(repository),
+            "remote": git_config["remote"],
+            "branch": git_config["branch"],
+            "pullMode": git_config["pullMode"],
+            "expectedRemoteUrl": git_config.get("expectedRemoteUrl") or "",
+            "status": "pending",
+            "message": "",
+            "before": None,
+            "after": None,
+            "fetch": None,
+            "pull": None,
+            "durationSeconds": 0.0,
+        }
+
+        before = self._repository_git_snapshot(repository, git_config)
+        result["before"] = before
+        if not before.get("isGit"):
+            result["status"] = "skipped_not_git"
+            result["message"] = before.get("error") or "Repository is not a Git work tree."
+        elif git_config.get("expectedRemoteUrl") and normalized_git_url(before.get("remoteUrl")) != normalized_git_url(git_config.get("expectedRemoteUrl")):
+            result["status"] = "skipped_remote_mismatch"
+            result["message"] = (
+                f"Skipped pull because {git_config['remote']} points to {before.get('remoteUrl') or 'unknown'}, "
+                f"not {git_config.get('expectedRemoteUrl')}."
+            )
+        elif before.get("branch") != git_config["branch"]:
+            result["status"] = "skipped_branch_mismatch"
+            result["message"] = (
+                f"Skipped pull because current branch is {before.get('branch') or 'unknown'}, "
+                f"not {git_config['branch']}."
+            )
+        elif before.get("dirty"):
+            result["status"] = "skipped_dirty"
+            result["message"] = f"Skipped pull because the repository has {before.get('dirtyCount', 0)} local change(s)."
+        else:
+            fetch = self._run_git(repository, ["fetch", git_config["remote"], git_config["branch"]], 120)
+            result["fetch"] = fetch
+            if fetch["returnCode"] != 0:
+                result["status"] = "fetch_failed"
+                result["message"] = fetch.get("stderr") or "git fetch failed."
+            else:
+                pull = self._run_git(
+                    repository,
+                    ["pull", "--ff-only", git_config["remote"], git_config["branch"]],
+                    120,
+                )
+                result["pull"] = pull
+                if pull["returnCode"] != 0:
+                    result["status"] = "pull_failed"
+                    result["message"] = pull.get("stderr") or "git pull --ff-only failed."
+                else:
+                    output = f"{pull.get('stdout') or ''}\n{pull.get('stderr') or ''}".lower()
+                    result["status"] = "up_to_date" if "already up to date" in output or "already up-to-date" in output else "pulled"
+                    result["message"] = pull.get("stdout") or pull.get("stderr") or "Repository updated."
+
+        result["after"] = self._repository_git_snapshot(repository, git_config)
+        result["durationSeconds"] = time.perf_counter() - started
+        return result
+
+    def _prepare_repositories_before_run(self, run: dict[str, Any], proposals: list[ProposalDefinition]) -> None:
+        should_update = bool(run["config"].get("updateRepositoriesBeforeRun"))
+        git_configs = run["config"].get("proposalGitConfigs") or {}
+
+        for proposal in proposals:
+            with self._lock:
+                if run.get("cancelRequested"):
+                    self._append_log_unlocked(run, "system", "Run cancelled before repository preparation finished.")
+                    self._write_summary_unlocked(run)
+                    return
+                self._set_proposal_state_unlocked(
+                    run,
+                    proposal.proposal_id,
+                    STATUS_RUNNING,
+                    "Actualizando repositorio" if should_update else "Registrando revision Git",
+                    0.02,
+                )
+                self._write_summary_unlocked(run)
+
+            git_config = git_configs.get(proposal.proposal_id) or self._default_git_config(proposal)
+            update = (
+                self._update_repository_for_proposal(proposal, git_config)
+                if should_update
+                else self._repository_update_disabled(proposal, git_config)
+            )
+            status = update.get("status")
+            short_commit = ((update.get("after") or {}).get("shortCommit") or (update.get("before") or {}).get("shortCommit") or "--")
+
+            with self._lock:
+                run.setdefault("repositoryUpdates", {})[proposal.proposal_id] = update
+                self._append_log_unlocked(
+                    run,
+                    proposal.proposal_id,
+                    f"Git {status}: {update.get('remote')}/{update.get('branch')} at {short_commit}. {update.get('message') or ''}",
+                )
+                self._set_proposal_state_unlocked(run, proposal.proposal_id, STATUS_QUEUED, "En cola", 0.0)
+                self._write_summary_unlocked(run)
+
     def _run_worker(self, run_id: str) -> None:
         with self._lock:
             run = self._runs[run_id]
@@ -1251,6 +1597,7 @@ class ComparatorService:
 
         try:
             selected_proposals = self._selected_proposals(run["config"])
+            self._prepare_repositories_before_run(run, selected_proposals)
             parallelism = min(run["config"]["proposalParallelism"], len(selected_proposals))
             if parallelism <= 1:
                 self._run_proposals_sequential(run, selected_proposals)
@@ -1329,6 +1676,20 @@ class ComparatorService:
                     self._write_summary_unlocked(run)
 
     def _record_proposal_result_unlocked(self, run: dict[str, Any], result: dict[str, Any]) -> None:
+        repository_update = (run.get("repositoryUpdates") or {}).get(result["proposalId"])
+        if repository_update:
+            result["repositoryUpdate"] = repository_update
+            snapshot = repository_update.get("after") or repository_update.get("before") or {}
+            result["gitRevision"] = {
+                "branch": snapshot.get("branch"),
+                "commit": snapshot.get("commit"),
+                "shortCommit": snapshot.get("shortCommit"),
+                "dirty": snapshot.get("dirty"),
+                "dirtyCount": snapshot.get("dirtyCount"),
+                "remote": repository_update.get("remote"),
+                "configuredBranch": repository_update.get("branch"),
+                "status": repository_update.get("status"),
+            }
         run["proposals"].append(result)
         state = run["proposalStates"].setdefault(
             result["proposalId"],

@@ -277,7 +277,13 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         path_parts = self.comparator_path_parts()
 
         if path_parts == ["proposals"]:
-            self.send_json(200, {"proposals": self.comparator_service.list_proposals()})
+            self.send_json(
+                200,
+                {
+                    "proposals": self.comparator_service.list_proposals(),
+                    "defaults": self.comparator_service.public_defaults(),
+                },
+            )
             return
 
         if len(path_parts) == 2 and path_parts[0] == "runs":

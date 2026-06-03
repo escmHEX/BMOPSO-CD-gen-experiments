@@ -347,6 +347,35 @@ label span,
   box-shadow: 0 10px 28px rgba(15, 118, 110, 0.10);
 }
 
+.toggle-field {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-width: 0;
+  border: 1px solid #c8d7e5;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 12px 14px;
+  color: #223244;
+  box-shadow: 0 8px 24px rgba(19, 32, 44, 0.04);
+}
+
+.toggle-field input {
+  margin-top: 3px;
+}
+
+.toggle-field strong {
+  display: block;
+  color: #122338;
+}
+
+.toggle-field small {
+  display: block;
+  color: #52687c;
+  line-height: 1.35;
+  margin-top: 3px;
+}
+
 .proposal-config-grid {
   grid-template-columns: 1fr;
   gap: 14px;
@@ -447,6 +476,35 @@ label span,
 .proposal-config-footnotes {
   display: grid;
   gap: 4px;
+}
+
+.proposal-git-config {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d2e0eb;
+  border-radius: 7px;
+  background: #f7fbfd;
+  padding: 12px;
+}
+
+.proposal-config-section-title {
+  display: grid;
+  gap: 2px;
+}
+
+.proposal-config-section-title strong {
+  color: #122338;
+  font-size: 0.9rem;
+}
+
+.proposal-git-fields {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.7fr) minmax(180px, 1fr) minmax(160px, 0.8fr);
+  gap: 10px;
+}
+
+.proposal-git-fields label {
+  min-width: 0;
 }
 
 .proposal-cli-fields {
@@ -1695,6 +1753,7 @@ td.metric-best {
   .input-pair,
   .checkbox-grid,
   .proposal-config-grid,
+  .proposal-git-fields,
   .proposal-cli-fields,
   .chart-grid {
     grid-template-columns: 1fr;

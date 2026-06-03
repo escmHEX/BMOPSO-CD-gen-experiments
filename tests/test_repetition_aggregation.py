@@ -41,6 +41,50 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(parsed["selectedProposalIds"], ["binary-mopso-cd"])
         self.assertEqual(parsed["proposalConfigs"]["binary-mopso-cd"]["extraArgs"], "--freeze-components role")
 
+    def test_comparator_config_accepts_repository_update_settings(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "updateRepositoriesBeforeRun": True,
+                "proposalGitConfigs": {
+                    "binary-mopso-cd": {
+                        "remote": "origin",
+                        "branch": "dev",
+                        "pullMode": "ff-only",
+                        "expectedRemoteUrl": "https://github.com/escmHEX/BMOPSO-CD.git",
+                    }
+                },
+            }
+        )
+        self.assertTrue(parsed["updateRepositoriesBeforeRun"])
+        self.assertEqual(parsed["proposalGitConfigs"]["binary-mopso-cd"]["remote"], "origin")
+        self.assertEqual(parsed["proposalGitConfigs"]["binary-mopso-cd"]["branch"], "dev")
+        self.assertEqual(parsed["proposalGitConfigs"]["binary-mopso-cd"]["pullMode"], "ff-only")
+        self.assertEqual(
+            parsed["proposalGitConfigs"]["binary-mopso-cd"]["expectedRemoteUrl"],
+            "https://github.com/escmHEX/BMOPSO-CD.git",
+        )
+
+    def test_comparator_config_rejects_unsafe_repository_update_settings(self):
+        service = ComparatorService(Path("."))
+        bad_configs = [
+            {"remote": "origin;rm", "branch": "dev", "pullMode": "ff-only"},
+            {"remote": "origin", "branch": "../main", "pullMode": "ff-only"},
+            {"remote": "origin", "branch": "main", "pullMode": "merge"},
+        ]
+        for git_config in bad_configs:
+            with self.subTest(git_config=git_config):
+                with self.assertRaises(ValueError):
+                    service._read_config(
+                        {
+                            "referenceText": "reference",
+                            "selectedProposalIds": ["binary-mopso-cd"],
+                            "proposalGitConfigs": {"binary-mopso-cd": git_config},
+                        }
+                    )
+
     def test_comparator_config_accepts_structured_cli_values(self):
         service = ComparatorService(Path("."))
         parsed = service._read_config(
@@ -231,6 +275,98 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertIn("--enable-monitor", command)
         self.assertIn("word_replacement_candidates=false", command)
         self.assertIn("synthetic_text_generation=llama3.1:8b", command)
+
+    def test_repository_update_skips_dirty_repository(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "evolmd")
+        snapshot = {
+            "isGit": True,
+            "dirty": True,
+            "dirtyCount": 2,
+            "branch": "main",
+            "shortCommit": "abc123",
+        }
+        with patch.object(service, "_repository_git_snapshot", return_value=snapshot), patch.object(service, "_run_git") as run_git:
+            result = service._update_repository_for_proposal(
+                proposal,
+                {"remote": "origin", "branch": "main", "pullMode": "ff-only"},
+            )
+        self.assertEqual(result["status"], "skipped_dirty")
+        run_git.assert_not_called()
+
+    def test_repository_update_skips_branch_mismatch(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
+        snapshot = {
+            "isGit": True,
+            "dirty": False,
+            "dirtyCount": 0,
+            "branch": "codex/work",
+            "shortCommit": "abc123",
+        }
+        with patch.object(service, "_repository_git_snapshot", return_value=snapshot), patch.object(service, "_run_git") as run_git:
+            result = service._update_repository_for_proposal(
+                proposal,
+                {"remote": "origin", "branch": "main", "pullMode": "ff-only"},
+            )
+        self.assertEqual(result["status"], "skipped_branch_mismatch")
+        run_git.assert_not_called()
+
+    def test_repository_update_skips_remote_mismatch(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        snapshot = {
+            "isGit": True,
+            "dirty": False,
+            "dirtyCount": 0,
+            "branch": "dev",
+            "shortCommit": "abc123",
+            "remoteUrl": "https://github.com/escmHEX/MOACO.git",
+        }
+        with patch.object(service, "_repository_git_snapshot", return_value=snapshot), patch.object(service, "_run_git") as run_git:
+            result = service._update_repository_for_proposal(
+                proposal,
+                {
+                    "remote": "origin",
+                    "branch": "dev",
+                    "pullMode": "ff-only",
+                    "expectedRemoteUrl": "https://github.com/escmHEX/BMOPSO-CD.git",
+                },
+            )
+        self.assertEqual(result["status"], "skipped_remote_mismatch")
+        run_git.assert_not_called()
+
+    def test_repository_update_fetches_and_pulls_fast_forward_only(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        before = {
+            "isGit": True,
+            "dirty": False,
+            "dirtyCount": 0,
+            "branch": "dev",
+            "shortCommit": "abc123",
+        }
+        after = {
+            "isGit": True,
+            "dirty": False,
+            "dirtyCount": 0,
+            "branch": "dev",
+            "shortCommit": "def456",
+        }
+        fetch = {"returnCode": 0, "stdout": "", "stderr": ""}
+        pull = {"returnCode": 0, "stdout": "Already up to date.", "stderr": ""}
+        with patch.object(service, "_repository_git_snapshot", side_effect=[before, after]), patch.object(
+            service,
+            "_run_git",
+            side_effect=[fetch, pull],
+        ) as run_git:
+            result = service._update_repository_for_proposal(
+                proposal,
+                {"remote": "origin", "branch": "dev", "pullMode": "ff-only"},
+            )
+        self.assertEqual(result["status"], "up_to_date")
+        self.assertEqual(run_git.call_args_list[0].args[1], ["fetch", "origin", "dev"])
+        self.assertEqual(run_git.call_args_list[1].args[1], ["pull", "--ff-only", "origin", "dev"])
 
     def test_selected_proposals_validate_dependencies_before_starting(self):
         service = ComparatorService(Path("."))

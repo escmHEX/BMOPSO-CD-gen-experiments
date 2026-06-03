@@ -2028,6 +2028,13 @@ Context:
                   <span>Timeout por propuesta (min)</span>
                   <input id="comparatorTimeoutMinutes" type="number" min="1" max="1440" value="60">
                 </label>
+                <label class="span-2 toggle-field">
+                  <input id="comparatorUpdateReposBeforeRun" type="checkbox" checked>
+                  <span>
+                    <strong>Actualizar repos antes de ejecutar</strong>
+                    <small>Hace fetch y pull --ff-only solo si el repo local esta limpio y parado en la rama configurada.</small>
+                  </span>
+                </label>
                 <fieldset class="span-2 checkbox-fieldset">
                   <legend>Propuestas a ejecutar</legend>
                   <div id="comparatorProposalSelector" class="checkbox-grid"></div>

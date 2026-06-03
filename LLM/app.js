@@ -669,6 +669,7 @@ const dom = {
   comparatorRepetitions: document.querySelector("#comparatorRepetitions"),
   comparatorProposalParallelism: document.querySelector("#comparatorProposalParallelism"),
   comparatorTimeoutMinutes: document.querySelector("#comparatorTimeoutMinutes"),
+  comparatorUpdateReposBeforeRun: document.querySelector("#comparatorUpdateReposBeforeRun"),
   comparatorProposalSelector: document.querySelector("#comparatorProposalSelector"),
   comparatorProposalConfigPanels: document.querySelector("#comparatorProposalConfigPanels"),
   comparatorN: document.querySelector("#comparatorN"),
@@ -4397,10 +4398,11 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
     dom.comparatorRepetitions,
     dom.comparatorProposalParallelism,
     dom.comparatorTimeoutMinutes,
+    dom.comparatorUpdateReposBeforeRun,
     dom.comparatorN,
     dom.comparatorGeneraciones,
   ].forEach((field) => {
-    field.disabled = isRunning;
+    if (field) field.disabled = isRunning;
   });
   dom.comparatorProposalSelector.querySelectorAll("input").forEach((field) => {
     field.disabled = isRunning || !field.dataset.available;
@@ -4478,6 +4480,17 @@ function disposeComparatorChoices() {
   comparatorChoiceInstances = [];
 }
 
+function comparatorGitStatusText(proposal) {
+  const snapshot = proposal.git?.snapshot || {};
+  const expectedRemote = proposal.git?.expectedRemoteUrl ? `; esperado ${proposal.git.expectedRemoteUrl}` : "";
+  if (!snapshot.isGit) {
+    return snapshot.error ? `No Git: ${snapshot.error}${expectedRemote}` : `No Git${expectedRemote}`;
+  }
+  const dirty = snapshot.dirty ? `; ${snapshot.dirtyCount || 0} cambio(s) local(es)` : "";
+  const remoteUrl = snapshot.remoteUrl ? `; ${snapshot.remoteUrl}` : "";
+  return `Local ${snapshot.branch || "--"} @ ${snapshot.shortCommit || "--"}${dirty}${remoteUrl}${expectedRemote}`;
+}
+
 function renderComparatorProposalControls(proposals) {
   comparatorProposals = proposals || [];
   if (!dom.comparatorProposalSelector || !dom.comparatorProposalConfigPanels) return;
@@ -4516,6 +4529,8 @@ function renderComparatorProposalControls(proposals) {
         .filter((option) => option.source === "managed")
         .map((option) => option.flag)
         .join(", ");
+      const git = proposal.git || {};
+      const gitStatus = comparatorGitStatusText(proposal);
       article.innerHTML = `
         <summary class="proposal-config-summary">
           <span>
@@ -4529,6 +4544,28 @@ function renderComparatorProposalControls(proposals) {
           <div class="proposal-config-runtime">
             <small>${escapeHtml(proposal.repositoryPath || "")}</small>
             <small>Python: ${escapeHtml(proposal.pythonExecutable || "--")}</small>
+          </div>
+          <div class="proposal-git-config">
+            <div class="proposal-config-section-title">
+              <strong>Actualizacion Git</strong>
+              <small>${escapeHtml(gitStatus)}</small>
+            </div>
+            <div class="proposal-git-fields">
+              <label>
+                <span>Remote</span>
+                <input type="text" value="${escapeHtml(git.remote || "origin")}" data-comparator-git-remote data-proposal-id="${escapeHtml(proposal.proposalId)}" autocomplete="off">
+              </label>
+              <label>
+                <span>Branch</span>
+                <input type="text" value="${escapeHtml(git.branch || "")}" data-comparator-git-branch data-proposal-id="${escapeHtml(proposal.proposalId)}" autocomplete="off">
+              </label>
+              <label>
+                <span>Modo pull</span>
+                <select data-comparator-git-pull-mode data-proposal-id="${escapeHtml(proposal.proposalId)}">
+                  <option value="ff-only" ${git.pullMode === "ff-only" ? "selected" : ""}>Fast-forward only</option>
+                </select>
+              </label>
+            </div>
           </div>
           <div class="proposal-cli-fields" data-proposal-cli-fields></div>
           <div class="proposal-config-footnotes">
@@ -4754,6 +4791,38 @@ function comparatorProposalConfigs() {
   return configs;
 }
 
+function comparatorProposalGitConfigs() {
+  const configs = {};
+  comparatorProposals.forEach((proposal) => {
+    const git = proposal.git || {};
+    configs[proposal.proposalId] = {
+      remote: git.remote || "origin",
+      branch: git.branch || "",
+      pullMode: git.pullMode || "ff-only",
+      expectedRemoteUrl: git.expectedRemoteUrl || "",
+    };
+  });
+  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-git-remote]").forEach((field) => {
+    const proposalId = field.dataset.proposalId;
+    if (!proposalId) return;
+    configs[proposalId] = configs[proposalId] || {};
+    configs[proposalId].remote = field.value.trim();
+  });
+  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-git-branch]").forEach((field) => {
+    const proposalId = field.dataset.proposalId;
+    if (!proposalId) return;
+    configs[proposalId] = configs[proposalId] || {};
+    configs[proposalId].branch = field.value.trim();
+  });
+  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-git-pull-mode]").forEach((field) => {
+    const proposalId = field.dataset.proposalId;
+    if (!proposalId) return;
+    configs[proposalId] = configs[proposalId] || {};
+    configs[proposalId].pullMode = field.value;
+  });
+  return configs;
+}
+
 function readComparatorConfig() {
   const referenceText = dom.comparatorReferenceText.value.trim();
   const model = dom.comparatorModel.value.trim();
@@ -4773,6 +4842,8 @@ function readComparatorConfig() {
     model,
     selectedProposalIds,
     proposalConfigs: comparatorProposalConfigs(),
+    updateRepositoriesBeforeRun: Boolean(dom.comparatorUpdateReposBeforeRun?.checked),
+    proposalGitConfigs: comparatorProposalGitConfigs(),
     topK: Math.floor(readClampedNumber(dom.comparatorTopK, "Top K tabla", 1, 200)),
     seed: Math.floor(readClampedNumber(dom.comparatorSeed, "Semilla", 0, 2147483647)),
     repetitionsK: Math.floor(readClampedNumber(dom.comparatorRepetitions, "K repeticiones", 1, 30)),
@@ -4801,6 +4872,9 @@ async function requestComparatorJson(path, options = {}) {
 async function loadComparatorProposals() {
   try {
     const payload = await requestComparatorJson("/proposals");
+    if (dom.comparatorUpdateReposBeforeRun && payload.defaults?.updateRepositoriesBeforeRun !== undefined) {
+      dom.comparatorUpdateReposBeforeRun.checked = Boolean(payload.defaults.updateRepositoriesBeforeRun);
+    }
     renderComparatorProposalControls(payload.proposals || []);
     const proposalSummary = payload.proposals
       .map((proposal) => {
@@ -4809,9 +4883,13 @@ async function loadComparatorProposals() {
         return `${proposal.displayName}: ${status} (${proposal.objectiveNames.join(", ")})`;
       })
       .join("; ");
+    const gitSummary = payload.proposals
+      .map((proposal) => `${proposal.displayName}: ${proposal.git?.remote || "origin"}/${proposal.git?.branch || "--"} (${proposal.git?.pullMode || "ff-only"})`)
+      .join("; ");
     renderDefinitionList(dom.comparatorIntegrationDetails, [
       ["Contrato", "{proposalId, displayName, rows, metrics, outputDir, status}"],
       ["Propuestas", proposalSummary],
+      ["Git antes de ejecutar", `${payload.defaults?.updateRepositoriesBeforeRun ? "Activado" : "Desactivado"}; ${gitSummary}`],
       ["EVOLMD", "data_final_evaluada.json -> [fitness]"],
       ["EVOLMD post-hoc", "Vector diagnostico [fitness, semantic_diversity_posthoc]; HV/spread no alteran la seleccion."],
       ["EVOLMD-MO", "pareto_front.json -> [fidelity_sbert, diversity_individual]"],
@@ -5049,6 +5127,10 @@ function renderComparatorCards(proposals) {
       const progressState = proposal.progressState || proposal;
       const progressPercent = Math.round(Math.max(0, Math.min(1, Number(progressState.progress || 0))) * 100);
       const stageLabel = progressState.stageLabel || comparatorStatusLabel(proposal.status);
+      const git = proposal.gitRevision || {};
+      const gitLabel = git.shortCommit
+        ? `${git.configuredBranch || git.branch || "--"} @ ${git.shortCommit}${git.dirty ? " (local dirty)" : ""}`
+        : "--";
       const article = document.createElement("article");
       article.className = "proposal-card";
       article.innerHTML = `
@@ -5073,6 +5155,7 @@ function renderComparatorCards(proposals) {
           <dt>Tiempo LLM</dt><dd>${escapeHtml(cost.llmClientWallClockLabel || "--")}</dd>
           <dt>Prom. llamada</dt><dd>${escapeHtml(cost.llmAverageCallLabel || "No disponible")}</dd>
           <dt>Tokens</dt><dd>${escapeHtml(String(cost.totalTokens ?? 0))}</dd>
+          <dt>Git</dt><dd>${escapeHtml(gitLabel)}</dd>
           <dt>Salida</dt><dd>${escapeHtml(metrics.outputDir || proposal.outputDir || "--")}</dd>
         </dl>
       `;
@@ -5101,6 +5184,14 @@ function renderComparatorCostDetails(run) {
     ]);
     if (proposal.command) {
       entries.push([`${proposal.displayName} comando`, proposal.command]);
+    }
+    if (proposal.repositoryUpdate) {
+      const update = proposal.repositoryUpdate;
+      const revision = proposal.gitRevision || {};
+      entries.push([
+        `${proposal.displayName} Git`,
+        `${update.status || "--"}; ${update.remote || "--"}/${update.branch || "--"}; commit ${revision.shortCommit || "--"}; ${update.message || ""}`,
+      ]);
     }
   }
   renderDefinitionList(dom.comparatorCostDetails, entries);
