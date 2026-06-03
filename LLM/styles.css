@@ -1161,6 +1161,60 @@ table.wide-table {
   min-width: 1320px;
 }
 
+.cost-explanation {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #bbf7d0;
+  border-radius: var(--radius);
+  background: #f0fdf4;
+  color: #14532d;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+}
+
+.cost-explanation p {
+  margin: 0;
+}
+
+.cost-explanation.is-warning {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #78350f;
+}
+
+.comparator-cost-table {
+  min-width: 1120px;
+}
+
+.comparator-cost-table th,
+.comparator-cost-table td {
+  vertical-align: top;
+}
+
+.comparator-cost-table th:first-child {
+  min-width: 190px;
+}
+
+.comparator-cost-table td:nth-child(2) {
+  min-width: 280px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.comparator-cost-table thead th span,
+.comparator-cost-table thead th small {
+  display: block;
+}
+
+.comparator-cost-best {
+  background: #dcfce7 !important;
+  color: #14532d;
+}
+
+.comparator-traceability {
+  margin-top: 14px;
+}
+
 .turbulence-movement-panel {
   width: 100%;
 }

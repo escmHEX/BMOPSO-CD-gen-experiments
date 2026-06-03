@@ -52,3 +52,25 @@ export function comparatorMetricExtremes(values, higherIsBetter) {
     worstValue: higherIsBetter ? minimum : maximum,
   };
 }
+
+export function comparatorBestCostProposalIds(proposals, metric, options = {}) {
+  if (!options.costsComparable) return new Set();
+  const completed = proposals.filter((proposal) => proposal?.status === "completed");
+  const entries = completed
+    .map((proposal) => {
+      const cost = proposal.cost || {};
+      const rawValue = metric.value(proposal, cost);
+      const value = rawValue === null || rawValue === undefined || rawValue === "" ? NaN : Number(rawValue);
+      const reported = metric.isReported ? metric.isReported(proposal, cost) : true;
+      return { id: proposal.proposalId, value, reported };
+    })
+    .filter((entry) => entry.id && entry.reported && Number.isFinite(entry.value));
+
+  if (!entries.length) return new Set();
+  if (metric.requireAllReported && entries.length !== completed.length) return new Set();
+
+  const target = metric.direction === "max"
+    ? Math.max(...entries.map((entry) => entry.value))
+    : Math.min(...entries.map((entry) => entry.value));
+  return new Set(entries.filter((entry) => entry.value === target).map((entry) => entry.id));
+}

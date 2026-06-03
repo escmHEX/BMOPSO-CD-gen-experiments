@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  comparatorBestCostProposalIds,
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
   comparatorIsGloballyNonDominated,
@@ -51,4 +52,41 @@ test("metric extremes respect best direction", () => {
     bestValue: 0.2,
     worstValue: 0.8,
   });
+});
+
+test("cost winners choose the lowest completed reported value", () => {
+  const proposals = [
+    { proposalId: "evolmd", status: "completed", cost: { llmCalls: 10 } },
+    { proposalId: "evolmd-mo", status: "completed", cost: { llmCalls: 6 } },
+    { proposalId: "binary", status: "failed", cost: { llmCalls: 1 } },
+  ];
+  const winners = comparatorBestCostProposalIds(proposals, {
+    value: (_proposal, cost) => cost.llmCalls,
+  }, { costsComparable: true });
+
+  assert.deepEqual([...winners], ["evolmd-mo"]);
+});
+
+test("cost winners are disabled in exploratory mode", () => {
+  const winners = comparatorBestCostProposalIds([
+    { proposalId: "a", status: "completed", cost: { seconds: 1 } },
+    { proposalId: "b", status: "completed", cost: { seconds: 2 } },
+  ], {
+    value: (_proposal, cost) => cost.seconds,
+  }, { costsComparable: false });
+
+  assert.equal(winners.size, 0);
+});
+
+test("cost winners do not treat missing reports as zero", () => {
+  const winners = comparatorBestCostProposalIds([
+    { proposalId: "a", status: "completed", cost: { totalTokens: 120 } },
+    { proposalId: "b", status: "completed", cost: { totalTokens: 0 } },
+  ], {
+    value: (_proposal, cost) => cost.totalTokens,
+    isReported: (_proposal, cost) => Number(cost.totalTokens) > 0,
+    requireAllReported: true,
+  }, { costsComparable: true });
+
+  assert.equal(winners.size, 0);
 });

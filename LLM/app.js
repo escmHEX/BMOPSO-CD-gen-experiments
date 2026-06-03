@@ -1,4 +1,5 @@
 import {
+  comparatorBestCostProposalIds,
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
   comparatorIsGloballyNonDominated,
@@ -714,7 +715,11 @@ const dom = {
   comparatorHvChart: document.querySelector("#comparatorHvChart"),
   comparatorNonDominatedChart: document.querySelector("#comparatorNonDominatedChart"),
   comparatorSpreadChart: document.querySelector("#comparatorSpreadChart"),
-  comparatorCostDetails: document.querySelector("#comparatorCostDetails"),
+  comparatorCostExplanation: document.querySelector("#comparatorCostExplanation"),
+  comparatorCostTableHead: document.querySelector("#comparatorCostTableHead"),
+  comparatorCostTableBody: document.querySelector("#comparatorCostTableBody"),
+  comparatorCostTraceability: document.querySelector("#comparatorCostTraceability"),
+  comparatorCostTraceabilityBody: document.querySelector("#comparatorCostTraceabilityBody"),
   comparatorLogOutput: document.querySelector("#comparatorLogOutput"),
   copyComparatorLogButton: document.querySelector("#copyComparatorLogButton"),
   comparatorIntegrationDetails: document.querySelector("#comparatorIntegrationDetails"),
@@ -4508,7 +4513,7 @@ function resetComparatorUi() {
   dom.comparatorHvChart.innerHTML = "";
   dom.comparatorNonDominatedChart.innerHTML = "";
   dom.comparatorSpreadChart.innerHTML = "";
-  renderDefinitionList(dom.comparatorCostDetails, [["Costos", "Sin corrida activa."]]);
+  renderComparatorCostDetails(null);
   comparatorChartSignature = "";
   disposeComparatorCharts();
   dom.comparatorProposalCards.innerHTML = `
@@ -5233,40 +5238,208 @@ function renderComparatorCards(proposals) {
 }
 
 function renderComparatorCostDetails(run) {
-  const cost = run.costSummary || {};
-  const policy = run.config?.executionPolicy || {};
-  const entries = [
-    ["Modo ejecucion", policy.label || run.config?.executionMode || "--"],
-    ["Comparabilidad costos", policy.costsComparable ? "Comparables" : "No comparables en modo exploratorio"],
-    ["Paralelismo efectivo", `${policy.effectiveParallelism ?? run.config?.effectiveProposalParallelism ?? "--"} (solicitado ${policy.requestedParallelism ?? run.config?.proposalParallelism ?? "--"})`],
-    ["Run wall-clock", cost.runWallClockLabel || "--"],
-    ["Procesos Python", cost.proposalWallClockSumLabel || "--"],
-    ["Total propuesta", cost.proposalTotalWallClockSumLabel || "--"],
-    ["Post-procesamiento", cost.postProcessingWallClockSumLabel || "0s"],
-    ["Extraccion metricas", cost.metricExtractionSumLabel || "0s"],
-    ["Preparacion visual", cost.plotPreparationSumLabel || "0s"],
-    ["Llamadas LLM", `${cost.llmCalls ?? 0} (${cost.llmSuccessfulCalls ?? 0} ok, ${cost.llmFailedCalls ?? 0} fallidas)`],
-    ["Tokens reportados", String(cost.totalTokens ?? 0)],
-  ];
-  for (const proposal of run.proposals || []) {
-    const proposalCost = proposal.cost || {};
-    entries.push([
-      `${proposal.displayName} costo`,
-      `algoritmo ${proposalCost.processWallClockLabel || "--"}; post ${proposalCost.postProcessingWallClockLabel || "0s"}; metricas ${proposalCost.metricExtractionLabel || "0s"}; LLM ${proposalCost.llmCalls ?? 0} llamadas`,
-    ]);
-    if (proposal.command) {
-      entries.push([`${proposal.displayName} comando`, proposal.command]);
-    }
-    if (proposal.repositoryUpdate) {
-      const update = proposal.repositoryUpdate;
-      const revision = proposal.gitRevision || {};
-      entries.push([
-        `${proposal.displayName} Git`,
-        `${update.status || "--"}; ${update.remote || "--"}/${update.branch || "--"}; commit ${revision.shortCommit || "--"}; ${update.message || ""}`,
-      ]);
-    }
+  if (!run) {
+    renderComparatorCostExplanation(null);
+    renderComparatorCostTable([], null);
+    renderComparatorCostTraceability([]);
+    return;
   }
-  renderDefinitionList(dom.comparatorCostDetails, entries);
+  const proposals = run.proposals || [];
+  renderComparatorCostExplanation(run);
+  renderComparatorCostTable(proposals, run.config?.executionPolicy || {});
+  renderComparatorCostTraceability(proposals);
+}
+
+function renderComparatorCostExplanation(run) {
+  if (!dom.comparatorCostExplanation) return;
+  dom.comparatorCostExplanation.classList.toggle("is-warning", Boolean(run) && !run.config?.executionPolicy?.costsComparable);
+  if (!run) {
+    dom.comparatorCostExplanation.innerHTML = "<p>Sin corrida activa.</p>";
+    return;
+  }
+  const policy = run.config?.executionPolicy || {};
+  const comparable = Boolean(policy.costsComparable);
+  const requested = policy.requestedParallelism ?? run.config?.proposalParallelism ?? "--";
+  const effective = policy.effectiveParallelism ?? run.config?.effectiveProposalParallelism ?? "--";
+  const runCost = run.costSummary || {};
+  const comparisonDetail = comparable
+    ? "las propuestas se ejecutan una por una."
+    : "las propuestas comparten Ollama/CPU/GPU; los valores se muestran solo como diagnostico.";
+  dom.comparatorCostExplanation.innerHTML = `
+    <p><strong>${escapeHtml(comparable ? "Costos comparables" : "Costos no comparables")}</strong>: ${escapeHtml(comparisonDetail)}</p>
+    <p>Modo: ${escapeHtml(policy.label || run.config?.executionMode || "--")}; paralelismo efectivo ${escapeHtml(String(effective))} de ${escapeHtml(String(requested))} solicitado(s); wall-clock total de corrida ${escapeHtml(runCost.runWallClockLabel || "--")}.</p>
+    <p>Menor es mejor en las metricas de costo. Algoritmo es el runtime interno reportado por cada propuesta; Proceso Python es el wall-clock del proceso; Total propuesta suma proceso y post-proceso del comparador. Post-procesamiento, extraccion de metricas y preparacion visual no se suman al costo real del algoritmo.</p>
+    <p>Tokens y duracion Ollama solo se comparan cuando todas las propuestas completadas reportan esa metrica con fuente real; si no, se muestra No reportado y no se destaca ganador.</p>
+  `;
+}
+
+function comparatorCostMetricDefinitions() {
+  const secondsMetric = (key, labelKey) => ({
+    value: (_proposal, cost) => cost[key],
+    format: (_proposal, cost) => cost[labelKey] || "--",
+    isReported: (_proposal, cost) => Number.isFinite(Number(cost[key])),
+  });
+  return [
+    {
+      id: "algorithm",
+      label: "Algoritmo",
+      detail: "Runtime interno reportado por la propuesta.",
+      ...secondsMetric("algorithmRuntimeSeconds", "algorithmRuntimeLabel"),
+    },
+    {
+      id: "process",
+      label: "Proceso Python",
+      detail: "Wall-clock del proceso Python ejecutado por el backend.",
+      ...secondsMetric("processWallClockSeconds", "processWallClockLabel"),
+    },
+    {
+      id: "proposalTotal",
+      label: "Total propuesta",
+      detail: "Proceso Python mas post-procesamiento del comparador.",
+      ...secondsMetric("proposalTotalWallClockSeconds", "proposalTotalWallClockLabel"),
+    },
+    {
+      id: "post",
+      label: "Post-procesamiento",
+      detail: "Seleccion o ranking externo del comparador; no carga al algoritmo.",
+      ...secondsMetric("postProcessingWallClockSeconds", "postProcessingWallClockLabel"),
+    },
+    {
+      id: "metrics",
+      label: "Extraccion metricas",
+      detail: "Normalizacion y metricas web posteriores; no carga al algoritmo.",
+      ...secondsMetric("metricExtractionSeconds", "metricExtractionLabel"),
+    },
+    {
+      id: "plots",
+      label: "Preparacion visual",
+      detail: "Armado de datos para tablas y graficos; no carga al algoritmo.",
+      ...secondsMetric("plotPreparationSeconds", "plotPreparationLabel"),
+    },
+    {
+      id: "llmCalls",
+      label: "Llamadas LLM",
+      detail: "Total de llamadas reales registradas hacia el LLM.",
+      value: (_proposal, cost) => cost.llmCalls,
+      format: (_proposal, cost) => String(cost.llmCalls ?? 0),
+      isReported: (_proposal, cost) => Number.isFinite(Number(cost.llmCalls)),
+    },
+    {
+      id: "llmTime",
+      label: "Tiempo LLM cliente",
+      detail: "Suma de latencias cliente de llamadas LLM.",
+      ...secondsMetric("llmClientWallClockSeconds", "llmClientWallClockLabel"),
+    },
+    {
+      id: "llmAverage",
+      label: "Promedio por llamada",
+      detail: "Tiempo LLM cliente dividido por cantidad de llamadas.",
+      ...secondsMetric("llmAverageCallSeconds", "llmAverageCallLabel"),
+    },
+    {
+      id: "llmFailed",
+      label: "Llamadas fallidas",
+      detail: "Errores registrados durante llamadas LLM.",
+      value: (_proposal, cost) => cost.llmFailedCalls,
+      format: (_proposal, cost) => String(cost.llmFailedCalls ?? 0),
+      isReported: (_proposal, cost) => Number.isFinite(Number(cost.llmFailedCalls)),
+    },
+    {
+      id: "tokens",
+      label: "Tokens reportados",
+      detail: "Suma de prompt y completion tokens cuando la propuesta los reporta.",
+      value: (_proposal, cost) => cost.totalTokens,
+      format: (_proposal, cost) => String(cost.totalTokens ?? 0),
+      isReported: (_proposal, cost) => comparatorCostHasTokenReport(cost),
+      requireAllReported: true,
+    },
+    {
+      id: "ollamaDuration",
+      label: "Duracion Ollama reportada",
+      detail: "Duracion total informada por Ollama cuando esta disponible.",
+      value: (_proposal, cost) => cost.ollamaTotalDurationSeconds,
+      format: (_proposal, cost) => cost.ollamaTotalDurationLabel || "--",
+      isReported: (_proposal, cost) => comparatorCostHasOllamaDuration(cost),
+      requireAllReported: true,
+    },
+  ];
+}
+
+function comparatorCostHasTokenReport(cost = {}) {
+  return Number(cost.totalTokens) > 0 || Number(cost.promptEvalCount) > 0 || Number(cost.evalCount) > 0;
+}
+
+function comparatorCostHasOllamaDuration(cost = {}) {
+  return Number(cost.ollamaTotalDurationSeconds) > 0;
+}
+
+function renderComparatorCostTable(proposals, policy) {
+  if (!dom.comparatorCostTableHead || !dom.comparatorCostTableBody) return;
+  dom.comparatorCostTableHead.innerHTML = `
+    <tr>
+      <th>Metrica</th>
+      <th>Detalle</th>
+      ${proposals.map((proposal) => `
+        <th>
+          <span>${escapeHtml(proposal.displayName || proposal.proposalId)}</span>
+          <small class="${comparatorStatusClass(proposal.status)}">${escapeHtml(comparatorStatusLabel(proposal.status))}</small>
+        </th>
+      `).join("")}
+    </tr>
+  `;
+  if (!proposals.length) {
+    dom.comparatorCostTableBody.innerHTML = '<tr><td colspan="2">Sin resultados todavia.</td></tr>';
+    return;
+  }
+  const metrics = comparatorCostMetricDefinitions();
+  const costsComparable = Boolean(policy?.costsComparable);
+  dom.comparatorCostTableBody.replaceChildren(
+    ...metrics.map((metric) => {
+      const winners = comparatorBestCostProposalIds(proposals, metric, { costsComparable });
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <th scope="row">${escapeHtml(metric.label)}</th>
+        <td>${escapeHtml(metric.detail)}</td>
+        ${proposals.map((proposal) => comparatorCostMetricCell(proposal, metric, winners)).join("")}
+      `;
+      return tr;
+    }),
+  );
+}
+
+function comparatorCostMetricCell(proposal, metric, winners) {
+  const cost = proposal.cost || {};
+  const rawValue = metric.value(proposal, cost);
+  const value = rawValue === null || rawValue === undefined || rawValue === "" ? NaN : Number(rawValue);
+  const reported = Number.isFinite(value) && (!metric.isReported || metric.isReported(proposal, cost));
+  const best = proposal.status === "completed" && reported && winners.has(proposal.proposalId);
+  const label = reported ? metric.format(proposal, cost) : "No reportado";
+  const className = best ? "metric-best comparator-cost-best" : "";
+  return `<td class="${className}">${best ? `<strong>${escapeHtml(label)}</strong>` : escapeHtml(label)}</td>`;
+}
+
+function renderComparatorCostTraceability(proposals) {
+  if (!dom.comparatorCostTraceabilityBody) return;
+  if (!proposals.length) {
+    dom.comparatorCostTraceabilityBody.innerHTML = "Sin corrida activa.";
+    if (dom.comparatorCostTraceability) dom.comparatorCostTraceability.open = false;
+    return;
+  }
+  dom.comparatorCostTraceabilityBody.innerHTML = proposals.map((proposal) => {
+    const update = proposal.repositoryUpdate || {};
+    const revision = proposal.gitRevision || {};
+    const metrics = proposal.metrics || {};
+    return `
+      <div class="semantic-artifact-group">
+        <h3>${escapeHtml(proposal.displayName || proposal.proposalId)}</h3>
+        <dl class="definition-grid compact-definition-grid">
+          <div><dt>Comando</dt><dd>${escapeHtml(proposal.command || "--")}</dd></div>
+          <div><dt>Git</dt><dd>${escapeHtml(`${update.status || revision.status || "--"}; ${update.remote || revision.remote || "--"}/${update.branch || revision.configuredBranch || revision.branch || "--"}; commit ${revision.shortCommit || "--"}; ${update.message || ""}`)}</dd></div>
+          <div><dt>Salida</dt><dd>${escapeHtml(metrics.outputDir || proposal.outputDir || "--")}</dd></div>
+        </dl>
+      </div>
+    `;
+  }).join("");
 }
 
 function renderComparatorCharts(run) {
