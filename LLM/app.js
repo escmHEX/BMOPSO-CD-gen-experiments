@@ -667,6 +667,8 @@ const dom = {
   comparatorTopK: document.querySelector("#comparatorTopK"),
   comparatorSeed: document.querySelector("#comparatorSeed"),
   comparatorRepetitions: document.querySelector("#comparatorRepetitions"),
+  comparatorExecutionMode: document.querySelector("#comparatorExecutionMode"),
+  comparatorExecutionModeNote: document.querySelector("#comparatorExecutionModeNote"),
   comparatorProposalParallelism: document.querySelector("#comparatorProposalParallelism"),
   comparatorTimeoutMinutes: document.querySelector("#comparatorTimeoutMinutes"),
   comparatorUpdateReposBeforeRun: document.querySelector("#comparatorUpdateReposBeforeRun"),
@@ -4396,6 +4398,7 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
     dom.comparatorTopK,
     dom.comparatorSeed,
     dom.comparatorRepetitions,
+    dom.comparatorExecutionMode,
     dom.comparatorProposalParallelism,
     dom.comparatorTimeoutMinutes,
     dom.comparatorUpdateReposBeforeRun,
@@ -4419,6 +4422,23 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
       choice.enable();
     }
   });
+  syncComparatorExecutionModeControls(isRunning);
+}
+
+function syncComparatorExecutionModeControls(isRunning = false) {
+  const mode = dom.comparatorExecutionMode?.value || "fair_sequential";
+  const fair = mode === "fair_sequential";
+  if (fair && dom.comparatorProposalParallelism) {
+    dom.comparatorProposalParallelism.value = "1";
+  }
+  if (dom.comparatorProposalParallelism) {
+    dom.comparatorProposalParallelism.disabled = isRunning || fair;
+  }
+  if (dom.comparatorExecutionModeNote) {
+    dom.comparatorExecutionModeNote.textContent = fair
+      ? "Costos comparables: las propuestas se ejecutan una por una."
+      : "Modo exploratorio: metricas visibles, pero costos no comparables por recursos compartidos.";
+  }
 }
 
 function stopComparatorPolling() {
@@ -4842,6 +4862,7 @@ function readComparatorConfig() {
     model,
     selectedProposalIds,
     proposalConfigs: comparatorProposalConfigs(),
+    executionMode: dom.comparatorExecutionMode?.value || "fair_sequential",
     updateRepositoriesBeforeRun: Boolean(dom.comparatorUpdateReposBeforeRun?.checked),
     proposalGitConfigs: comparatorProposalGitConfigs(),
     topK: Math.floor(readClampedNumber(dom.comparatorTopK, "Top K tabla", 1, 200)),
@@ -4874,6 +4895,10 @@ async function loadComparatorProposals() {
     const payload = await requestComparatorJson("/proposals");
     if (dom.comparatorUpdateReposBeforeRun && payload.defaults?.updateRepositoriesBeforeRun !== undefined) {
       dom.comparatorUpdateReposBeforeRun.checked = Boolean(payload.defaults.updateRepositoriesBeforeRun);
+    }
+    if (dom.comparatorExecutionMode && payload.defaults?.executionMode) {
+      dom.comparatorExecutionMode.value = payload.defaults.executionMode;
+      syncComparatorExecutionModeControls(false);
     }
     renderComparatorProposalControls(payload.proposals || []);
     const proposalSummary = payload.proposals
@@ -5045,6 +5070,8 @@ function renderComparatorProgress(progress, config = null) {
     ["Tiempo transcurrido", progress.elapsedLabel || "--"],
     ["Tiempo restante estimado", progress.remainingLabel || "No disponible"],
     ["Propuesta activa", progress.activeProposalName || "--"],
+    ["Modo ejecucion", config?.executionPolicy?.label || config?.executionMode || "--"],
+    ["Paralelismo efectivo", config?.executionPolicy ? `${config.executionPolicy.effectiveParallelism} de ${config.executionPolicy.requestedParallelism} solicitado(s)` : "--"],
     ["K repeticiones", config?.repetitionsK ?? 1],
     ["Cola", `${progress.queuedProposals ?? 0}/${progress.totalProposals ?? 0}`],
   ]);
@@ -5166,7 +5193,11 @@ function renderComparatorCards(proposals) {
 
 function renderComparatorCostDetails(run) {
   const cost = run.costSummary || {};
+  const policy = run.config?.executionPolicy || {};
   const entries = [
+    ["Modo ejecucion", policy.label || run.config?.executionMode || "--"],
+    ["Comparabilidad costos", policy.costsComparable ? "Comparables" : "No comparables en modo exploratorio"],
+    ["Paralelismo efectivo", `${policy.effectiveParallelism ?? run.config?.effectiveProposalParallelism ?? "--"} (solicitado ${policy.requestedParallelism ?? run.config?.proposalParallelism ?? "--"})`],
     ["Run wall-clock", cost.runWallClockLabel || "--"],
     ["Procesos Python", cost.proposalWallClockSumLabel || "--"],
     ["Total propuesta", cost.proposalTotalWallClockSumLabel || "--"],
@@ -5979,6 +6010,7 @@ dom.turbulenceCandidateModalBody.addEventListener("click", async (event) => {
 dom.runComparatorButton.addEventListener("click", runComparator);
 dom.cancelComparatorButton.addEventListener("click", cancelComparatorRun);
 dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
+dom.comparatorExecutionMode.addEventListener("change", () => syncComparatorExecutionModeControls(false));
 document.querySelectorAll(".comparator-tab").forEach((button) => {
   button.addEventListener("click", () => activateComparatorTab(button.dataset.comparatorTab));
 });

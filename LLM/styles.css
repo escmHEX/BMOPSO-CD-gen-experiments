@@ -376,6 +376,13 @@ label span,
   margin-top: 3px;
 }
 
+.field-note {
+  display: block;
+  color: #52687c;
+  line-height: 1.35;
+  margin-top: 5px;
+}
+
 .proposal-config-grid {
   grid-template-columns: 1fr;
   gap: 14px;

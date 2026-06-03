@@ -44,9 +44,13 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 STAGE_RE = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s+(.+)$")
 GENERATION_RE = re.compile(r"(?:Generaci[oó]n|generation)\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
 PERCENT_RE = re.compile(r"(\d{1,3})%")
+TIMESTAMPED_LOG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+\|\s+[A-Z]+\s+\|\s+(.+)$")
 GIT_REMOTE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 SUPPORTED_GIT_PULL_MODES = {"ff-only"}
+EXECUTION_MODE_FAIR_SEQUENTIAL = "fair_sequential"
+EXECUTION_MODE_EXPLORATORY_PARALLEL = "exploratory_parallel"
+SUPPORTED_EXECUTION_MODES = {EXECUTION_MODE_FAIR_SEQUENTIAL, EXECUTION_MODE_EXPLORATORY_PARALLEL}
 PROPOSAL_TOTALS = {proposal_id: total for proposal_id, total in (("evolmd", 6), ("evolmd-mo", 5), ("binary-mopso-cd", 6))}
 COMPARATOR_CONFIG_PATH = Path(os.environ.get("COMPARATOR_CONFIG_PATH", Path(__file__).with_name("comparator_config.json")))
 
@@ -89,6 +93,7 @@ COMPARATOR_PROPOSAL_CONFIG = COMPARATOR_CONFIG.get("proposals") if isinstance(CO
 POSTHOC_EMBEDDING_MODEL = str(COMPARATOR_DEFAULTS.get("posthocEmbeddingModel") or "all-MiniLM-L6-v2")
 DEFAULT_SELECTED_PROPOSALS = tuple(COMPARATOR_DEFAULTS.get("selectedProposalIds") or ("evolmd", "evolmd-mo", "binary-mopso-cd"))
 DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN = config_bool(COMPARATOR_DEFAULTS.get("updateRepositoriesBeforeRun"), False)
+DEFAULT_EXECUTION_MODE = str(COMPARATOR_DEFAULTS.get("executionMode") or EXECUTION_MODE_FAIR_SEQUENTIAL)
 
 
 def utc_now() -> str:
@@ -115,6 +120,12 @@ def objective_label(vector: list[float]) -> str:
 
 def clean_log_message(message: str) -> str:
     return ANSI_RE.sub("", message).strip()
+
+
+def progress_log_payload(message: str) -> str:
+    clean_message = clean_log_message(message)
+    match = TIMESTAMPED_LOG_RE.match(clean_message)
+    return match.group(1).strip() if match else clean_message
 
 
 def format_duration(seconds: float | None) -> str:
@@ -967,6 +978,7 @@ class ComparatorService:
     def public_defaults(self) -> dict[str, Any]:
         return {
             "updateRepositoriesBeforeRun": DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN,
+            "executionMode": DEFAULT_EXECUTION_MODE,
         }
 
     def _initial_proposal_state(self, proposal: ProposalDefinition) -> dict[str, Any]:
@@ -1063,6 +1075,15 @@ class ComparatorService:
             raise ValueError("referenceText is required.")
 
         selected = self._selected_proposal_ids(payload.get("selectedProposalIds"))
+        execution_mode = self._execution_mode(payload.get("executionMode", DEFAULT_EXECUTION_MODE))
+        requested_parallelism = self._int_between(
+            payload.get("proposalParallelism", COMPARATOR_DEFAULTS.get("proposalParallelism", 1)),
+            "proposalParallelism",
+            1,
+            8,
+        )
+        effective_parallelism = 1 if execution_mode == EXECUTION_MODE_FAIR_SEQUENTIAL else requested_parallelism
+        costs_comparable = execution_mode == EXECUTION_MODE_FAIR_SEQUENTIAL
         return {
             "referenceText": reference_text,
             "topK": self._int_between(payload.get("topK", COMPARATOR_DEFAULTS.get("topK", 10)), "topK", 1, 200),
@@ -1071,7 +1092,22 @@ class ComparatorService:
             "seed": self._int_between(payload.get("seed", COMPARATOR_DEFAULTS.get("seed", 42)), "seed", 0, 2_147_483_647),
             "repetitionsK": self._int_between(payload.get("repetitionsK", COMPARATOR_DEFAULTS.get("repetitionsK", 1)), "repetitionsK", 1, 30),
             "model": self._safe_model_name(payload.get("model", COMPARATOR_DEFAULTS.get("model", "llama3"))),
-            "proposalParallelism": self._int_between(payload.get("proposalParallelism", COMPARATOR_DEFAULTS.get("proposalParallelism", 1)), "proposalParallelism", 1, 8),
+            "executionMode": execution_mode,
+            "proposalParallelism": requested_parallelism,
+            "effectiveProposalParallelism": effective_parallelism,
+            "costsComparable": costs_comparable,
+            "executionPolicy": {
+                "mode": execution_mode,
+                "requestedParallelism": requested_parallelism,
+                "effectiveParallelism": effective_parallelism,
+                "costsComparable": costs_comparable,
+                "label": "Comparacion justa secuencial" if costs_comparable else "Exploratoria paralela",
+                "note": (
+                    "Costos comparables: las propuestas se ejecutan una por una."
+                    if costs_comparable
+                    else "Costos no comparables: las propuestas comparten Ollama/CPU/GPU."
+                ),
+            },
             "timeoutMinutes": self._int_between(payload.get("timeoutMinutes", COMPARATOR_DEFAULTS.get("timeoutMinutes", 60)), "timeoutMinutes", 1, 1440),
             "selectedProposalIds": selected,
             "proposalConfigs": self._proposal_configs(payload.get("proposalConfigs"), selected),
@@ -1081,6 +1117,12 @@ class ComparatorService:
             ),
             "proposalGitConfigs": self._proposal_git_configs(payload.get("proposalGitConfigs"), selected),
         }
+
+    def _execution_mode(self, value: Any) -> str:
+        mode = str(value or EXECUTION_MODE_FAIR_SEQUENTIAL).strip()
+        if mode not in SUPPORTED_EXECUTION_MODES:
+            raise ValueError(f"executionMode must be one of: {', '.join(sorted(SUPPORTED_EXECUTION_MODES))}.")
+        return mode
 
     def _selected_proposal_ids(self, value: Any) -> list[str]:
         if value is None:
@@ -1598,7 +1640,19 @@ class ComparatorService:
         try:
             selected_proposals = self._selected_proposals(run["config"])
             self._prepare_repositories_before_run(run, selected_proposals)
-            parallelism = min(run["config"]["proposalParallelism"], len(selected_proposals))
+            policy = run["config"].get("executionPolicy") or {}
+            parallelism = min(run["config"].get("effectiveProposalParallelism", 1), len(selected_proposals))
+            with self._lock:
+                self._append_log_unlocked(
+                    run,
+                    "system",
+                    (
+                        f"Execution mode {policy.get('mode', run['config'].get('executionMode'))}: "
+                        f"requested parallelism={policy.get('requestedParallelism', run['config'].get('proposalParallelism'))}, "
+                        f"effective parallelism={parallelism}, costsComparable={bool(policy.get('costsComparable'))}."
+                    ),
+                )
+                self._write_summary_unlocked(run)
             if parallelism <= 1:
                 self._run_proposals_sequential(run, selected_proposals)
             else:
@@ -1915,6 +1969,15 @@ class ComparatorService:
 
         self._append_log(run, proposal.proposal_id, "Starting baseline process.")
         self._append_log(run, proposal.proposal_id, command_label(command))
+        with self._lock:
+            self._set_proposal_state_unlocked(
+                run,
+                proposal.proposal_id,
+                STATUS_RUNNING,
+                "Proceso Python iniciado",
+                0.05,
+            )
+            self._write_summary_unlocked(run)
         process_cost = self._run_process(
             run,
             proposal.proposal_id,
@@ -2291,8 +2354,9 @@ class ComparatorService:
         state["logs"] = int(state.get("logs") or 0) + 1
         state["status"] = STATUS_RUNNING
         state["updatedAt"] = utc_now()
+        progress_message = progress_log_payload(message)
 
-        stage_match = STAGE_RE.match(message)
+        stage_match = STAGE_RE.match(progress_message)
         if stage_match:
             stage_index = int(stage_match.group(1))
             stage_total = int(stage_match.group(2))
@@ -2306,7 +2370,7 @@ class ComparatorService:
             self._refresh_run_progress_unlocked(run)
             return
 
-        generation_match = GENERATION_RE.search(message)
+        generation_match = GENERATION_RE.search(progress_message)
         if generation_match:
             generation_index = int(generation_match.group(1))
             generation_total = int(generation_match.group(2))
@@ -2320,7 +2384,7 @@ class ComparatorService:
             self._refresh_run_progress_unlocked(run)
             return
 
-        percent_match = PERCENT_RE.search(message)
+        percent_match = PERCENT_RE.search(progress_message)
         if percent_match:
             percent = clamp(float(percent_match.group(1)) / 100.0, 0.0, 1.0)
             stage_total = max(int(state.get("stageTotal") or PROPOSAL_TOTALS.get(proposal_id, 1)), 1)
@@ -2329,7 +2393,7 @@ class ComparatorService:
             state["progress"] = max(float(state.get("progress") or 0.0), clamp(base + percent / stage_total, 0.0, 0.98))
 
         if not state.get("stageLabel") or state.get("stageLabel") == "En cola":
-            state["stageLabel"] = message[:120]
+            state["stageLabel"] = progress_message[:120]
         self._refresh_run_progress_unlocked(run)
 
     def _refresh_run_progress_unlocked(self, run: dict[str, Any]) -> None:

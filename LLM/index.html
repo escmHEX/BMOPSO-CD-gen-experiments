@@ -2021,6 +2021,14 @@ Context:
                   <input id="comparatorRepetitions" type="number" min="1" max="30" value="1">
                 </label>
                 <label>
+                  <span>Modo de ejecucion</span>
+                  <select id="comparatorExecutionMode">
+                    <option value="fair_sequential" selected>Comparacion justa (secuencial)</option>
+                    <option value="exploratory_parallel">Exploratoria paralela</option>
+                  </select>
+                  <small id="comparatorExecutionModeNote" class="field-note">Costos comparables: las propuestas se ejecutan una por una.</small>
+                </label>
+                <label>
                   <span>Propuestas paralelas</span>
                   <input id="comparatorProposalParallelism" type="number" min="1" max="8" value="1">
                 </label>

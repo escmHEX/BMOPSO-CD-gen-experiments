@@ -67,6 +67,74 @@ class RepetitionAggregationTests(unittest.TestCase):
             "https://github.com/escmHEX/BMOPSO-CD.git",
         )
 
+    def test_fair_sequential_forces_effective_parallelism_to_one(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["evolmd-mo", "binary-mopso-cd"],
+                "executionMode": "fair_sequential",
+                "proposalParallelism": 3,
+            }
+        )
+        self.assertEqual(parsed["proposalParallelism"], 3)
+        self.assertEqual(parsed["effectiveProposalParallelism"], 1)
+        self.assertTrue(parsed["costsComparable"])
+        self.assertTrue(parsed["executionPolicy"]["costsComparable"])
+
+    def test_exploratory_parallel_keeps_effective_parallelism_and_marks_costs_non_comparable(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["evolmd-mo", "binary-mopso-cd"],
+                "executionMode": "exploratory_parallel",
+                "proposalParallelism": 3,
+            }
+        )
+        self.assertEqual(parsed["proposalParallelism"], 3)
+        self.assertEqual(parsed["effectiveProposalParallelism"], 3)
+        self.assertFalse(parsed["costsComparable"])
+        self.assertFalse(parsed["executionPolicy"]["costsComparable"])
+
+    def test_comparator_parses_timestamped_binary_stage_log(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        run = {
+            "status": "running",
+            "startedAtEpoch": None,
+            "cancelRequested": False,
+            "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal)},
+        }
+        service._apply_log_progress_unlocked(
+            run,
+            proposal.proposal_id,
+            "2026-06-03 00:05:01 | INFO | 3/6 Construyendo poblacion inicial",
+        )
+        state = run["proposalStates"][proposal.proposal_id]
+        self.assertEqual(state["stageIndex"], 3)
+        self.assertEqual(state["stageTotal"], 6)
+        self.assertEqual(state["stageLabel"], "Construyendo poblacion inicial")
+
+    def test_comparator_parses_timestamped_binary_generation_log(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        run = {
+            "status": "running",
+            "startedAtEpoch": None,
+            "cancelRequested": False,
+            "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal)},
+        }
+        service._apply_log_progress_unlocked(
+            run,
+            proposal.proposal_id,
+            "2026-06-03 00:05:20 | INFO | run 1/1 | generation 29/30 | modified=5/20 | archive=10 | hv=0.301896 | spread=0.258775 | elapsed=00:08:44",
+        )
+        state = run["proposalStates"][proposal.proposal_id]
+        self.assertEqual(state["generationIndex"], 29)
+        self.assertEqual(state["generationTotal"], 30)
+        self.assertEqual(state["stageLabel"], "Generacion 29/30")
+
     def test_comparator_config_rejects_unsafe_repository_update_settings(self):
         service = ComparatorService(Path("."))
         bad_configs = [
