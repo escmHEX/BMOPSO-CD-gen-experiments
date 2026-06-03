@@ -1,6 +1,6 @@
 [submodule "baselines/external/evolmd"]
 	path = baselines/external/evolmd
-	url = https://github.com/NewGrumbly/MDPI-EVOLMD.git
+	url = https://github.com/escmHEX/MDPI-EVOLMD.git
 [submodule "baselines/external/evolmd-mo"]
 	path = baselines/external/evolmd-mo
-	url = https://github.com/diegopastrian/EVOLMD-MO.git
+	url = https://github.com/escmHEX/EVOLMD-MO.git

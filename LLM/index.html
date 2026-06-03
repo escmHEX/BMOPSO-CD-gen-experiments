@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Portal de herramientas LLM</title>
     <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./vendor/choices.min.css">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
@@ -2027,6 +2028,10 @@ Context:
                   <span>Timeout por propuesta (min)</span>
                   <input id="comparatorTimeoutMinutes" type="number" min="1" max="1440" value="60">
                 </label>
+                <fieldset class="span-2 checkbox-fieldset">
+                  <legend>Propuestas a ejecutar</legend>
+                  <div id="comparatorProposalSelector" class="checkbox-grid"></div>
+                </fieldset>
               </div>
               <div class="inline-actions">
                 <button id="runComparatorButton" type="button">Ejecutar comparacion</button>
@@ -2037,7 +2042,7 @@ Context:
 
             <article class="panel">
               <div class="panel-title">
-                <h2>Parametros GA</h2>
+                <h2>Parametros comunes</h2>
               </div>
               <div class="form-grid">
                 <label>
@@ -2045,24 +2050,25 @@ Context:
                   <input id="comparatorN" type="number" min="1" max="500" value="10">
                 </label>
                 <label>
-                  <span>Generaciones</span>
+                  <span>Generaciones / iteraciones</span>
                   <input id="comparatorGeneraciones" type="number" min="0" max="500" value="3">
-                </label>
-                <label>
-                  <span>K torneo</span>
-                  <input id="comparatorK" type="number" min="1" max="100" value="3">
-                </label>
-                <label>
-                  <span>Prob. crossover</span>
-                  <input id="comparatorProbCrossover" type="number" min="0" max="1" step="0.01" value="0.8">
-                </label>
-                <label>
-                  <span>Prob. mutacion</span>
-                  <input id="comparatorProbMutacion" type="number" min="0" max="1" step="0.01" value="0.05">
                 </label>
               </div>
             </article>
           </section>
+
+          <details class="panel comparator-config-disclosure">
+            <summary class="disclosure-summary">
+              <span>
+                <strong>Configuracion avanzada por propuesta</strong>
+                <small>Flags propios con controles visuales; salida, referencia, semilla y repeticiones las gestiona el comparador.</small>
+              </span>
+              <b aria-hidden="true"></b>
+            </summary>
+            <div class="comparator-config-disclosure-body">
+              <div id="comparatorProposalConfigPanels" class="proposal-config-grid"></div>
+            </div>
+          </details>
 
           <section class="metrics-grid" aria-label="Resumen del comparador">
             <article class="metric">
@@ -2139,7 +2145,39 @@ Context:
             </div>
           </section>
 
-          <section class="panel">
+          <nav class="tab-strip" aria-label="Vistas del comparador">
+            <button class="secondary comparator-tab is-active" type="button" data-comparator-tab="charts" aria-selected="true">Graficos</button>
+            <button class="secondary comparator-tab" type="button" data-comparator-tab="table" aria-selected="false">Tabla</button>
+            <button class="secondary comparator-tab" type="button" data-comparator-tab="costs" aria-selected="false">Costos</button>
+            <button class="secondary comparator-tab" type="button" data-comparator-tab="logs" aria-selected="false">Logs</button>
+          </nav>
+
+          <section id="comparatorChartsTab" class="comparator-tab-panel is-active">
+            <div id="comparatorParetoCharts" class="chart-grid"></div>
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Top 5 combinado</h2>
+                <span>Soluciones seleccionadas por propuesta.</span>
+              </div>
+              <div id="comparatorCombinedParetoChart" class="chart-surface"></div>
+            </article>
+            <section class="grid three-columns">
+              <article class="panel">
+                <div class="panel-title"><h2>HV por iteracion</h2></div>
+                <div id="comparatorHvChart" class="chart-surface small-chart"></div>
+              </article>
+              <article class="panel">
+                <div class="panel-title"><h2>No dominadas</h2></div>
+                <div id="comparatorNonDominatedChart" class="chart-surface small-chart"></div>
+              </article>
+              <article class="panel">
+                <div class="panel-title"><h2>Spread</h2></div>
+                <div id="comparatorSpreadChart" class="chart-surface small-chart"></div>
+              </article>
+            </section>
+          </section>
+
+          <section id="comparatorTableTab" class="panel comparator-tab-panel">
             <div class="panel-title">
               <h2>Tabla comparativa</h2>
             </div>
@@ -2164,7 +2202,15 @@ Context:
             </div>
           </section>
 
-          <section class="grid two-columns results-layout">
+          <section id="comparatorCostsTab" class="panel comparator-tab-panel">
+            <div class="panel-title">
+              <h2>Costos y trazabilidad</h2>
+              <span>Proceso Python, post-procesamiento y extraccion de metricas separados.</span>
+            </div>
+            <dl id="comparatorCostDetails" class="definition-grid"></dl>
+          </section>
+
+          <section id="comparatorLogsTab" class="grid two-columns results-layout comparator-tab-panel">
             <article class="panel">
               <div class="panel-title">
                 <h2>Ultimos logs</h2>
@@ -2276,6 +2322,8 @@ Context:
       </main>
     </div>
 
+    <script src="./vendor/echarts.min.js"></script>
+    <script src="./vendor/choices.min.js"></script>
     <script type="module" src="./app.js"></script>
   </body>
 </html>

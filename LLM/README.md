@@ -75,6 +75,17 @@ La sección `Comparador de propuestas` integra baselines clonados como submodule
 
 - `baselines/external/evolmd`
 - `baselines/external/evolmd-mo`
+- `C:\Users\Admin\Desktop\Implementación\Binary MOPSO-CD`
+
+Los submodules EVOLMD y EVOLMD-MO deben apuntar a los forks `escmHEX/MDPI-EVOLMD` y `escmHEX/EVOLMD-MO`.
+
+La configuración editable del comparador vive en `baselines/comparator_config.json`. Ahí se definen rutas de repositorios, Python por propuesta, rutas extra de `PYTHONPATH`, módulos requeridos, defaults comunes y modelo SBERT post-hoc. Los flags propios de cada propuesta se declaran en su adaptador y se configuran desde `proposalConfigs[proposalId].cliValues`. `COMPARATOR_CONFIG_PATH` permite usar otro archivo de configuración sin modificar código.
+
+Binary MOPSO-CD se ejecuta desde su repositorio real y lee `pareto_front.json`, `final_selection_hybrid.json`, `evolucion_metricas.csv` y `llm_calls.jsonl`, normalizando F.O. como `[objectives.f1, objectives.f2]`.
+
+`selectedProposalIds` permite ejecutar una, varias o todas las propuestas. La interfaz visual construye `proposalConfigs[proposalId].cliValues` con inputs, selects y checkboxes por flag configurable; el backend traduce esos valores a argumentos CLI. `extraArgs` se conserva solo como compatibilidad interna. Salida, texto de referencia, semilla, repeticiones y flags globales siguen gestionados por el comparador para mantener aislamiento y comparabilidad.
+
+Los costos se reportan separados en algoritmo Python, llamadas LLM, post-procesamiento externo de seleccion y extraccion/preparacion de metricas para visualizacion.
 
 La web llama a la API local de `server.py`:
 
@@ -99,7 +110,7 @@ Los costos de ejecución se devuelven en `costSummary` a nivel de corrida y en `
 
 Para EVOLMD-MO se usa maximización, fidelidad normalizada con `(fidelity + 1) / 2`, diversidad acotada a `[0, 1]`, punto de referencia HV `[0, 0]` y spread como desviación normalizada entre distancias consecutivas del frente no dominado. Para EVOLMD, HV/spread son diagnósticos post-hoc sobre `[fitness, semantic_diversity_posthoc]`, con ambos valores acotados a `[0, 1]`.
 
-Antes de ejecutar una comparación real, instala las dependencias Python en el Python global usado por `py`, y mantén Ollama corriendo con el modelo elegido, por ejemplo `llama3`.
+Antes de ejecutar una comparación real, configura en `baselines/comparator_config.json` el `pythonExecutable` correcto para cada propuesta o sus `pythonPathEntries`. La API `GET /api/comparator/proposals` reporta dependencias faltantes por propuesta antes de permitir seleccionarlas. Mantén Ollama corriendo con el modelo elegido.
 
 ## Simulación de iteración PSO
 

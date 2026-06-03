@@ -354,6 +354,10 @@ let latestSolutionRows = [];
 let psoDatabase = null;
 let comparatorPollTimer = null;
 let currentComparatorRunId = null;
+let comparatorProposals = [];
+let comparatorCharts = [];
+let comparatorChartSignature = "";
+let comparatorChoiceInstances = [];
 let initialPopulationPollTimer = null;
 let currentInitialPopulationRunId = null;
 let initialComparisonPollTimer = null;
@@ -665,11 +669,10 @@ const dom = {
   comparatorRepetitions: document.querySelector("#comparatorRepetitions"),
   comparatorProposalParallelism: document.querySelector("#comparatorProposalParallelism"),
   comparatorTimeoutMinutes: document.querySelector("#comparatorTimeoutMinutes"),
+  comparatorProposalSelector: document.querySelector("#comparatorProposalSelector"),
+  comparatorProposalConfigPanels: document.querySelector("#comparatorProposalConfigPanels"),
   comparatorN: document.querySelector("#comparatorN"),
   comparatorGeneraciones: document.querySelector("#comparatorGeneraciones"),
-  comparatorK: document.querySelector("#comparatorK"),
-  comparatorProbCrossover: document.querySelector("#comparatorProbCrossover"),
-  comparatorProbMutacion: document.querySelector("#comparatorProbMutacion"),
   runComparatorButton: document.querySelector("#runComparatorButton"),
   cancelComparatorButton: document.querySelector("#cancelComparatorButton"),
   clearComparatorButton: document.querySelector("#clearComparatorButton"),
@@ -693,6 +696,12 @@ const dom = {
   comparatorProgressDetails: document.querySelector("#comparatorProgressDetails"),
   comparatorProposalCards: document.querySelector("#comparatorProposalCards"),
   comparatorResultsBody: document.querySelector("#comparatorResultsBody"),
+  comparatorParetoCharts: document.querySelector("#comparatorParetoCharts"),
+  comparatorCombinedParetoChart: document.querySelector("#comparatorCombinedParetoChart"),
+  comparatorHvChart: document.querySelector("#comparatorHvChart"),
+  comparatorNonDominatedChart: document.querySelector("#comparatorNonDominatedChart"),
+  comparatorSpreadChart: document.querySelector("#comparatorSpreadChart"),
+  comparatorCostDetails: document.querySelector("#comparatorCostDetails"),
   comparatorLogOutput: document.querySelector("#comparatorLogOutput"),
   comparatorIntegrationDetails: document.querySelector("#comparatorIntegrationDetails"),
   embeddingModelLabel: document.querySelector("#embeddingModelLabel"),
@@ -4390,11 +4399,23 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
     dom.comparatorTimeoutMinutes,
     dom.comparatorN,
     dom.comparatorGeneraciones,
-    dom.comparatorK,
-    dom.comparatorProbCrossover,
-    dom.comparatorProbMutacion,
   ].forEach((field) => {
     field.disabled = isRunning;
+  });
+  dom.comparatorProposalSelector.querySelectorAll("input").forEach((field) => {
+    field.disabled = isRunning || !field.dataset.available;
+  });
+  dom.comparatorProposalConfigPanels.querySelectorAll("input, select, textarea, button").forEach((field) => {
+    const card = field.closest("[data-proposal-config-card]");
+    field.disabled = isRunning || card?.dataset.available !== "1";
+  });
+  comparatorChoiceInstances.forEach((choice) => {
+    const card = choice.passedElement?.element?.closest("[data-proposal-config-card]");
+    if (isRunning || card?.dataset.available !== "1") {
+      choice.disable();
+    } else {
+      choice.enable();
+    }
   });
 }
 
@@ -4421,6 +4442,14 @@ function resetComparatorUi() {
   dom.comparatorConnectionText.textContent = "Sin ejecucion";
   dom.comparatorConnectionDot.classList.remove("is-busy", "is-error");
   dom.comparatorResultsBody.innerHTML = '<tr><td colspan="8">Sin resultados todavia.</td></tr>';
+  dom.comparatorParetoCharts.replaceChildren();
+  dom.comparatorCombinedParetoChart.innerHTML = "";
+  dom.comparatorHvChart.innerHTML = "";
+  dom.comparatorNonDominatedChart.innerHTML = "";
+  dom.comparatorSpreadChart.innerHTML = "";
+  renderDefinitionList(dom.comparatorCostDetails, [["Costos", "Sin corrida activa."]]);
+  comparatorChartSignature = "";
+  disposeComparatorCharts();
   dom.comparatorProposalCards.innerHTML = `
     <article class="proposal-card">
       <strong>Sin corrida</strong>
@@ -4435,31 +4464,320 @@ function resetComparatorUi() {
     dom.comparatorStatusTitle,
     dom.comparatorStatusDetail,
     "Listo",
-    "Ejecuta EVOLMD y EVOLMD-MO desde sus clones Python usando Ollama local.",
+    "Ejecuta las propuestas seleccionadas desde sus repos Python usando Ollama local.",
   );
+}
+
+function disposeComparatorCharts() {
+  comparatorCharts.forEach((chart) => chart.dispose());
+  comparatorCharts = [];
+}
+
+function disposeComparatorChoices() {
+  comparatorChoiceInstances.forEach((choice) => choice.destroy());
+  comparatorChoiceInstances = [];
+}
+
+function renderComparatorProposalControls(proposals) {
+  comparatorProposals = proposals || [];
+  if (!dom.comparatorProposalSelector || !dom.comparatorProposalConfigPanels) return;
+  disposeComparatorChoices();
+  dom.comparatorProposalSelector.replaceChildren(
+    ...comparatorProposals.map((proposal) => {
+      const label = document.createElement("label");
+      const missing = (proposal.dependencyStatus?.missing || []).join(", ");
+      const availabilityDetail = proposal.available
+        ? "Disponible"
+        : missing
+          ? `No disponible: faltan ${missing}`
+          : "No disponible";
+      label.innerHTML = `
+        <input type="checkbox" value="${escapeHtml(proposal.proposalId)}" data-comparator-proposal="${escapeHtml(proposal.proposalId)}" ${proposal.available ? "data-available=\"1\" checked" : "disabled"}>
+        <span>
+          <strong>${escapeHtml(proposal.displayName)}</strong><br>
+          <small>${escapeHtml(availabilityDetail)} - ${escapeHtml((proposal.objectiveNames || []).join(", "))}</small>
+        </span>
+      `;
+      return label;
+    }),
+  );
+  dom.comparatorProposalConfigPanels.replaceChildren(
+    ...comparatorProposals.map((proposal) => {
+      const article = document.createElement("details");
+      article.className = "proposal-config-card proposal-config-subdisclosure";
+      article.dataset.proposalConfigCard = proposal.proposalId;
+      article.dataset.available = proposal.available ? "1" : "0";
+      const configurableOptions = comparatorConfigurableOptions(proposal);
+      const globalFlags = (proposal.cliOptions || [])
+        .filter((option) => option.source === "common")
+        .map((option) => option.flag)
+        .join(", ");
+      const managedFlags = (proposal.cliOptions || [])
+        .filter((option) => option.source === "managed")
+        .map((option) => option.flag)
+        .join(", ");
+      article.innerHTML = `
+        <summary class="proposal-config-summary">
+          <span>
+            <strong>${escapeHtml(proposal.displayName)}</strong>
+            <small>${escapeHtml(configurableOptions.length ? `${configurableOptions.length} controles configurables` : "Sin flags propios configurables")}</small>
+          </span>
+          <span class="proposal-config-meta">${escapeHtml(proposal.available ? "Disponible" : "No disponible")}</span>
+          <b aria-hidden="true"></b>
+        </summary>
+        <div class="proposal-config-body">
+          <div class="proposal-config-runtime">
+            <small>${escapeHtml(proposal.repositoryPath || "")}</small>
+            <small>Python: ${escapeHtml(proposal.pythonExecutable || "--")}</small>
+          </div>
+          <div class="proposal-cli-fields" data-proposal-cli-fields></div>
+          <div class="proposal-config-footnotes">
+            <small>Globales: ${escapeHtml(globalFlags || "ninguna")}</small>
+            <small>Gestionadas por comparador: ${escapeHtml(managedFlags || "ninguna")}</small>
+          </div>
+        </div>
+      `;
+      const fields = article.querySelector("[data-proposal-cli-fields]");
+      if (configurableOptions.length) {
+        fields.replaceChildren(...configurableOptions.map((option) => renderComparatorCliOption(proposal, option)));
+      } else {
+        fields.innerHTML = '<p class="muted-note">Esta propuesta no expone flags propios adicionales.</p>';
+      }
+      if (!proposal.available) {
+        article.querySelectorAll("input, select, textarea, button").forEach((field) => {
+          field.disabled = true;
+        });
+      }
+      return article;
+    }),
+  );
+  enhanceComparatorSelects();
+}
+
+function enhanceComparatorSelects() {
+  if (!window.Choices) return;
+  dom.comparatorProposalConfigPanels.querySelectorAll("select.cli-select").forEach((select) => {
+    comparatorChoiceInstances.push(new window.Choices(select, {
+      allowHTML: false,
+      searchEnabled: false,
+      itemSelectText: "",
+      shouldSort: false,
+    }));
+  });
+}
+
+function comparatorConfigurableOptions(proposal) {
+  return (proposal.cliOptions || []).filter((option) => option.source !== "managed" && option.source !== "common");
+}
+
+function comparatorOptionLabel(option) {
+  if (option.label) return String(option.label);
+  return String(option.flag || "").replace(/^--/, "").replace(/-/g, " ");
+}
+
+function comparatorOptionInputId(proposal, option, suffix = "") {
+  const raw = `${proposal.proposalId}-${option.flag || ""}-${suffix}`;
+  return `cli-${raw.replace(/[^A-Za-z0-9_-]+/g, "-")}`;
+}
+
+function renderComparatorCliOption(proposal, option) {
+  const type = option.type || "string";
+  if (type === "bool") return renderComparatorBoolOption(proposal, option);
+  if (type === "multi_select") return renderComparatorMultiSelectOption(proposal, option);
+  if (type === "repeatable_assignment_bool") return renderComparatorAssignmentBoolOption(proposal, option);
+  if (type === "repeatable_assignment") return renderComparatorAssignmentOption(proposal, option);
+  if (type === "repeatable") return renderComparatorRepeatableOption(proposal, option);
+  return renderComparatorScalarOption(proposal, option);
+}
+
+function renderComparatorScalarOption(proposal, option) {
+  const wrapper = document.createElement("label");
+  wrapper.className = "cli-field";
+  const inputId = comparatorOptionInputId(proposal, option);
+  const isNumber = option.type === "int" || option.type === "float";
+  const inputType = isNumber ? "number" : "text";
+  const datalistId = option.choices?.length ? `${inputId}-choices` : "";
+  const defaultValue = option.default === undefined ? "" : String(option.default);
+  wrapper.innerHTML = `
+    <span>${escapeHtml(comparatorOptionLabel(option))}</span>
+    <input id="${escapeHtml(inputId)}" type="${inputType}" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="${escapeHtml(option.type || "string")}" ${datalistId ? `list="${escapeHtml(datalistId)}"` : ""} ${option.min !== undefined ? `min="${escapeHtml(option.min)}"` : ""} ${option.max !== undefined ? `max="${escapeHtml(option.max)}"` : ""} ${option.step !== undefined ? `step="${escapeHtml(option.step)}"` : isNumber ? 'step="any"' : ""} placeholder="${escapeHtml(defaultValue)}">
+    ${datalistId ? `<datalist id="${escapeHtml(datalistId)}">${option.choices.map((choice) => `<option value="${escapeHtml(choice)}"></option>`).join("")}</datalist>` : ""}
+    <small>${escapeHtml(option.flag)}${option.default !== undefined ? ` - default: ${option.default}` : ""}</small>
+  `;
+  return wrapper;
+}
+
+function renderComparatorBoolOption(proposal, option) {
+  const label = document.createElement("label");
+  label.className = "cli-field cli-field-checkbox";
+  label.innerHTML = `
+    <input type="checkbox" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="bool">
+    <span>
+      <strong>${escapeHtml(comparatorOptionLabel(option))}</strong>
+      <small>${escapeHtml(option.flag)}</small>
+    </span>
+  `;
+  return label;
+}
+
+function renderComparatorMultiSelectOption(proposal, option) {
+  const fieldset = document.createElement("fieldset");
+  fieldset.className = "cli-fieldset cli-choice-grid";
+  fieldset.innerHTML = `<legend>${escapeHtml(comparatorOptionLabel(option))}</legend>`;
+  const choices = Array.isArray(option.choices) ? option.choices : [];
+  fieldset.append(
+    ...choices.map((choice) => {
+      const label = document.createElement("label");
+      label.className = "cli-field-checkbox";
+      label.innerHTML = `
+        <input type="checkbox" value="${escapeHtml(choice)}" data-comparator-cli-multi data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-flag="${escapeHtml(option.flag)}">
+        <span>${escapeHtml(choice)}</span>
+      `;
+      return label;
+    }),
+  );
+  const note = document.createElement("small");
+  note.textContent = option.flag;
+  fieldset.append(note);
+  return fieldset;
+}
+
+function renderComparatorAssignmentBoolOption(proposal, option) {
+  const fieldset = document.createElement("fieldset");
+  fieldset.className = "cli-fieldset cli-assignment-fieldset";
+  fieldset.innerHTML = `<legend>${escapeHtml(comparatorOptionLabel(option))}</legend>`;
+  fieldset.append(
+    ...comparatorOptionAssignments(option).map((assignment) => {
+      const label = document.createElement("label");
+      label.className = "cli-assignment-row";
+      label.innerHTML = `
+        <span>${escapeHtml(assignment.label || assignment.name)}</span>
+        <select class="cli-select" data-comparator-cli-assignment data-assignment-kind="bool" data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-flag="${escapeHtml(option.flag)}" data-assignment-name="${escapeHtml(assignment.name)}">
+          <option value="">Sin cambio</option>
+          <option value="true">Activar</option>
+          <option value="false">Desactivar</option>
+        </select>
+      `;
+      return label;
+    }),
+  );
+  return fieldset;
+}
+
+function renderComparatorAssignmentOption(proposal, option) {
+  const fieldset = document.createElement("fieldset");
+  fieldset.className = "cli-fieldset cli-assignment-fieldset";
+  fieldset.innerHTML = `<legend>${escapeHtml(comparatorOptionLabel(option))}</legend>`;
+  fieldset.append(
+    ...comparatorOptionAssignments(option).map((assignment) => {
+      const label = document.createElement("label");
+      label.className = "cli-assignment-row";
+      label.innerHTML = `
+        <span>${escapeHtml(assignment.label || assignment.name)}</span>
+        <input type="text" data-comparator-cli-assignment data-assignment-kind="string" data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-flag="${escapeHtml(option.flag)}" data-assignment-name="${escapeHtml(assignment.name)}" placeholder="Modelo opcional">
+      `;
+      return label;
+    }),
+  );
+  return fieldset;
+}
+
+function renderComparatorRepeatableOption(proposal, option) {
+  const fieldset = document.createElement("fieldset");
+  fieldset.className = "cli-fieldset cli-repeat-fieldset";
+  fieldset.innerHTML = `<legend>${escapeHtml(comparatorOptionLabel(option))}</legend>`;
+  for (let index = 0; index < 3; index += 1) {
+    const label = document.createElement("label");
+    label.className = "cli-field";
+    label.innerHTML = `
+      <span>Valor ${index + 1}</span>
+      <input type="text" data-comparator-cli-repeat data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-flag="${escapeHtml(option.flag)}">
+    `;
+    fieldset.append(label);
+  }
+  return fieldset;
+}
+
+function comparatorOptionAssignments(option) {
+  return Array.isArray(option.assignments) ? option.assignments : [];
+}
+
+function selectedComparatorProposalIds() {
+  return Array.from(dom.comparatorProposalSelector.querySelectorAll("[data-comparator-proposal]:checked"))
+    .map((input) => input.dataset.comparatorProposal)
+    .filter(Boolean);
+}
+
+function comparatorProposalConfigs() {
+  const configs = {};
+  comparatorProposals.forEach((proposal) => {
+    configs[proposal.proposalId] = { cliValues: {} };
+  });
+  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-cli-value]").forEach((field) => {
+    const proposalId = field.dataset.proposalId;
+    const flag = field.dataset.cliFlag;
+    if (!proposalId || !flag) return;
+    const type = field.dataset.cliType || "string";
+    const value = type === "bool" ? field.checked : field.value.trim();
+    if (type === "bool" ? value : value !== "") {
+      configs[proposalId].cliValues[flag] = value;
+    }
+  });
+  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-cli-multi]").forEach((field) => {
+    if (!field.checked) return;
+    const proposalId = field.dataset.proposalId;
+    const flag = field.dataset.cliFlag;
+    if (!proposalId || !flag) return;
+    const values = configs[proposalId].cliValues[flag] || [];
+    values.push(field.value);
+    configs[proposalId].cliValues[flag] = values;
+  });
+  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-cli-repeat]").forEach((field) => {
+    const proposalId = field.dataset.proposalId;
+    const flag = field.dataset.cliFlag;
+    const value = field.value.trim();
+    if (!proposalId || !flag || !value) return;
+    const values = configs[proposalId].cliValues[flag] || [];
+    values.push(value);
+    configs[proposalId].cliValues[flag] = values;
+  });
+  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-cli-assignment]").forEach((field) => {
+    const proposalId = field.dataset.proposalId;
+    const flag = field.dataset.cliFlag;
+    const assignmentName = field.dataset.assignmentName;
+    const value = field.value.trim();
+    if (!proposalId || !flag || !assignmentName || value === "") return;
+    const values = configs[proposalId].cliValues[flag] || {};
+    values[assignmentName] = field.dataset.assignmentKind === "bool" ? value === "true" : value;
+    configs[proposalId].cliValues[flag] = values;
+  });
+  return configs;
 }
 
 function readComparatorConfig() {
   const referenceText = dom.comparatorReferenceText.value.trim();
   const model = dom.comparatorModel.value.trim();
+  const selectedProposalIds = selectedComparatorProposalIds();
   if (!referenceText) {
     throw new Error("Define el texto de referencia.");
   }
   if (!model) {
     throw new Error("Define el modelo Ollama.");
   }
+  if (!selectedProposalIds.length) {
+    throw new Error("Selecciona al menos una propuesta.");
+  }
 
   return {
     referenceText,
     model,
+    selectedProposalIds,
+    proposalConfigs: comparatorProposalConfigs(),
     topK: Math.floor(readClampedNumber(dom.comparatorTopK, "Top K tabla", 1, 200)),
     seed: Math.floor(readClampedNumber(dom.comparatorSeed, "Semilla", 0, 2147483647)),
     repetitionsK: Math.floor(readClampedNumber(dom.comparatorRepetitions, "K repeticiones", 1, 30)),
     n: Math.floor(readClampedNumber(dom.comparatorN, "N individuos", 1, 500)),
     generaciones: Math.floor(readClampedNumber(dom.comparatorGeneraciones, "Generaciones", 0, 500)),
-    k: Math.floor(readClampedNumber(dom.comparatorK, "K torneo", 1, 100)),
-    probCrossover: readClampedNumber(dom.comparatorProbCrossover, "Prob. crossover", 0, 1),
-    probMutacion: readClampedNumber(dom.comparatorProbMutacion, "Prob. mutacion", 0, 1),
     proposalParallelism: Math.floor(readClampedNumber(dom.comparatorProposalParallelism, "Propuestas paralelas", 1, 8)),
     timeoutMinutes: Math.floor(readClampedNumber(dom.comparatorTimeoutMinutes, "Timeout por propuesta", 1, 1440)),
   };
@@ -4483,8 +4801,13 @@ async function requestComparatorJson(path, options = {}) {
 async function loadComparatorProposals() {
   try {
     const payload = await requestComparatorJson("/proposals");
+    renderComparatorProposalControls(payload.proposals || []);
     const proposalSummary = payload.proposals
-      .map((proposal) => `${proposal.displayName}: ${proposal.available ? "clonado" : "faltante"} (${proposal.objectiveNames.join(", ")})`)
+      .map((proposal) => {
+        const missing = (proposal.dependencyStatus?.missing || []).join(", ");
+        const status = proposal.available ? "disponible" : `no disponible${missing ? `, faltan ${missing}` : ""}`;
+        return `${proposal.displayName}: ${status} (${proposal.objectiveNames.join(", ")})`;
+      })
       .join("; ");
     renderDefinitionList(dom.comparatorIntegrationDetails, [
       ["Contrato", "{proposalId, displayName, rows, metrics, outputDir, status}"],
@@ -4492,6 +4815,7 @@ async function loadComparatorProposals() {
       ["EVOLMD", "data_final_evaluada.json -> [fitness]"],
       ["EVOLMD post-hoc", "Vector diagnostico [fitness, semantic_diversity_posthoc]; HV/spread no alteran la seleccion."],
       ["EVOLMD-MO", "pareto_front.json -> [fidelity_sbert, diversity_individual]"],
+      ["Binary MOPSO-CD", "pareto_front.json -> [objectives.f1, objectives.f2]; seleccion desde final_selection_hybrid.json"],
       ["MO", "HV con referencia [0,0]; spread menor es mejor; para EVOLMD son diagnosticos post-hoc."],
     ]);
   } catch (error) {
@@ -4512,8 +4836,9 @@ async function runComparator() {
   }
 
   stopComparatorPolling();
+  comparatorChartSignature = "";
   setComparatorRunning(true);
-  dom.comparatorResultsBody.innerHTML = '<tr><td colspan="7">Esperando resultados.</td></tr>';
+  dom.comparatorResultsBody.innerHTML = '<tr><td colspan="8">Esperando resultados.</td></tr>';
   dom.comparatorProposalCards.innerHTML = "";
   dom.comparatorLogOutput.textContent = "Iniciando corrida...";
   dom.comparatorConnectionDot.classList.add("is-busy");
@@ -4684,6 +5009,8 @@ function renderComparatorRun(run) {
   renderComparatorCostSummary(run.costSummary || null);
   renderComparatorCards(comparatorProposalViews(run));
   renderComparatorRows(rows);
+  renderComparatorCostDetails(run);
+  renderComparatorCharts(run);
   renderComparatorLogs(run.logs || []);
 
   const detail = run.error
@@ -4738,7 +5065,10 @@ function renderComparatorCards(proposals) {
           <dt>${escapeHtml(hvLabel)}</dt><dd>${escapeHtml(metrics.hypervolumeLabel || "No aplica")}</dd>
           <dt>${escapeHtml(spreadLabel)}</dt><dd>${escapeHtml(metrics.spreadLabel || "No aplica")}</dd>
           ${metrics.postHocDiagnostic ? `<dt>Vector post-hoc</dt><dd>${escapeHtml(metrics.bestDiagnosticObjectiveLabel || "--")}</dd>` : ""}
-          <dt>Wall-clock</dt><dd>${escapeHtml(cost.processWallClockLabel || "--")}</dd>
+          <dt>Algoritmo</dt><dd>${escapeHtml(cost.processWallClockLabel || "--")}</dd>
+          <dt>Total prop.</dt><dd>${escapeHtml(cost.proposalTotalWallClockLabel || cost.processWallClockLabel || "--")}</dd>
+          <dt>Post</dt><dd>${escapeHtml(cost.postProcessingWallClockLabel || "0s")}</dd>
+          <dt>Metricas web</dt><dd>${escapeHtml(cost.metricExtractionLabel || "0s")}</dd>
           <dt>Llamadas LLM</dt><dd>${escapeHtml(String(cost.llmCalls ?? 0))}</dd>
           <dt>Tiempo LLM</dt><dd>${escapeHtml(cost.llmClientWallClockLabel || "--")}</dd>
           <dt>Prom. llamada</dt><dd>${escapeHtml(cost.llmAverageCallLabel || "No disponible")}</dd>
@@ -4749,6 +5079,194 @@ function renderComparatorCards(proposals) {
       return article;
     }),
   );
+}
+
+function renderComparatorCostDetails(run) {
+  const cost = run.costSummary || {};
+  const entries = [
+    ["Run wall-clock", cost.runWallClockLabel || "--"],
+    ["Procesos Python", cost.proposalWallClockSumLabel || "--"],
+    ["Total propuesta", cost.proposalTotalWallClockSumLabel || "--"],
+    ["Post-procesamiento", cost.postProcessingWallClockSumLabel || "0s"],
+    ["Extraccion metricas", cost.metricExtractionSumLabel || "0s"],
+    ["Preparacion visual", cost.plotPreparationSumLabel || "0s"],
+    ["Llamadas LLM", `${cost.llmCalls ?? 0} (${cost.llmSuccessfulCalls ?? 0} ok, ${cost.llmFailedCalls ?? 0} fallidas)`],
+    ["Tokens reportados", String(cost.totalTokens ?? 0)],
+  ];
+  for (const proposal of run.proposals || []) {
+    const proposalCost = proposal.cost || {};
+    entries.push([
+      `${proposal.displayName} costo`,
+      `algoritmo ${proposalCost.processWallClockLabel || "--"}; post ${proposalCost.postProcessingWallClockLabel || "0s"}; metricas ${proposalCost.metricExtractionLabel || "0s"}; LLM ${proposalCost.llmCalls ?? 0} llamadas`,
+    ]);
+    if (proposal.command) {
+      entries.push([`${proposal.displayName} comando`, proposal.command]);
+    }
+  }
+  renderDefinitionList(dom.comparatorCostDetails, entries);
+}
+
+function renderComparatorCharts(run) {
+  if (!window.echarts) {
+    dom.comparatorParetoCharts.innerHTML = '<article class="panel"><p>ECharts no esta disponible.</p></article>';
+    return;
+  }
+  const signature = comparatorChartsSignature(run);
+  if (signature === comparatorChartSignature) {
+    return;
+  }
+  comparatorChartSignature = signature;
+  disposeComparatorCharts();
+  const proposals = (run.proposals || []).filter((proposal) => proposal.status === "completed");
+  renderComparatorParetoCharts(proposals);
+  renderComparatorCombinedSelectedChart(proposals);
+  renderComparatorMetricLine(dom.comparatorHvChart, proposals, "hypervolume", "HV por iteracion");
+  renderComparatorMetricLine(dom.comparatorNonDominatedChart, proposals, "nonDominatedRows", "Soluciones no dominadas");
+  renderComparatorMetricLine(dom.comparatorSpreadChart, proposals, "spread", "Spread por iteracion");
+}
+
+function comparatorChartsSignature(run) {
+  return JSON.stringify({
+    runId: run.runId || "",
+    proposals: (run.proposals || []).map((proposal) => ({
+      proposalId: proposal.proposalId,
+      status: proposal.status,
+      pareto: ((proposal.charts || {}).pareto || []).length,
+      selected: ((proposal.charts || {}).selected || []).length,
+      series: (proposal.series || []).length,
+      rows: (proposal.rows || []).length,
+    })),
+  });
+}
+
+function renderComparatorParetoCharts(proposals) {
+  dom.comparatorParetoCharts.replaceChildren(
+    ...proposals.map((proposal) => {
+      const article = document.createElement("article");
+      article.className = "panel";
+      article.innerHTML = `
+        <div class="panel-title">
+          <h2>${escapeHtml(proposal.displayName)}</h2>
+          <span>Frente de Pareto</span>
+        </div>
+        <div class="chart-surface" data-chart></div>
+      `;
+      const chartNode = article.querySelector("[data-chart]");
+      window.queueMicrotask(() => {
+        const chart = window.echarts.init(chartNode);
+        comparatorCharts.push(chart);
+        chart.setOption(paretoChartOption(proposal.displayName, proposal.charts || {}));
+      });
+      return article;
+    }),
+  );
+}
+
+function renderComparatorCombinedSelectedChart(proposals) {
+  const selectedSeries = proposals.map((proposal, index) => ({
+    name: proposal.displayName,
+    type: "scatter",
+    symbolSize: 14,
+    data: ((proposal.charts || {}).selected || []).map((point) => ({
+      value: [point.x, point.y],
+      labelText: point.label,
+      prompt: point.prompt,
+      rank: point.rank,
+    })),
+    itemStyle: { color: chartPalette(index) },
+  }));
+  const chart = window.echarts.init(dom.comparatorCombinedParetoChart);
+  comparatorCharts.push(chart);
+  chart.setOption(baseScatterOption("Top 5 combinado", selectedSeries));
+}
+
+function renderComparatorMetricLine(container, proposals, metricKey, title) {
+  const series = proposals.map((proposal, index) => ({
+    name: proposal.displayName,
+    type: "line",
+    connectNulls: false,
+    showSymbol: false,
+    data: (proposal.series || [])
+      .filter((point) => point[metricKey] !== null && point[metricKey] !== undefined)
+      .map((point) => [point.generation, point[metricKey]]),
+    itemStyle: { color: chartPalette(index) },
+  }));
+  const chart = window.echarts.init(container);
+  comparatorCharts.push(chart);
+  chart.setOption({
+    title: { text: title, left: 8, top: 6, textStyle: { fontSize: 13 } },
+    tooltip: { trigger: "axis" },
+    legend: { top: 32 },
+    grid: { left: 48, right: 16, top: 72, bottom: 42 },
+    toolbox: { feature: { saveAsImage: {}, dataZoom: {} }, right: 8 },
+    dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 8 }],
+    xAxis: { type: "value", name: "Iteracion", minInterval: 1 },
+    yAxis: { type: "value", scale: true },
+    series,
+  });
+}
+
+function paretoChartOption(title, charts) {
+  const allPoints = (charts.pareto || []).map((point) => ({
+    value: [point.x, point.y],
+    labelText: point.label,
+    prompt: point.prompt,
+    rank: point.rank,
+  }));
+  const selectedPoints = (charts.selected || []).map((point) => ({
+    value: [point.x, point.y],
+    labelText: point.label,
+    prompt: point.prompt,
+    rank: point.rank,
+  }));
+  return baseScatterOption(title, [
+    { name: "Individuos", type: "scatter", symbolSize: 8, data: allPoints, itemStyle: { color: "#60a5fa", opacity: 0.72 } },
+    { name: "Seleccionadas", type: "scatter", symbol: "diamond", symbolSize: 15, data: selectedPoints, itemStyle: { color: "#b42318" } },
+  ]);
+}
+
+function baseScatterOption(title, series) {
+  return {
+    title: { text: title, left: 8, top: 6, textStyle: { fontSize: 13 } },
+    tooltip: {
+      trigger: "item",
+      formatter(params) {
+        const data = params.data || {};
+        const value = params.value || [];
+        return `
+          <strong>${escapeHtml(params.seriesName)}</strong><br>
+          F1: ${formatOptionalNumber(value[0], 6)}<br>
+          F2: ${formatOptionalNumber(value[1], 6)}<br>
+          Rank: ${escapeHtml(String(data.rank ?? "--"))}<br>
+          ${escapeHtml(String(data.labelText || "")).slice(0, 220)}
+        `;
+      },
+    },
+    legend: { top: 32 },
+    grid: { left: 48, right: 16, top: 72, bottom: 42 },
+    toolbox: { feature: { saveAsImage: {}, dataZoom: {} }, right: 8 },
+    dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 8 }],
+    xAxis: { type: "value", name: "Fidelidad", scale: true },
+    yAxis: { type: "value", name: "Diversidad", scale: true },
+    series,
+  };
+}
+
+function chartPalette(index) {
+  return ["#2458b8", "#0f766e", "#b42318", "#7c3aed", "#ca8a04"][index % 5];
+}
+
+function activateComparatorTab(tabName) {
+  document.querySelectorAll(".comparator-tab").forEach((button) => {
+    const isActive = button.dataset.comparatorTab === tabName;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  });
+  document.querySelectorAll(".comparator-tab-panel").forEach((panel) => {
+    const expectedId = `comparator${tabName[0].toUpperCase()}${tabName.slice(1)}Tab`;
+    panel.classList.toggle("is-active", panel.id === expectedId);
+  });
+  window.setTimeout(() => comparatorCharts.forEach((chart) => chart.resize()), 0);
 }
 
 function renderComparatorRows(rows) {
@@ -5370,6 +5888,10 @@ dom.turbulenceCandidateModalBody.addEventListener("click", async (event) => {
 dom.runComparatorButton.addEventListener("click", runComparator);
 dom.cancelComparatorButton.addEventListener("click", cancelComparatorRun);
 dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
+document.querySelectorAll(".comparator-tab").forEach((button) => {
+  button.addEventListener("click", () => activateComparatorTab(button.dataset.comparatorTab));
+});
+window.addEventListener("resize", () => comparatorCharts.forEach((chart) => chart.resize()));
 dom.solutionLlmModelSelect.addEventListener("change", () => {
   if (dom.solutionLlmModelSelect.value) {
     dom.solutionLlmModelManual.value = dom.solutionLlmModelSelect.value;

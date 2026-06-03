@@ -5,6 +5,9 @@ import math
 import os
 import queue
 import re
+import csv
+import ctypes
+import shlex
 import signal
 import subprocess
 import sys
@@ -17,6 +20,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from baselines.comparator_metrics import aggregate_series
+from baselines.comparator_metrics import build_charts_from_rows
+from baselines.comparator_metrics import calculate_hypervolume
+from baselines.comparator_metrics import calculate_spread
+from baselines.comparator_metrics import canonical_generated_text
+from baselines.comparator_metrics import entropy_weights
+from baselines.comparator_metrics import mark_non_dominated
+from baselines.comparator_metrics import mark_posthoc_non_dominated
+from baselines.comparator_metrics import normalized_mo_point
+from baselines.comparator_metrics import normalized_posthoc_point
+from baselines.comparator_metrics import topsis_scores
 from sbert_service import shared_sbert_service
 
 
@@ -28,10 +42,27 @@ STATUS_CANCELLED = "cancelled"
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 STAGE_RE = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s+(.+)$")
-GENERATION_RE = re.compile(r"Generaci[oó]n\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
+GENERATION_RE = re.compile(r"(?:Generaci[oó]n|generation)\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
 PERCENT_RE = re.compile(r"(\d{1,3})%")
-PROPOSAL_TOTALS = {proposal_id: total for proposal_id, total in (("evolmd", 6), ("evolmd-mo", 5))}
-POSTHOC_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+PROPOSAL_TOTALS = {proposal_id: total for proposal_id, total in (("evolmd", 6), ("evolmd-mo", 5), ("binary-mopso-cd", 6))}
+COMPARATOR_CONFIG_PATH = Path(os.environ.get("COMPARATOR_CONFIG_PATH", Path(__file__).with_name("comparator_config.json")))
+
+
+def load_comparator_config() -> dict[str, Any]:
+    if not COMPARATOR_CONFIG_PATH.exists():
+        return {}
+    try:
+        payload = json.loads(COMPARATOR_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+COMPARATOR_CONFIG = load_comparator_config()
+COMPARATOR_DEFAULTS = COMPARATOR_CONFIG.get("defaults") if isinstance(COMPARATOR_CONFIG.get("defaults"), dict) else {}
+COMPARATOR_PROPOSAL_CONFIG = COMPARATOR_CONFIG.get("proposals") if isinstance(COMPARATOR_CONFIG.get("proposals"), dict) else {}
+POSTHOC_EMBEDDING_MODEL = str(COMPARATOR_DEFAULTS.get("posthocEmbeddingModel") or "all-MiniLM-L6-v2")
+DEFAULT_SELECTED_PROPOSALS = tuple(COMPARATOR_DEFAULTS.get("selectedProposalIds") or ("evolmd", "evolmd-mo", "binary-mopso-cd"))
 
 
 def utc_now() -> str:
@@ -83,78 +114,6 @@ def comparator_status_message(status: str) -> str:
     }.get(status, status)
 
 
-def is_dominated(row: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
-    vector = row.get("objectiveVector") or []
-    if len(vector) < 2:
-        return False
-    for other in rows:
-        if other is row:
-            continue
-        other_vector = other.get("objectiveVector") or []
-        if len(other_vector) != len(vector):
-            continue
-        if all(a >= b for a, b in zip(other_vector, vector)) and any(
-            a > b for a, b in zip(other_vector, vector)
-        ):
-            return True
-    return False
-
-
-def mark_non_dominated(rows: list[dict[str, Any]]) -> None:
-    valid_rows = [row for row in rows if row.get("status") == "ok"]
-    for row in rows:
-        row["nonDominated"] = (
-            row.get("status") == "ok"
-            and len(row.get("objectiveVector") or []) >= 2
-            and not is_dominated(row, valid_rows)
-        )
-
-
-def is_diagnostic_dominated(row: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
-    vector = row.get("diagnosticObjectiveVector") or []
-    if len(vector) < 2:
-        return False
-    for other in rows:
-        if other is row:
-            continue
-        other_vector = other.get("diagnosticObjectiveVector") or []
-        if len(other_vector) != len(vector):
-            continue
-        if all(a >= b for a, b in zip(other_vector, vector)) and any(
-            a > b for a, b in zip(other_vector, vector)
-        ):
-            return True
-    return False
-
-
-def mark_posthoc_non_dominated(rows: list[dict[str, Any]]) -> None:
-    valid_rows = [row for row in rows if row.get("status") == "ok"]
-    for row in rows:
-        row["postHocNonDominated"] = (
-            row.get("status") == "ok"
-            and len(row.get("diagnosticObjectiveVector") or []) >= 2
-            and not is_diagnostic_dominated(row, valid_rows)
-        )
-
-
-def normalized_mo_point(row: dict[str, Any]) -> tuple[float, float] | None:
-    vector = row.get("objectiveVector") or []
-    if len(vector) < 2:
-        return None
-    fidelity = finite_float(vector[0])
-    diversity = finite_float(vector[1])
-    normalized_fidelity = clamp((fidelity + 1.0) / 2.0, 0.0, 1.0)
-    normalized_diversity = clamp(diversity, 0.0, 1.0)
-    return normalized_fidelity, normalized_diversity
-
-
-def normalized_posthoc_point(row: dict[str, Any]) -> tuple[float, float] | None:
-    vector = row.get("diagnosticObjectiveVector") or []
-    if len(vector) < 2:
-        return None
-    return clamp(finite_float(vector[0]), 0.0, 1.0), clamp(finite_float(vector[1]), 0.0, 1.0)
-
-
 def calculate_posthoc_semantic_diversity(generated_texts: list[str]) -> list[float]:
     if len(generated_texts) <= 1:
         return [0.0] * len(generated_texts)
@@ -168,57 +127,6 @@ def calculate_posthoc_semantic_diversity(generated_texts: list[str]) -> list[flo
         average_similarity = sum_similarity / (len(texts) - 1)
         scores.append(clamp(1.0 - average_similarity, 0.0, 1.0))
     return scores
-
-
-def pareto_points(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    unique = sorted(set(points), key=lambda item: (item[0], item[1]))
-    front: list[tuple[float, float]] = []
-    for point in unique:
-        if not any(
-            other != point
-            and other[0] >= point[0]
-            and other[1] >= point[1]
-            and (other[0] > point[0] or other[1] > point[1])
-            for other in unique
-        ):
-            front.append(point)
-    return sorted(front, key=lambda item: item[0])
-
-
-def calculate_hypervolume(points: list[tuple[float, float]]) -> float | None:
-    front = pareto_points(points)
-    if len(front) < 1:
-        return None
-
-    collapsed: dict[float, float] = {}
-    for x_value, y_value in front:
-        collapsed[x_value] = max(collapsed.get(x_value, 0.0), y_value)
-
-    ordered = sorted(collapsed.items())
-    hv = 0.0
-    previous_x = 0.0
-    for x_value, y_value in ordered:
-        if x_value > previous_x:
-            hv += (x_value - previous_x) * y_value
-            previous_x = x_value
-    return clamp(hv, 0.0, 1.0)
-
-
-def calculate_spread(points: list[tuple[float, float]]) -> float | None:
-    front = pareto_points(points)
-    if len(front) < 3:
-        return None
-
-    distances = [
-        math.dist(front[index - 1], front[index])
-        for index in range(1, len(front))
-    ]
-    mean_distance = sum(distances) / len(distances)
-    if mean_distance <= 0:
-        return 0.0
-
-    absolute_deviation = sum(abs(distance - mean_distance) for distance in distances)
-    return absolute_deviation / (len(distances) * mean_distance)
 
 
 def latest_child_directory(path: Path) -> Path | None:
@@ -261,6 +169,8 @@ def parse_runtime_file(path: Path) -> dict[str, float]:
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         key, separator, value = line.partition("=")
         if not separator:
+            key, separator, value = line.partition(":")
+        if not separator:
             continue
         runtime[key.strip()] = finite_float(value.strip())
     return runtime
@@ -272,6 +182,14 @@ def empty_cost_metrics() -> dict[str, Any]:
         "processWallClockLabel": "0s",
         "algorithmRuntimeSeconds": None,
         "algorithmRuntimeLabel": "No disponible",
+        "proposalTotalWallClockSeconds": 0.0,
+        "proposalTotalWallClockLabel": "0s",
+        "postProcessingWallClockSeconds": 0.0,
+        "postProcessingWallClockLabel": "0s",
+        "metricExtractionSeconds": 0.0,
+        "metricExtractionLabel": "0s",
+        "plotPreparationSeconds": 0.0,
+        "plotPreparationLabel": "0s",
         "llmCalls": 0,
         "llmSuccessfulCalls": 0,
         "llmFailedCalls": 0,
@@ -301,6 +219,10 @@ def build_cost_metrics(
     summary = summary if isinstance(summary, dict) else {}
     runtime = parse_runtime_file(output_dir / "runtime.txt") if output_dir else {}
     algorithm_runtime = runtime.get("total_sec")
+    if algorithm_runtime is None:
+        algorithm_runtime = runtime.get("runtime_seconds")
+    if algorithm_runtime is None:
+        algorithm_runtime = runtime.get("grand_total_sec")
     llm_calls = int(finite_float(summary.get("totalCalls")))
     llm_client_seconds = finite_float(summary.get("clientWallClockSeconds"))
     average_call_seconds = llm_client_seconds / llm_calls if llm_calls > 0 else None
@@ -311,6 +233,14 @@ def build_cost_metrics(
             "processWallClockLabel": label_from_seconds(process_cost.get("processWallClockSeconds")),
             "algorithmRuntimeSeconds": algorithm_runtime,
             "algorithmRuntimeLabel": label_from_seconds(algorithm_runtime),
+            "proposalTotalWallClockSeconds": finite_float(process_cost.get("processWallClockSeconds")),
+            "proposalTotalWallClockLabel": label_from_seconds(process_cost.get("processWallClockSeconds")),
+            "postProcessingWallClockSeconds": 0.0,
+            "postProcessingWallClockLabel": "0s",
+            "metricExtractionSeconds": 0.0,
+            "metricExtractionLabel": "0s",
+            "plotPreparationSeconds": 0.0,
+            "plotPreparationLabel": "0s",
             "llmCalls": llm_calls,
             "llmSuccessfulCalls": int(finite_float(summary.get("successfulCalls"))),
             "llmFailedCalls": int(finite_float(summary.get("failedCalls"))),
@@ -333,11 +263,90 @@ def build_cost_metrics(
     return cost
 
 
+def read_llm_calls_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    calls: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            calls.append(payload)
+    return calls
+
+
+def build_binary_cost_metrics(
+    process_cost: dict[str, Any],
+    output_dir: Path | None,
+    cancelled: bool,
+) -> dict[str, Any]:
+    runtime = parse_runtime_file(output_dir / "runtime.txt") if output_dir else {}
+    calls = read_llm_calls_jsonl(output_dir / "llm_calls.jsonl") if output_dir else []
+    llm_seconds = sum(finite_float(call.get("elapsed_seconds")) for call in calls)
+    llm_calls = len(calls)
+    algorithm_runtime = runtime.get("runtime_seconds") or runtime.get("total_sec") or runtime.get("grand_total_sec")
+    cost = empty_cost_metrics()
+    cost.update(
+        {
+            "processWallClockSeconds": finite_float(process_cost.get("processWallClockSeconds")),
+            "processWallClockLabel": label_from_seconds(process_cost.get("processWallClockSeconds")),
+            "algorithmRuntimeSeconds": algorithm_runtime,
+            "algorithmRuntimeLabel": label_from_seconds(algorithm_runtime),
+            "proposalTotalWallClockSeconds": finite_float(process_cost.get("processWallClockSeconds")),
+            "proposalTotalWallClockLabel": label_from_seconds(process_cost.get("processWallClockSeconds")),
+            "llmCalls": llm_calls,
+            "llmSuccessfulCalls": sum(1 for call in calls if call.get("status", "ok") != "error"),
+            "llmFailedCalls": sum(1 for call in calls if call.get("status") == "error"),
+            "llmClientWallClockSeconds": llm_seconds,
+            "llmClientWallClockLabel": label_from_seconds(llm_seconds),
+            "llmAverageCallSeconds": (llm_seconds / llm_calls) if llm_calls else None,
+            "llmAverageCallLabel": label_from_seconds((llm_seconds / llm_calls) if llm_calls else None),
+            "returnCode": process_cost.get("returnCode"),
+            "timedOut": bool(process_cost.get("timedOut")),
+            "cancelled": cancelled,
+            "runtimeBreakdown": runtime,
+            "metricsPath": process_cost.get("metricsPath"),
+            "llmTaskBreakdown": llm_task_breakdown(calls),
+        }
+    )
+    return cost
+
+
+def llm_task_breakdown(calls: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    breakdown: dict[str, dict[str, Any]] = {}
+    for call in calls:
+        task = str(call.get("semantic_task") or call.get("task") or "unknown")
+        bucket = breakdown.setdefault(task, {"calls": 0, "elapsedSeconds": 0.0, "contentChars": 0})
+        bucket["calls"] += 1
+        bucket["elapsedSeconds"] += finite_float(call.get("elapsed_seconds"))
+        bucket["contentChars"] += int(finite_float(call.get("content_chars")))
+    for bucket in breakdown.values():
+        bucket["elapsedLabel"] = label_from_seconds(bucket["elapsedSeconds"])
+    return breakdown
+
+
+def add_cost_timing(cost: dict[str, Any], key: str, seconds: float) -> None:
+    cost[key] = finite_float(cost.get(key)) + max(0.0, seconds)
+    cost[f"{key.removesuffix('Seconds')}Label"] = label_from_seconds(cost[key])
+    process = finite_float(cost.get("processWallClockSeconds"))
+    post = finite_float(cost.get("postProcessingWallClockSeconds"))
+    cost["proposalTotalWallClockSeconds"] = process + post
+    cost["proposalTotalWallClockLabel"] = label_from_seconds(process + post)
+
+
 def summarize_costs(proposals: list[dict[str, Any]], run_elapsed_seconds: float) -> dict[str, Any]:
     costs = [proposal.get("cost") or empty_cost_metrics() for proposal in proposals]
     llm_calls = sum(int(cost.get("llmCalls") or 0) for cost in costs)
     llm_client_seconds = sum(finite_float(cost.get("llmClientWallClockSeconds")) for cost in costs)
     process_seconds_sum = sum(finite_float(cost.get("processWallClockSeconds")) for cost in costs)
+    post_seconds_sum = sum(finite_float(cost.get("postProcessingWallClockSeconds")) for cost in costs)
+    metric_seconds_sum = sum(finite_float(cost.get("metricExtractionSeconds")) for cost in costs)
+    plot_seconds_sum = sum(finite_float(cost.get("plotPreparationSeconds")) for cost in costs)
+    proposal_total_seconds_sum = sum(finite_float(cost.get("proposalTotalWallClockSeconds"), finite_float(cost.get("processWallClockSeconds"))) for cost in costs)
     algorithm_seconds_sum = sum(
         finite_float(cost.get("algorithmRuntimeSeconds"))
         for cost in costs
@@ -351,6 +360,14 @@ def summarize_costs(proposals: list[dict[str, Any]], run_elapsed_seconds: float)
         "runWallClockLabel": label_from_seconds(run_elapsed_seconds),
         "proposalWallClockSecondsSum": process_seconds_sum,
         "proposalWallClockSumLabel": label_from_seconds(process_seconds_sum),
+        "proposalTotalWallClockSecondsSum": proposal_total_seconds_sum,
+        "proposalTotalWallClockSumLabel": label_from_seconds(proposal_total_seconds_sum),
+        "postProcessingWallClockSecondsSum": post_seconds_sum,
+        "postProcessingWallClockSumLabel": label_from_seconds(post_seconds_sum),
+        "metricExtractionSecondsSum": metric_seconds_sum,
+        "metricExtractionSumLabel": label_from_seconds(metric_seconds_sum),
+        "plotPreparationSecondsSum": plot_seconds_sum,
+        "plotPreparationSumLabel": label_from_seconds(plot_seconds_sum),
         "algorithmRuntimeSecondsSum": algorithm_seconds_sum,
         "algorithmRuntimeSumLabel": label_from_seconds(algorithm_seconds_sum),
         "llmCalls": llm_calls,
@@ -407,11 +424,26 @@ def aggregate_comparator_costs(results: list[dict[str, Any]]) -> dict[str, Any]:
         if cost.get("algorithmRuntimeSeconds") is not None
     ]
     process_seconds = sum(finite_float(cost.get("processWallClockSeconds")) for cost in costs)
+    post_seconds = sum(finite_float(cost.get("postProcessingWallClockSeconds")) for cost in costs)
+    metric_seconds = sum(finite_float(cost.get("metricExtractionSeconds")) for cost in costs)
+    plot_seconds = sum(finite_float(cost.get("plotPreparationSeconds")) for cost in costs)
+    proposal_total_seconds = sum(
+        finite_float(cost.get("proposalTotalWallClockSeconds"), finite_float(cost.get("processWallClockSeconds")))
+        for cost in costs
+    )
     ollama_seconds = sum(finite_float(cost.get("ollamaTotalDurationSeconds")) for cost in costs)
     average_call_seconds = llm_client_seconds / llm_calls if llm_calls > 0 else None
     return {
         "processWallClockSeconds": process_seconds,
         "processWallClockLabel": label_from_seconds(process_seconds),
+        "proposalTotalWallClockSeconds": proposal_total_seconds,
+        "proposalTotalWallClockLabel": label_from_seconds(proposal_total_seconds),
+        "postProcessingWallClockSeconds": post_seconds,
+        "postProcessingWallClockLabel": label_from_seconds(post_seconds),
+        "metricExtractionSeconds": metric_seconds,
+        "metricExtractionLabel": label_from_seconds(metric_seconds),
+        "plotPreparationSeconds": plot_seconds,
+        "plotPreparationLabel": label_from_seconds(plot_seconds),
         "algorithmRuntimeSeconds": sum(algorithm_values) if algorithm_values else None,
         "algorithmRuntimeLabel": label_from_seconds(sum(algorithm_values) if algorithm_values else None),
         "llmCalls": llm_calls,
@@ -475,16 +507,18 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
         "repetitionAggregation": "Promedio sobre repeticiones K con semillas distintas.",
     }
     if first_metrics.get("postHocDiagnostic"):
+        posthoc_non_dominated = average_present([
+            item.get("postHocNonDominatedRows")
+            for item in metrics_list
+        ])
         metrics.update(
             {
                 "postHocDiagnostic": True,
                 "diagnosticObjectiveNames": first_metrics.get("diagnosticObjectiveNames") or [],
                 "bestDiagnosticObjectiveVector": best_diagnostic_vector,
                 "bestDiagnosticObjectiveLabel": objective_label(best_diagnostic_vector),
-                "postHocNonDominatedRows": average_present([
-                    item.get("postHocNonDominatedRows")
-                    for item in metrics_list
-                ]),
+                "postHocNonDominatedRows": posthoc_non_dominated,
+                "nonDominatedRows": posthoc_non_dominated,
             }
         )
     return metrics
@@ -515,12 +549,18 @@ def aggregate_proposal_repetitions(
         }
 
     rows: list[dict[str, Any]] = []
+    selected_rows: list[dict[str, Any]] = []
     for result in completed:
         repetition_index = result.get("repetitionIndex")
         repetition_seed = result.get("repetitionSeed")
         for row in result.get("rows") or []:
             if isinstance(row, dict):
                 rows.append({**row, "repetitionIndex": repetition_index, "repetitionSeed": repetition_seed})
+        for row in result.get("selectedRows") or []:
+            if isinstance(row, dict):
+                selected_rows.append({**row, "repetitionIndex": repetition_index, "repetitionSeed": repetition_seed})
+
+    series = aggregate_series(completed)
 
     return {
         "proposalId": proposal.proposal_id,
@@ -528,13 +568,27 @@ def aggregate_proposal_repetitions(
         "status": STATUS_COMPLETED,
         "outputDir": str(proposal_dir),
         "rows": rows,
+        "selectedRows": selected_rows,
         "metrics": aggregate_comparator_metrics(completed, proposal_dir),
+        "series": series,
+        "charts": build_charts_from_rows(rows, selected_rows, series),
         "cost": aggregate_comparator_costs(completed),
         "error": None if len(completed) == repetitions_k else f"{repetitions_k - len(completed)} repeticion(es) fallaron.",
         "repetitionsK": repetitions_k,
         "completedRepetitions": len(completed),
         "repetitions": results,
     }
+
+
+def proposal_config(proposal_id: str) -> dict[str, Any]:
+    value = COMPARATOR_PROPOSAL_CONFIG.get(proposal_id)
+    return value if isinstance(value, dict) else {}
+
+
+def tuple_from_config(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
 
 
 @dataclass(frozen=True)
@@ -546,31 +600,276 @@ class ProposalDefinition:
     objective_names: tuple[str, ...]
     result_file: str
     single_objective: bool
+    kind: str = "evolmd"
+    entrypoint: str = "main.py"
+    final_selection_file: str | None = None
+    metrics_series_file: str | None = None
+    supports_history_export: bool = False
+    cli_options: tuple[dict[str, Any], ...] = ()
     preload_modules: tuple[str, ...] = ()
+    python_executable: str = ""
+    python_path_entries: tuple[str, ...] = ()
+    required_modules: tuple[str, ...] = ()
 
 
 PROPOSALS: tuple[ProposalDefinition, ...] = (
     ProposalDefinition(
         proposal_id="evolmd",
         display_name="EVOLMD",
-        repository_path="baselines/external/evolmd",
+        repository_path=str(proposal_config("evolmd").get("repositoryPath") or "baselines/external/evolmd"),
         description="Genetic prompt evolution baseline with BERTScore fitness.",
         objective_names=("fitness",),
         result_file="data_final_evaluada.json",
         single_objective=True,
+        kind="evolmd",
+        final_selection_file="comparator_final_selection.json",
+        metrics_series_file="metrics_gen.csv",
+        supports_history_export=True,
+        cli_options=(
+            {"flag": "--n", "type": "int", "source": "common"},
+            {"flag": "--generaciones", "type": "int", "source": "common"},
+            {"flag": "--k", "type": "int", "default": 3, "min": 1, "step": 1, "label": "K torneo"},
+            {"flag": "--prob-crossover", "type": "float", "default": 0.8, "min": 0, "max": 1, "step": 0.01, "label": "Prob. crossover"},
+            {"flag": "--prob-mutacion", "type": "float", "default": 0.1, "min": 0, "max": 1, "step": 0.01, "label": "Prob. mutacion"},
+            {"flag": "--num-elitismo", "type": "int", "default": 2, "min": 0, "step": 1},
+            {"flag": "--model", "type": "string", "source": "common"},
+            {"flag": "--bert-model", "type": "string", "default": "bert-base-uncased", "choices": ["bert-base-uncased", "roberta-large", "distilbert-base-uncased"], "allowCustom": True},
+            {"flag": "--outdir-base", "type": "path", "source": "managed"},
+            {"flag": "--texto-referencia", "type": "path", "source": "managed"},
+        ),
         preload_modules=("torch",),
+        python_executable=str(proposal_config("evolmd").get("pythonExecutable") or ""),
+        python_path_entries=tuple_from_config(proposal_config("evolmd").get("pythonPathEntries")),
+        required_modules=tuple_from_config(proposal_config("evolmd").get("requiredModules")),
     ),
     ProposalDefinition(
         proposal_id="evolmd-mo",
         display_name="EVOLMD-MO",
-        repository_path="baselines/external/evolmd-mo",
+        repository_path=str(proposal_config("evolmd-mo").get("repositoryPath") or "baselines/external/evolmd-mo"),
         description="NSGA-II prompt evolution baseline with SBERT fidelity and diversity.",
         objective_names=("fidelity_sbert", "diversity_individual"),
         result_file="pareto_front.json",
         single_objective=False,
+        kind="evolmd-mo",
+        final_selection_file="comparator_final_selection.json",
+        metrics_series_file="evolucion_metricas.csv",
+        supports_history_export=True,
+        cli_options=(
+            {"flag": "--n", "type": "int", "source": "common"},
+            {"flag": "--generaciones", "type": "int", "source": "common"},
+            {"flag": "--k", "type": "int", "default": 3, "min": 1, "step": 1, "label": "K torneo"},
+            {"flag": "--prob-crossover", "type": "float", "default": 0.8, "min": 0, "max": 1, "step": 0.01, "label": "Prob. crossover"},
+            {"flag": "--prob-mutacion", "type": "float", "default": 0.1, "min": 0, "max": 1, "step": 0.01, "label": "Prob. mutacion"},
+            {"flag": "--num-elitismo", "type": "int", "default": 2, "min": 0, "step": 1},
+            {"flag": "--model", "type": "string", "source": "common"},
+            {"flag": "--bert-model", "type": "string", "default": "all-MiniLM-L6-v2", "choices": ["all-MiniLM-L6-v2", "gte-small"], "allowCustom": True},
+            {"flag": "--outdir-base", "type": "path", "source": "managed"},
+            {"flag": "--texto-referencia", "type": "path", "source": "managed"},
+        ),
         preload_modules=("torch",),
+        python_executable=str(proposal_config("evolmd-mo").get("pythonExecutable") or ""),
+        python_path_entries=tuple_from_config(proposal_config("evolmd-mo").get("pythonPathEntries")),
+        required_modules=tuple_from_config(proposal_config("evolmd-mo").get("requiredModules")),
+    ),
+    ProposalDefinition(
+        proposal_id="binary-mopso-cd",
+        display_name="Binary MOPSO-CD",
+        repository_path=str(
+            proposal_config("binary-mopso-cd").get("repositoryPath")
+            or r"C:\Users\Admin\Desktop\Implementación\Binary MOPSO-CD"
+        ),
+        description="Semantic Binary MOPSO-CD optimizer with explicit SBERT fidelity/diversity and Entropy-TOPSIS-MMR selection.",
+        objective_names=("f1_fidelity_sbert", "f2_semantic_diversity"),
+        result_file="pareto_front.json",
+        single_objective=False,
+        kind="binary-mopso-cd",
+        entrypoint="-m binary_mopso_cd",
+        final_selection_file="final_selection_hybrid.json",
+        metrics_series_file="evolucion_metricas.csv",
+        cli_options=(
+            {"flag": "--reference-text", "type": "string", "source": "managed"},
+            {"flag": "--n", "type": "int", "source": "common"},
+            {"flag": "--iterations", "type": "int", "source": "common"},
+            {"flag": "--runs", "type": "int", "source": "managed"},
+            {"flag": "--seed", "type": "int", "source": "managed"},
+            {"flag": "--model", "type": "string", "source": "common"},
+            {"flag": "--bert-model", "type": "string", "default": "all-MiniLM-L6-v2", "choices": ["all-MiniLM-L6-v2", "gte-small"], "allowCustom": True},
+            {"flag": "--outdir-base", "type": "path", "source": "managed"},
+            {"flag": "--config", "type": "path"},
+            {"flag": "--freeze-components", "type": "multi_select", "choices": ["role", "topic", "action"]},
+            {"flag": "--enable-monitor", "type": "bool"},
+            {"flag": "--disable-selection", "type": "bool"},
+            {
+                "flag": "--router-heuristic",
+                "type": "repeatable_assignment_bool",
+                "assignments": [
+                    {"name": "semantic_anchor_extraction", "label": "Extraccion anclas"},
+                    {"name": "semantic_pool_generation", "label": "Generacion pools"},
+                    {"name": "semantic_pool_expansion", "label": "Expansion pools"},
+                    {"name": "semantic_component_influence_candidates", "label": "Candidatos influencia"},
+                    {"name": "word_replacement_candidates", "label": "Reemplazo palabras"},
+                ],
+            },
+            {
+                "flag": "--task-model",
+                "type": "repeatable_assignment",
+                "assignments": [
+                    {"name": "semantic_anchor_extraction", "label": "Extraccion anclas"},
+                    {"name": "semantic_pool_generation", "label": "Generacion pools"},
+                    {"name": "semantic_pool_expansion", "label": "Expansion pools"},
+                    {"name": "semantic_component_influence_candidates", "label": "Candidatos influencia"},
+                    {"name": "synthetic_text_generation", "label": "Texto sintetico"},
+                ],
+            },
+            {"flag": "--ppdb-source", "type": "path"},
+            {"flag": "--ppdb-index", "type": "path"},
+            {"flag": "--enable-checkpoint", "type": "bool"},
+            {"flag": "--checkpoint-every", "type": "int", "min": 1, "step": 1},
+            {"flag": "--checkpoint-interval", "type": "int", "min": 1, "step": 1},
+            {"flag": "--resume-from", "type": "path"},
+        ),
+        preload_modules=("torch",),
+        python_executable=str(proposal_config("binary-mopso-cd").get("pythonExecutable") or ""),
+        python_path_entries=tuple_from_config(proposal_config("binary-mopso-cd").get("pythonPathEntries")),
+        required_modules=tuple_from_config(proposal_config("binary-mopso-cd").get("requiredModules")),
     ),
 )
+
+PROPOSAL_BY_ID = {proposal.proposal_id: proposal for proposal in PROPOSALS}
+
+
+def resolve_repository(root: Path, proposal: ProposalDefinition) -> Path:
+    path = Path(proposal.repository_path)
+    return path if path.is_absolute() else root / path
+
+
+def resolve_config_path(root: Path, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else root / path
+
+
+def proposal_entrypoint_exists(root: Path, proposal: ProposalDefinition) -> bool:
+    repository = resolve_repository(root, proposal)
+    if proposal.kind == "binary-mopso-cd":
+        return (repository / "src" / "binary_mopso_cd" / "cli.py").exists()
+    return (repository / proposal.entrypoint).exists()
+
+
+def proposal_python_executable(root: Path, repository: Path, proposal: ProposalDefinition) -> str:
+    if proposal.python_executable:
+        configured = resolve_config_path(root, proposal.python_executable)
+        return str(configured)
+    if proposal.kind == "binary-mopso-cd":
+        venv_python = repository / ".venv" / "Scripts" / "python.exe"
+        if venv_python.exists():
+            return str(venv_python)
+    return sys.executable
+
+
+def proposal_python_path_entries(root: Path, proposal: ProposalDefinition) -> list[str]:
+    return [str(resolve_config_path(root, entry)) for entry in proposal.python_path_entries]
+
+
+def check_proposal_dependencies(root: Path, proposal: ProposalDefinition) -> dict[str, Any]:
+    repository = resolve_repository(root, proposal)
+    executable = proposal_python_executable(root, repository, proposal)
+    if not proposal.required_modules:
+        return {"ok": True, "missing": [], "pythonExecutable": executable, "error": None}
+    if not Path(executable).exists() and Path(executable).is_absolute():
+        return {
+            "ok": False,
+            "missing": list(proposal.required_modules),
+            "pythonExecutable": executable,
+            "error": "Configured Python executable does not exist.",
+        }
+
+    script = (
+        "import importlib.util, json, sys;"
+        "mods = sys.argv[1:];"
+        "missing = [name for name in mods if importlib.util.find_spec(name) is None];"
+        "print(json.dumps({'missing': missing}))"
+    )
+    environment = os.environ.copy()
+    entries = proposal_python_path_entries(root, proposal)
+    if entries:
+        environment["PYTHONPATH"] = os.pathsep.join([*entries, environment.get("PYTHONPATH", "")]).rstrip(os.pathsep)
+    try:
+        completed = subprocess.run(
+            [executable, "-c", script, *proposal.required_modules],
+            cwd=str(repository),
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=False,
+        )
+    except Exception as error:
+        return {
+            "ok": False,
+            "missing": list(proposal.required_modules),
+            "pythonExecutable": executable,
+            "error": str(error),
+        }
+    try:
+        payload = json.loads(completed.stdout.strip() or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    missing = payload.get("missing") if isinstance(payload.get("missing"), list) else list(proposal.required_modules)
+    return {
+        "ok": completed.returncode == 0 and not missing,
+        "missing": missing,
+        "pythonExecutable": executable,
+        "error": completed.stderr.strip() if completed.returncode else None,
+    }
+
+
+def split_cli_args(raw: str) -> list[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    if sys.platform == "win32":
+        ctypes.windll.shell32.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+        argc = ctypes.c_int()
+        argv = ctypes.windll.shell32.CommandLineToArgvW(text, ctypes.byref(argc))
+        if not argv:
+            raise ValueError("Could not parse extra CLI arguments.")
+        try:
+            return [argv[index] for index in range(argc.value)]
+        finally:
+            ctypes.windll.kernel32.LocalFree(argv)
+    return shlex.split(text)
+
+
+def cli_option_value(args: list[str], flag: str) -> str | None:
+    for index, item in enumerate(args):
+        if item == flag and index + 1 < len(args):
+            return args[index + 1]
+        if item.startswith(f"{flag}="):
+            return item.split("=", 1)[1]
+    return None
+
+
+def remove_cli_option(args: list[str], flag: str) -> list[str]:
+    filtered: list[str] = []
+    skip_next = False
+    for item in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if item == flag:
+            skip_next = True
+            continue
+        if item.startswith(f"{flag}="):
+            continue
+        filtered.append(item)
+    return filtered
+
+
+def command_label(command: list[str]) -> str:
+    return subprocess.list2cmdline([str(part) for part in command])
 
 
 class ComparatorService:
@@ -581,18 +880,36 @@ class ComparatorService:
         self._lock = threading.RLock()
 
     def list_proposals(self) -> list[dict[str, Any]]:
-        return [
-            {
+        proposals = []
+        for proposal in PROPOSALS:
+            entrypoint_available = proposal_entrypoint_exists(self.root, proposal)
+            dependencies = check_proposal_dependencies(self.root, proposal) if entrypoint_available else {
+                "ok": False,
+                "missing": list(proposal.required_modules),
+                "pythonExecutable": proposal_python_executable(self.root, resolve_repository(self.root, proposal), proposal),
+                "error": "Proposal entrypoint is missing.",
+            }
+            proposals.append(
+                {
                 "proposalId": proposal.proposal_id,
                 "displayName": proposal.display_name,
                 "description": proposal.description,
-                "repositoryPath": proposal.repository_path,
+                "repositoryPath": str(resolve_repository(self.root, proposal)),
+                "pythonExecutable": dependencies.get("pythonExecutable"),
                 "objectiveNames": list(proposal.objective_names),
                 "singleObjective": proposal.single_objective,
-                "available": (self.root / proposal.repository_path / "main.py").exists(),
+                "kind": proposal.kind,
+                "resultFile": proposal.result_file,
+                "finalSelectionFile": proposal.final_selection_file,
+                "metricsSeriesFile": proposal.metrics_series_file,
+                "supportsHistoryExport": proposal.supports_history_export,
+                "entrypointAvailable": entrypoint_available,
+                "dependencyStatus": dependencies,
+                "cliOptions": list(proposal.cli_options),
+                "available": entrypoint_available and bool(dependencies.get("ok")),
             }
-            for proposal in PROPOSALS
-        ]
+            )
+        return proposals
 
     def _initial_proposal_state(self, proposal: ProposalDefinition) -> dict[str, Any]:
         return {
@@ -611,6 +928,7 @@ class ComparatorService:
 
     def start_run(self, payload: dict[str, Any]) -> dict[str, Any]:
         config = self._read_config(payload)
+        self._validate_selected_proposals_available(config)
         run_id = self._new_run_id()
         run_dir = self.runs_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -627,7 +945,7 @@ class ComparatorService:
             "proposals": [],
             "proposalStates": {
                 proposal.proposal_id: self._initial_proposal_state(proposal)
-                for proposal in PROPOSALS
+                for proposal in self._selected_proposals(config)
             },
             "progress": {
                 "percent": 0,
@@ -685,20 +1003,199 @@ class ComparatorService:
         if not reference_text:
             raise ValueError("referenceText is required.")
 
+        selected = self._selected_proposal_ids(payload.get("selectedProposalIds"))
         return {
             "referenceText": reference_text,
-            "topK": self._int_between(payload.get("topK", 10), "topK", 1, 200),
-            "n": self._int_between(payload.get("n", 10), "n", 1, 500),
-            "generaciones": self._int_between(payload.get("generaciones", 3), "generaciones", 0, 500),
-            "seed": self._int_between(payload.get("seed", 42), "seed", 0, 2_147_483_647),
-            "repetitionsK": self._int_between(payload.get("repetitionsK", 1), "repetitionsK", 1, 30),
-            "model": self._safe_model_name(payload.get("model", "llama3")),
-            "k": self._int_between(payload.get("k", 3), "k", 1, 100),
-            "probCrossover": self._float_between(payload.get("probCrossover", 0.8), "probCrossover", 0.0, 1.0),
-            "probMutacion": self._float_between(payload.get("probMutacion", 0.05), "probMutacion", 0.0, 1.0),
-            "proposalParallelism": self._int_between(payload.get("proposalParallelism", 1), "proposalParallelism", 1, 8),
-            "timeoutMinutes": self._int_between(payload.get("timeoutMinutes", 60), "timeoutMinutes", 1, 1440),
+            "topK": self._int_between(payload.get("topK", COMPARATOR_DEFAULTS.get("topK", 10)), "topK", 1, 200),
+            "n": self._int_between(payload.get("n", COMPARATOR_DEFAULTS.get("n", 10)), "n", 1, 500),
+            "generaciones": self._int_between(payload.get("generaciones", COMPARATOR_DEFAULTS.get("generaciones", 3)), "generaciones", 0, 500),
+            "seed": self._int_between(payload.get("seed", COMPARATOR_DEFAULTS.get("seed", 42)), "seed", 0, 2_147_483_647),
+            "repetitionsK": self._int_between(payload.get("repetitionsK", COMPARATOR_DEFAULTS.get("repetitionsK", 1)), "repetitionsK", 1, 30),
+            "model": self._safe_model_name(payload.get("model", COMPARATOR_DEFAULTS.get("model", "llama3"))),
+            "proposalParallelism": self._int_between(payload.get("proposalParallelism", COMPARATOR_DEFAULTS.get("proposalParallelism", 1)), "proposalParallelism", 1, 8),
+            "timeoutMinutes": self._int_between(payload.get("timeoutMinutes", COMPARATOR_DEFAULTS.get("timeoutMinutes", 60)), "timeoutMinutes", 1, 1440),
+            "selectedProposalIds": selected,
+            "proposalConfigs": self._proposal_configs(payload.get("proposalConfigs"), selected),
         }
+
+    def _selected_proposal_ids(self, value: Any) -> list[str]:
+        if value is None:
+            return list(DEFAULT_SELECTED_PROPOSALS)
+        if not isinstance(value, list):
+            raise ValueError("selectedProposalIds must be a list.")
+        selected: list[str] = []
+        for item in value:
+            proposal_id = str(item or "").strip()
+            if not proposal_id:
+                continue
+            if proposal_id not in PROPOSAL_BY_ID:
+                raise ValueError(f"Unknown proposalId: {proposal_id}.")
+            if proposal_id not in selected:
+                selected.append(proposal_id)
+        if not selected:
+            raise ValueError("Select at least one proposal.")
+        return selected
+
+    def _proposal_configs(self, value: Any, selected: list[str]) -> dict[str, dict[str, Any]]:
+        if value is None:
+            value = {}
+        if not isinstance(value, dict):
+            raise ValueError("proposalConfigs must be an object.")
+        result: dict[str, dict[str, Any]] = {}
+        for proposal_id in selected:
+            proposal = PROPOSAL_BY_ID[proposal_id]
+            raw = value.get(proposal_id) or {}
+            if not isinstance(raw, dict):
+                raise ValueError(f"proposalConfigs.{proposal_id} must be an object.")
+            extra_args = raw.get("extraArgs", "")
+            if extra_args is None:
+                extra_args = ""
+            if not isinstance(extra_args, str):
+                raise ValueError(f"proposalConfigs.{proposal_id}.extraArgs must be text.")
+            cli_values = raw.get("cliValues", {})
+            if cli_values is None:
+                cli_values = {}
+            if not isinstance(cli_values, dict):
+                raise ValueError(f"proposalConfigs.{proposal_id}.cliValues must be an object.")
+            result[proposal_id] = {
+                "extraArgs": extra_args.strip(),
+                "cliValues": self._normalize_cli_values(proposal, cli_values),
+            }
+        return result
+
+    def _configurable_cli_options(self, proposal: ProposalDefinition) -> dict[str, dict[str, Any]]:
+        return {
+            str(option["flag"]): option
+            for option in proposal.cli_options
+            if option.get("source") not in {"managed", "common"}
+        }
+
+    def _normalize_cli_values(self, proposal: ProposalDefinition, values: dict[str, Any]) -> dict[str, Any]:
+        options = self._configurable_cli_options(proposal)
+        normalized: dict[str, Any] = {}
+        for flag, raw_value in values.items():
+            flag_text = str(flag)
+            option = options.get(flag_text)
+            if option is None:
+                raise ValueError(f"{proposal.display_name}: {flag_text} is not configurable from proposalConfigs.")
+            option_type = str(option.get("type") or "string")
+            if option_type == "bool":
+                if raw_value in ("", None, False):
+                    continue
+                normalized[flag_text] = self._bool_cli_value(raw_value, f"{proposal.display_name}.{flag_text}")
+            elif option_type in {"int", "float", "string", "path"}:
+                text = str(raw_value or "").strip()
+                if not text:
+                    continue
+                if option_type == "int":
+                    self._int_cli_value(text, f"{proposal.display_name}.{flag_text}", option)
+                elif option_type == "float":
+                    self._float_cli_value(text, f"{proposal.display_name}.{flag_text}", option)
+                self._validate_cli_choice(option, text, f"{proposal.display_name}.{flag_text}")
+                normalized[flag_text] = text
+            elif option_type == "multi_select":
+                if not isinstance(raw_value, list):
+                    raise ValueError(f"{proposal.display_name}.{flag_text} must be a list.")
+                selected = [str(item).strip() for item in raw_value if str(item).strip()]
+                for item in selected:
+                    self._validate_cli_choice(option, item, f"{proposal.display_name}.{flag_text}")
+                if selected:
+                    normalized[flag_text] = selected
+            elif option_type == "repeatable":
+                if not isinstance(raw_value, list):
+                    raise ValueError(f"{proposal.display_name}.{flag_text} must be a list.")
+                selected = [str(item).strip() for item in raw_value if str(item).strip()]
+                if selected:
+                    normalized[flag_text] = selected
+            elif option_type == "repeatable_assignment":
+                normalized_assignments = self._normalize_assignment_values(proposal, option, raw_value, bool_values=False)
+                if normalized_assignments:
+                    normalized[flag_text] = normalized_assignments
+            elif option_type == "repeatable_assignment_bool":
+                normalized_assignments = self._normalize_assignment_values(proposal, option, raw_value, bool_values=True)
+                if normalized_assignments:
+                    normalized[flag_text] = normalized_assignments
+            else:
+                raise ValueError(f"{proposal.display_name}.{flag_text} has unsupported option type: {option_type}.")
+        return normalized
+
+    def _normalize_assignment_values(
+        self,
+        proposal: ProposalDefinition,
+        option: dict[str, Any],
+        raw_value: Any,
+        bool_values: bool,
+    ) -> dict[str, Any]:
+        flag = str(option.get("flag"))
+        if not isinstance(raw_value, dict):
+            raise ValueError(f"{proposal.display_name}.{flag} must be an object.")
+        allowed = {
+            str(item.get("name"))
+            for item in option.get("assignments", [])
+            if isinstance(item, dict) and item.get("name")
+        }
+        normalized: dict[str, Any] = {}
+        for assignment_name, assignment_value in raw_value.items():
+            name = str(assignment_name).strip()
+            if not name:
+                continue
+            if allowed and name not in allowed:
+                raise ValueError(f"{proposal.display_name}.{flag} has unknown assignment: {name}.")
+            if bool_values:
+                if assignment_value in ("", None):
+                    continue
+                normalized[name] = self._bool_cli_value(assignment_value, f"{proposal.display_name}.{flag}.{name}")
+            else:
+                text = str(assignment_value or "").strip()
+                if text:
+                    normalized[name] = text
+        return normalized
+
+    def _bool_cli_value(self, value: Any, label: str) -> bool:
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"true", "1", "yes", "si", "sí"}:
+            return True
+        if text in {"false", "0", "no"}:
+            return False
+        raise ValueError(f"{label} must be true or false.")
+
+    def _int_cli_value(self, value: Any, label: str, option: dict[str, Any]) -> int:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{label} must be an integer.") from None
+        minimum = option.get("min")
+        maximum = option.get("max")
+        if minimum is not None and number < int(minimum):
+            raise ValueError(f"{label} must be at least {minimum}.")
+        if maximum is not None and number > int(maximum):
+            raise ValueError(f"{label} must be at most {maximum}.")
+        return number
+
+    def _float_cli_value(self, value: Any, label: str, option: dict[str, Any]) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{label} must be numeric.") from None
+        if not math.isfinite(number):
+            raise ValueError(f"{label} must be finite.")
+        minimum = option.get("min")
+        maximum = option.get("max")
+        if minimum is not None and number < float(minimum):
+            raise ValueError(f"{label} must be at least {minimum}.")
+        if maximum is not None and number > float(maximum):
+            raise ValueError(f"{label} must be at most {maximum}.")
+        return number
+
+    def _validate_cli_choice(self, option: dict[str, Any], value: str, label: str) -> None:
+        choices = option.get("choices")
+        if not choices or option.get("allowCustom"):
+            return
+        allowed = {str(item) for item in choices}
+        if value not in allowed:
+            raise ValueError(f"{label} must be one of: {', '.join(sorted(allowed))}.")
 
     def _int_between(self, value: Any, label: str, minimum: int, maximum: int) -> int:
         try:
@@ -728,6 +1225,21 @@ class ComparatorService:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         return f"{timestamp}-{uuid.uuid4().hex[:8]}"
 
+    def _selected_proposals(self, config: dict[str, Any]) -> list[ProposalDefinition]:
+        ids = config.get("selectedProposalIds") or list(DEFAULT_SELECTED_PROPOSALS)
+        return [PROPOSAL_BY_ID[proposal_id] for proposal_id in ids]
+
+    def _validate_selected_proposals_available(self, config: dict[str, Any]) -> None:
+        for proposal in self._selected_proposals(config):
+            repository = resolve_repository(self.root, proposal)
+            if not proposal_entrypoint_exists(self.root, proposal):
+                raise ValueError(f"{proposal.display_name} is not available: missing entrypoint at {repository}.")
+            dependency_status = check_proposal_dependencies(self.root, proposal)
+            if not dependency_status.get("ok"):
+                missing = ", ".join(dependency_status.get("missing") or [])
+                detail = f"missing modules: {missing}" if missing else dependency_status.get("error") or "dependency check failed"
+                raise ValueError(f"{proposal.display_name} is not available: {detail}.")
+
     def _run_worker(self, run_id: str) -> None:
         with self._lock:
             run = self._runs[run_id]
@@ -738,18 +1250,19 @@ class ComparatorService:
             self._write_summary_unlocked(run)
 
         try:
-            parallelism = min(run["config"]["proposalParallelism"], len(PROPOSALS))
+            selected_proposals = self._selected_proposals(run["config"])
+            parallelism = min(run["config"]["proposalParallelism"], len(selected_proposals))
             if parallelism <= 1:
-                self._run_proposals_sequential(run)
+                self._run_proposals_sequential(run, selected_proposals)
             else:
-                self._run_proposals_parallel(run, parallelism)
+                self._run_proposals_parallel(run, selected_proposals, parallelism)
 
             with self._lock:
                 self._sort_proposals_unlocked(run)
                 failed = [item for item in run["proposals"] if item["status"] == STATUS_FAILED]
                 if run["cancelRequested"]:
                     run["status"] = STATUS_CANCELLED
-                elif failed and len(failed) == len(PROPOSALS):
+                elif failed and len(failed) == len(selected_proposals):
                     run["status"] = STATUS_FAILED
                     run["error"] = "All proposal executions failed."
                 elif failed:
@@ -771,8 +1284,8 @@ class ComparatorService:
                 self._append_log_unlocked(run, "system", f"Unexpected error: {error}")
                 self._write_summary_unlocked(run)
 
-    def _run_proposals_sequential(self, run: dict[str, Any]) -> None:
-        for proposal in PROPOSALS:
+    def _run_proposals_sequential(self, run: dict[str, Any], proposals: list[ProposalDefinition]) -> None:
+        for proposal in proposals:
             with self._lock:
                 if run["cancelRequested"]:
                     run["status"] = STATUS_CANCELLED
@@ -785,11 +1298,11 @@ class ComparatorService:
                 self._record_proposal_result_unlocked(run, result)
                 self._write_summary_unlocked(run)
 
-    def _run_proposals_parallel(self, run: dict[str, Any], parallelism: int) -> None:
+    def _run_proposals_parallel(self, run: dict[str, Any], proposals: list[ProposalDefinition], parallelism: int) -> None:
         with ThreadPoolExecutor(max_workers=parallelism, thread_name_prefix="comparator") as executor:
             futures: dict[Future[dict[str, Any]], ProposalDefinition] = {
                 executor.submit(self._execute_proposal, run, proposal): proposal
-                for proposal in PROPOSALS
+                for proposal in proposals
             }
 
             for future in as_completed(futures):
@@ -885,6 +1398,122 @@ class ComparatorService:
 
         return aggregate_proposal_repetitions(proposal, base_dir, results, repetitions_k)
 
+    def _build_command(
+        self,
+        run: dict[str, Any],
+        proposal: ProposalDefinition,
+        repository_dir: Path,
+        output_base: Path,
+        reference_path: Path,
+        random_seed: int | None,
+    ) -> list[str]:
+        proposal_config_values = (run["config"].get("proposalConfigs") or {}).get(proposal.proposal_id, {})
+        structured_args = self._cli_args_from_values(proposal, proposal_config_values.get("cliValues") or {})
+        extra_args = structured_args + split_cli_args(proposal_config_values.get("extraArgs", ""))
+        self._validate_extra_args(proposal, extra_args)
+        if proposal.kind == "binary-mopso-cd":
+            binary_extra_args = remove_cli_option(extra_args, "--bert-model")
+            command = [
+                proposal_python_executable(self.root, repository_dir, proposal),
+                "-m",
+                "binary_mopso_cd",
+                "--reference-text",
+                run["config"]["referenceText"],
+                "--n",
+                str(run["config"]["n"]),
+                "--iterations",
+                str(run["config"]["generaciones"]),
+                "--runs",
+                "1",
+                "--seed",
+                str(int(random_seed if random_seed is not None else run["config"]["seed"])),
+                "--model",
+                run["config"]["model"],
+                "--bert-model",
+                self._proposal_bert_model(proposal, extra_args),
+                "--outdir-base",
+                str(output_base),
+            ]
+            return command + binary_extra_args
+
+        command = [
+            proposal_python_executable(self.root, repository_dir, proposal),
+            str(self.root / "baselines" / "bootstrap.py"),
+            proposal.entrypoint,
+            "--n",
+            str(run["config"]["n"]),
+            "--generaciones",
+            str(run["config"]["generaciones"]),
+            "--model",
+            run["config"]["model"],
+            "--outdir-base",
+            str(output_base),
+            "--texto-referencia",
+            str(reference_path),
+        ]
+        return command + extra_args
+
+    def _cli_args_from_values(self, proposal: ProposalDefinition, values: dict[str, Any]) -> list[str]:
+        options = self._configurable_cli_options(proposal)
+        args: list[str] = []
+        for flag, value in values.items():
+            option = options.get(flag)
+            if option is None:
+                raise ValueError(f"{proposal.display_name}: {flag} is not configurable.")
+            option_type = str(option.get("type") or "string")
+            if option_type == "bool":
+                if value:
+                    args.append(flag)
+            elif option_type in {"int", "float", "string", "path"}:
+                args.extend([flag, str(value)])
+            elif option_type == "multi_select":
+                selected = [str(item).strip() for item in value if str(item).strip()]
+                if selected:
+                    args.extend([flag, ",".join(selected)])
+            elif option_type == "repeatable":
+                for item in value:
+                    text = str(item).strip()
+                    if text:
+                        args.extend([flag, text])
+            elif option_type == "repeatable_assignment":
+                for name, assignment_value in value.items():
+                    text = str(assignment_value).strip()
+                    if text:
+                        args.extend([flag, f"{name}={text}"])
+            elif option_type == "repeatable_assignment_bool":
+                for name, assignment_value in value.items():
+                    args.extend([flag, f"{name}={str(bool(assignment_value)).lower()}"])
+            else:
+                raise ValueError(f"{proposal.display_name}: unsupported option type for {flag}: {option_type}.")
+        return args
+
+    def _proposal_bert_model(self, proposal: ProposalDefinition, extra_args: list[str]) -> str:
+        value = cli_option_value(extra_args, "--bert-model")
+        if value:
+            return value
+        for option in proposal.cli_options:
+            if option.get("flag") == "--bert-model":
+                return str(option.get("default") or POSTHOC_EMBEDDING_MODEL)
+        return POSTHOC_EMBEDDING_MODEL
+
+    def _validate_extra_args(self, proposal: ProposalDefinition, extra_args: list[str]) -> None:
+        managed_flags = {
+            str(option["flag"])
+            for option in proposal.cli_options
+            if option.get("source") in {"managed", "common"}
+        }
+        managed_flags.update({"--outdir-base", "--texto-referencia", "--reference-text", "--seed", "--runs"})
+        blocked = [
+            item
+            for item in extra_args
+            if any(item == flag or item.startswith(f"{flag}=") for flag in managed_flags)
+        ]
+        if blocked:
+            raise ValueError(
+                f"{proposal.display_name}: these CLI flags are managed by the comparator and cannot be overridden: "
+                + ", ".join(blocked)
+            )
+
     def _execute_proposal_once(
         self,
         run: dict[str, Any],
@@ -910,51 +1539,37 @@ class ComparatorService:
         output_base.mkdir(parents=True, exist_ok=True)
         cost_metrics_path = proposal_dir / "cost_metrics.json"
 
-        repository_dir = self.root / proposal.repository_path
-        if not (repository_dir / "main.py").exists():
+        repository_dir = resolve_repository(self.root, proposal)
+        if not proposal_entrypoint_exists(self.root, proposal):
             return self._failed_result(
                 proposal,
                 proposal_dir,
-                f"Submodule is missing main.py at {repository_dir}.",
+                f"Proposal entrypoint is missing at {repository_dir}.",
             )
 
-        command = [
-            sys.executable,
-            str(self.root / "baselines" / "bootstrap.py"),
-            "main.py",
-            "--n",
-            str(run["config"]["n"]),
-            "--generaciones",
-            str(run["config"]["generaciones"]),
-            "--k",
-            str(run["config"]["k"]),
-            "--prob-crossover",
-            str(run["config"]["probCrossover"]),
-            "--prob-mutacion",
-            str(run["config"]["probMutacion"]),
-            "--model",
-            run["config"]["model"],
-            "--outdir-base",
-            str(output_base),
-            "--texto-referencia",
-            str(reference_path),
-        ]
+        try:
+            command = self._build_command(run, proposal, repository_dir, output_base, reference_path, random_seed)
+        except ValueError as error:
+            return self._failed_result(proposal, proposal_dir, str(error))
 
         self._append_log(run, proposal.proposal_id, "Starting baseline process.")
+        self._append_log(run, proposal.proposal_id, command_label(command))
         process_cost = self._run_process(
             run,
             proposal.proposal_id,
             command,
             repository_dir,
             proposal.preload_modules,
+            proposal.python_path_entries,
             cost_metrics_path,
             random_seed,
+            export_history=proposal.supports_history_export,
         )
         return_code = int(process_cost["returnCode"])
         llm_payload = read_json_or_default(cost_metrics_path, {})
 
         if run.get("cancelRequested"):
-            cost = build_cost_metrics(process_cost, llm_payload, None, True)
+            cost = self._build_cost(proposal, process_cost, llm_payload, None, True)
             return self._cancelled_result(proposal, proposal_dir, cost)
         if return_code != 0:
             message = (
@@ -962,7 +1577,7 @@ class ComparatorService:
                 if return_code == 124
                 else f"Process exited with code {return_code}. Check dependencies, Ollama, and model availability."
             )
-            cost = build_cost_metrics(process_cost, llm_payload, None, False)
+            cost = self._build_cost(proposal, process_cost, llm_payload, None, False)
             return self._failed_result(
                 proposal,
                 proposal_dir,
@@ -972,12 +1587,12 @@ class ComparatorService:
 
         output_dir = latest_child_directory(output_base)
         if not output_dir:
-            cost = build_cost_metrics(process_cost, llm_payload, None, False)
+            cost = self._build_cost(proposal, process_cost, llm_payload, None, False)
             return self._failed_result(proposal, proposal_dir, "No output directory was created.", cost)
 
         result_path = output_dir / proposal.result_file
         if not result_path.exists():
-            cost = build_cost_metrics(process_cost, llm_payload, output_dir, False)
+            cost = self._build_cost(proposal, process_cost, llm_payload, output_dir, False)
             return self._failed_result(
                 proposal,
                 proposal_dir,
@@ -986,22 +1601,298 @@ class ComparatorService:
             )
 
         try:
+            extraction_started = time.perf_counter()
             rows = self._normalize_rows(proposal, read_json(result_path), run["config"]["topK"])
+            cost = self._build_cost(proposal, process_cost, llm_payload, output_dir, False)
+            add_cost_timing(cost, "metricExtractionSeconds", time.perf_counter() - extraction_started)
+
+            selected_rows, selection_seconds = self._select_final_rows(proposal, rows, output_dir)
+            if selection_seconds:
+                add_cost_timing(cost, "postProcessingWallClockSeconds", selection_seconds)
+
+            metrics_started = time.perf_counter()
+            self._mark_selected_rows(rows, selected_rows)
             metrics = self._summarize_rows(proposal, rows, output_dir)
-            cost = build_cost_metrics(process_cost, llm_payload, output_dir, False)
+            series = self._build_metric_series(proposal, output_dir, rows)
+            add_cost_timing(cost, "metricExtractionSeconds", time.perf_counter() - metrics_started)
+
+            plot_started = time.perf_counter()
+            charts = self._build_chart_payload(proposal, rows, selected_rows, series)
+            add_cost_timing(cost, "plotPreparationSeconds", time.perf_counter() - plot_started)
             return {
                 "proposalId": proposal.proposal_id,
                 "displayName": proposal.display_name,
                 "status": STATUS_COMPLETED,
                 "outputDir": str(output_dir),
                 "rows": rows[: run["config"]["topK"]],
+                "selectedRows": selected_rows,
                 "metrics": metrics,
+                "series": series,
+                "charts": charts,
                 "cost": cost,
+                "command": command_label(command),
+                "outputFiles": self._output_files(proposal, output_dir),
                 "error": None,
             }
         except Exception as error:
-            cost = build_cost_metrics(process_cost, llm_payload, output_dir, False)
+            cost = self._build_cost(proposal, process_cost, llm_payload, output_dir, False)
             return self._failed_result(proposal, proposal_dir, f"Could not normalize output: {error}", cost)
+
+    def _build_cost(
+        self,
+        proposal: ProposalDefinition,
+        process_cost: dict[str, Any],
+        llm_payload: dict[str, Any],
+        output_dir: Path | None,
+        cancelled: bool,
+    ) -> dict[str, Any]:
+        if proposal.kind == "binary-mopso-cd":
+            return build_binary_cost_metrics(process_cost, output_dir, cancelled)
+        return build_cost_metrics(process_cost, llm_payload, output_dir, cancelled)
+
+    def _select_final_rows(
+        self,
+        proposal: ProposalDefinition,
+        rows: list[dict[str, Any]],
+        output_dir: Path,
+    ) -> tuple[list[dict[str, Any]], float]:
+        started = time.perf_counter()
+        selected_from_file = self._read_selected_rows(proposal, output_dir)
+        if selected_from_file:
+            selected = self._normalize_selected_rows(proposal, selected_from_file, rows)
+            return selected, 0.0
+
+        if proposal.kind in {"evolmd", "evolmd-mo"}:
+            selected = self._entropy_topsis_mmr_selection(rows, proposal.kind == "evolmd")
+            write_json(output_dir / "comparator_final_selection.json", selected)
+            return selected, time.perf_counter() - started
+
+        selected = rows[:5]
+        return selected, 0.0
+
+    def _read_selected_rows(self, proposal: ProposalDefinition, output_dir: Path) -> list[dict[str, Any]]:
+        candidates = []
+        if proposal.final_selection_file:
+            candidates.append(output_dir / proposal.final_selection_file)
+        candidates.extend([
+            output_dir / "final_selection_hybrid.json",
+            output_dir / "pareto_ranked.json",
+            output_dir / "comparator_final_selection.json",
+        ])
+        for path in candidates:
+            payload = read_json_or_default(path, None)
+            if isinstance(payload, list) and payload:
+                return [item for item in payload if isinstance(item, dict)]
+        return []
+
+    def _normalize_selected_rows(
+        self,
+        proposal: ProposalDefinition,
+        selected: list[dict[str, Any]],
+        rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        by_text = {canonical_generated_text(row.get("generatedText")): row for row in rows}
+        normalized: list[dict[str, Any]] = []
+        for index, item in enumerate(selected, start=1):
+            key = canonical_generated_text(item.get("generatedText") or item.get("generated_text") or item.get("generated_data"))
+            row = by_text.get(key)
+            if row:
+                normalized.append(self._selected_projection(row, index, item.get("topsis_score")))
+                continue
+            raw_row = self._normalize_any_row(proposal, item, index)
+            normalized.append(self._selected_projection(raw_row, index, item.get("topsis_score")))
+        return normalized[:5]
+
+    def _entropy_topsis_mmr_selection(self, rows: list[dict[str, Any]], use_diagnostic: bool) -> list[dict[str, Any]]:
+        candidates = [
+            row
+            for row in rows
+            if row.get("status") == "ok"
+            and row.get("generatedText")
+            and (row.get("diagnosticObjectiveVector") if use_diagnostic else row.get("objectiveVector"))
+        ]
+        if not candidates:
+            return []
+        vectors = [
+            row["diagnosticObjectiveVector"] if use_diagnostic else row["objectiveVector"]
+            for row in candidates
+        ]
+        matrix = [[finite_float(vector[0]), finite_float(vector[1] if len(vector) > 1 else 0.0)] for vector in vectors]
+        weights = entropy_weights(matrix)
+        scores = topsis_scores(matrix, weights)
+        for source_index, (row, score) in enumerate(zip(candidates, scores)):
+            row["_topsis_score"] = score
+            row["_selection_source_index"] = source_index
+        candidates.sort(key=lambda row: row["_topsis_score"], reverse=True)
+        selected: list[dict[str, Any]] = []
+        embeddings = None
+        if len(candidates) > 1:
+            texts = [row.get("generatedText") or "" for row in candidates]
+            embeddings, _ = shared_sbert_service().encode_texts(POSTHOC_EMBEDDING_MODEL, texts)
+        while candidates and len(selected) < 5:
+            if not selected or embeddings is None:
+                chosen = candidates.pop(0)
+            else:
+                best_index = 0
+                best_score = -float("inf")
+                selected_indices = [row["_selection_source_index"] for row in selected]
+                for idx, row in enumerate(candidates):
+                    source_idx = row["_selection_source_index"]
+                    redundancy = max(float(embeddings[source_idx] @ embeddings[item_idx]) for item_idx in selected_indices)
+                    mmr = 0.35 * finite_float(row.get("_topsis_score")) - 0.65 * max(0.0, redundancy)
+                    if mmr > best_score:
+                        best_index = idx
+                        best_score = mmr
+                chosen = candidates.pop(best_index)
+            selected.append(chosen)
+        return [self._selected_projection(row, index + 1, row.get("_topsis_score")) for index, row in enumerate(selected)]
+
+    def _selected_projection(self, row: dict[str, Any], selection_rank: int, topsis_score: Any = None) -> dict[str, Any]:
+        return {
+            "proposalId": row.get("proposalId"),
+            "displayName": row.get("displayName"),
+            "selectionRank": selection_rank,
+            "rank": row.get("rank"),
+            "generatedText": row.get("generatedText"),
+            "prompt": row.get("prompt"),
+            "objectiveVector": row.get("objectiveVector") or [],
+            "objectiveLabel": row.get("objectiveLabel") or "--",
+            "diagnosticObjectiveVector": row.get("diagnosticObjectiveVector"),
+            "diagnosticObjectiveLabel": row.get("diagnosticObjectiveLabel"),
+            "topsisScore": finite_float(topsis_score, None) if topsis_score is not None else None,
+        }
+
+    def _mark_selected_rows(self, rows: list[dict[str, Any]], selected_rows: list[dict[str, Any]]) -> None:
+        selected_texts = {canonical_generated_text(row.get("generatedText")) for row in selected_rows}
+        selected_ranks = {
+            canonical_generated_text(row.get("generatedText")): row.get("selectionRank")
+            for row in selected_rows
+        }
+        for row in rows:
+            key = canonical_generated_text(row.get("generatedText"))
+            row["selected"] = key in selected_texts
+            if row["selected"]:
+                row["selectionRank"] = selected_ranks.get(key)
+            row.pop("_topsis_score", None)
+            row.pop("_selection_source_index", None)
+
+    def _build_metric_series(
+        self,
+        proposal: ProposalDefinition,
+        output_dir: Path,
+        final_rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if proposal.kind == "binary-mopso-cd":
+            series = self._read_binary_metric_series(output_dir)
+            if series:
+                return series
+        history = self._read_population_history(output_dir)
+        if history:
+            return [self._history_entry_metrics(proposal, entry) for entry in history]
+        csv_series = self._read_legacy_metric_series(proposal, output_dir)
+        if csv_series:
+            return csv_series
+        return [self._final_series_point(proposal, final_rows)]
+
+    def _read_binary_metric_series(self, output_dir: Path) -> list[dict[str, Any]]:
+        rows = self._read_csv_dicts(output_dir / "evolucion_metricas.csv")
+        series = []
+        for item in rows:
+            series.append(
+                {
+                    "generation": int(finite_float(item.get("generation"))),
+                    "hypervolume": finite_float(item.get("hypervolume"), None),
+                    "nonDominatedRows": finite_float(item.get("archive_size"), None),
+                    "spread": finite_float(item.get("spread"), None),
+                    "source": "native",
+                }
+            )
+        return [item for item in series if item["generation"] > 0]
+
+    def _read_legacy_metric_series(self, proposal: ProposalDefinition, output_dir: Path) -> list[dict[str, Any]]:
+        filename = proposal.metrics_series_file
+        if not filename:
+            return []
+        rows = self._read_csv_dicts(output_dir / filename)
+        series: list[dict[str, Any]] = []
+        for item in rows:
+            generation = item.get("generation") or item.get("Generacion")
+            if generation is None:
+                continue
+            series.append(
+                {
+                    "generation": int(finite_float(generation)),
+                    "hypervolume": None,
+                    "nonDominatedRows": None,
+                    "spread": None,
+                    "source": "legacy_csv_without_front",
+                }
+            )
+        return series
+
+    def _read_csv_dicts(self, path: Path) -> list[dict[str, str]]:
+        if not path.exists():
+            return []
+        with path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+            return list(csv.DictReader(handle))
+
+    def _read_population_history(self, output_dir: Path) -> list[dict[str, Any]]:
+        path = output_dir / "population_history.jsonl"
+        if not path.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                entries.append(payload)
+        return entries
+
+    def _history_entry_metrics(self, proposal: ProposalDefinition, entry: dict[str, Any]) -> dict[str, Any]:
+        population = entry.get("population") if isinstance(entry.get("population"), list) else []
+        rows = self._normalize_rows(proposal, population, top_k=len(population) or 1)
+        metrics = self._summarize_rows(proposal, rows, Path("."))
+        return {
+            "generation": int(finite_float(entry.get("generation"))),
+            "hypervolume": metrics.get("hypervolume"),
+            "nonDominatedRows": metrics.get("postHocNonDominatedRows") if metrics.get("postHocDiagnostic") else metrics.get("nonDominatedRows"),
+            "spread": metrics.get("spread"),
+            "source": "population_history",
+        }
+
+    def _final_series_point(self, proposal: ProposalDefinition, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        metrics = self._summarize_rows(proposal, rows, Path("."))
+        return {
+            "generation": 0,
+            "hypervolume": metrics.get("hypervolume"),
+            "nonDominatedRows": metrics.get("postHocNonDominatedRows") if metrics.get("postHocDiagnostic") else metrics.get("nonDominatedRows"),
+            "spread": metrics.get("spread"),
+            "source": "final_only",
+        }
+
+    def _build_chart_payload(
+        self,
+        proposal: ProposalDefinition,
+        rows: list[dict[str, Any]],
+        selected_rows: list[dict[str, Any]],
+        series: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return build_charts_from_rows(rows, selected_rows, series)
+
+    def _output_files(self, proposal: ProposalDefinition, output_dir: Path) -> dict[str, str | None]:
+        files = {
+            "result": output_dir / proposal.result_file,
+            "finalSelection": output_dir / proposal.final_selection_file if proposal.final_selection_file else None,
+            "series": output_dir / proposal.metrics_series_file if proposal.metrics_series_file else None,
+            "populationHistory": output_dir / "population_history.jsonl",
+            "runtime": output_dir / "runtime.txt",
+            "llmCalls": output_dir / "llm_calls.jsonl",
+        }
+        return {key: str(path) if path and path.exists() else None for key, path in files.items()}
 
     def _set_proposal_state_unlocked(
         self,
@@ -1136,18 +2027,27 @@ class ComparatorService:
         command: list[str],
         cwd: Path,
         preload_modules: tuple[str, ...],
+        python_path_entries: tuple[str, ...],
         cost_metrics_path: Path,
         random_seed: int | None = None,
+        export_history: bool = False,
     ) -> dict[str, Any]:
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["BASELINE_COST_METRICS_PATH"] = str(cost_metrics_path)
+        resolved_python_path_entries = [str(resolve_config_path(self.root, entry)) for entry in python_path_entries]
+        if resolved_python_path_entries:
+            environment["PYTHONPATH"] = os.pathsep.join(
+                [*resolved_python_path_entries, environment.get("PYTHONPATH", "")]
+            ).rstrip(os.pathsep)
         if random_seed is not None:
             seed_text = str(int(random_seed))
             environment["BASELINE_RANDOM_SEED"] = seed_text
             environment["PYTHONHASHSEED"] = seed_text
         if preload_modules:
             environment["BASELINE_PRELOAD_MODULES"] = ",".join(preload_modules)
+        if export_history:
+            environment["COMPARATOR_EXPORT_HISTORY"] = "1"
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
         process_started = time.perf_counter()
         timed_out = False
@@ -1256,9 +2156,7 @@ class ComparatorService:
             raise ValueError("Expected a JSON list.")
 
         rows = [
-            self._normalize_evolmd_row(proposal, row, index)
-            if proposal.single_objective
-            else self._normalize_evolmd_mo_row(proposal, row, index)
+            self._normalize_any_row(proposal, row, index)
             for index, row in enumerate(raw_rows, start=1)
             if isinstance(row, dict)
         ]
@@ -1281,6 +2179,18 @@ class ComparatorService:
             row["rank"] = rank
             row["shownInTopK"] = rank <= top_k
         return rows
+
+    def _normalize_any_row(
+        self,
+        proposal: ProposalDefinition,
+        row: dict[str, Any],
+        index: int,
+    ) -> dict[str, Any]:
+        if proposal.kind == "binary-mopso-cd":
+            return self._normalize_binary_row(proposal, row, index)
+        if proposal.single_objective:
+            return self._normalize_evolmd_row(proposal, row, index)
+        return self._normalize_evolmd_mo_row(proposal, row, index)
 
     def _attach_evolmd_posthoc_diagnostics(self, rows: list[dict[str, Any]]) -> None:
         valid_rows = [row for row in rows if row.get("status") == "ok"]
@@ -1357,6 +2267,38 @@ class ComparatorService:
             },
         }
 
+    def _normalize_binary_row(
+        self,
+        proposal: ProposalDefinition,
+        row: dict[str, Any],
+        index: int,
+    ) -> dict[str, Any]:
+        objectives = row.get("objectives") if isinstance(row.get("objectives"), dict) else {}
+        vector = [
+            finite_float(objectives.get("f1")),
+            finite_float(objectives.get("f2")),
+        ]
+        components = row.get("components") if isinstance(row.get("components"), dict) else {}
+        return {
+            "proposalId": proposal.proposal_id,
+            "displayName": proposal.display_name,
+            "sourceIndex": index,
+            "rank": index,
+            "generatedText": str(row.get("generated_text") or row.get("generated_data") or ""),
+            "prompt": str(row.get("prompt") or ""),
+            "objectiveVector": vector,
+            "objectiveLabel": objective_label(vector),
+            "objectiveNames": list(proposal.objective_names),
+            "status": "ok" if row.get("generated_text") and objectives else "invalid_solution",
+            "nonDominated": False,
+            "raw": {
+                "solutionId": row.get("solution_id"),
+                "components": components,
+                "generation": row.get("generation"),
+                "changed": row.get("changed"),
+            },
+        }
+
     def _summarize_rows(
         self,
         proposal: ProposalDefinition,
@@ -1402,7 +2344,9 @@ class ComparatorService:
             metrics["diagnosticObjectiveNames"] = ["fitness", "semantic_diversity_posthoc"]
             metrics["bestDiagnosticObjectiveVector"] = best_diagnostic
             metrics["bestDiagnosticObjectiveLabel"] = objective_label(best_diagnostic)
-            metrics["postHocNonDominatedRows"] = sum(1 for row in rows if row.get("postHocNonDominated"))
+            post_hoc_non_dominated_rows = sum(1 for row in rows if row.get("postHocNonDominated"))
+            metrics["postHocNonDominatedRows"] = post_hoc_non_dominated_rows
+            metrics["nonDominatedRows"] = post_hoc_non_dominated_rows
             metrics["hypervolume"] = hypervolume
             metrics["hypervolumeLabel"] = f"{hypervolume:.6f}" if hypervolume is not None else "No aplica"
             metrics["spread"] = spread
@@ -1414,11 +2358,12 @@ class ComparatorService:
                 "spread is normalized consecutive-distance deviation over the diagnostic non-dominated set."
             )
         else:
+            diversity_upper_bound = 2.0 if proposal.kind == "binary-mopso-cd" else 1.0
             points = [
                 point
                 for row in rows
                 if row.get("nonDominated")
-                for point in [normalized_mo_point(row)]
+                for point in [normalized_mo_point(row, diversity_upper_bound)]
                 if point is not None
             ]
             hypervolume = calculate_hypervolume(points)
@@ -1427,10 +2372,15 @@ class ComparatorService:
             metrics["hypervolumeLabel"] = f"{hypervolume:.6f}" if hypervolume is not None else "No aplica"
             metrics["spread"] = spread
             metrics["spreadLabel"] = f"{spread:.6f}" if spread is not None else "No aplica"
+            diversity_note = (
+                "Binary MOPSO-CD diversity normalized with diversity / 2 before HV/spread; "
+                if proposal.kind == "binary-mopso-cd"
+                else "diversity clamped to [0, 1]; "
+            )
             metrics["moConvention"] = (
                 "Maximization; fidelity normalized with (fidelity + 1) / 2; "
-                "diversity clamped to [0, 1]; HV reference point [0, 0]; "
-                "spread is normalized consecutive-distance deviation, lower is better."
+                + diversity_note
+                + "HV reference point [0, 0]; spread is normalized consecutive-distance deviation, lower is better."
             )
 
         return metrics

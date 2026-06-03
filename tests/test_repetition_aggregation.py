@@ -9,6 +9,7 @@ from unittest.mock import patch
 from baselines import comparator as comparator_module
 from baselines.bootstrap import install_evolmd_bertscore_guard
 from baselines.comparator import ComparatorService, PROPOSALS, aggregate_proposal_repetitions
+from baselines.comparator import aggregate_series
 from baselines.comparator import mark_non_dominated
 from initial_population.comparison import InitialPopulationComparisonService
 from turbulence_comparison.service import aggregate_turbulence_repetitions
@@ -26,6 +27,229 @@ class RepetitionAggregationTests(unittest.TestCase):
         )
         self.assertEqual(parsed["seed"], 123)
         self.assertEqual(parsed["repetitionsK"], 4)
+        self.assertIn("binary-mopso-cd", parsed["selectedProposalIds"])
+
+    def test_comparator_config_accepts_single_selected_proposal(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {"binary-mopso-cd": {"extraArgs": "--freeze-components role"}},
+            }
+        )
+        self.assertEqual(parsed["selectedProposalIds"], ["binary-mopso-cd"])
+        self.assertEqual(parsed["proposalConfigs"]["binary-mopso-cd"]["extraArgs"], "--freeze-components role")
+
+    def test_comparator_config_accepts_structured_cli_values(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {
+                    "binary-mopso-cd": {
+                        "cliValues": {
+                            "--freeze-components": ["role", "topic"],
+                            "--enable-monitor": True,
+                            "--router-heuristic": {"word_replacement_candidates": False},
+                            "--task-model": {"synthetic_text_generation": "llama3.1:8b"},
+                        }
+                    }
+                },
+            }
+        )
+        values = parsed["proposalConfigs"]["binary-mopso-cd"]["cliValues"]
+        self.assertEqual(values["--freeze-components"], ["role", "topic"])
+        self.assertTrue(values["--enable-monitor"])
+        self.assertFalse(values["--router-heuristic"]["word_replacement_candidates"])
+        self.assertEqual(values["--task-model"]["synthetic_text_generation"], "llama3.1:8b")
+
+    def test_evolmd_ga_flags_are_proposal_specific_cli_values(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["evolmd"],
+                "proposalConfigs": {
+                    "evolmd": {
+                        "cliValues": {
+                            "--k": "5",
+                            "--prob-crossover": "0.7",
+                            "--prob-mutacion": "0.05",
+                        }
+                    }
+                },
+            }
+        )
+        values = parsed["proposalConfigs"]["evolmd"]["cliValues"]
+        self.assertNotIn("k", parsed)
+        self.assertEqual(values["--k"], "5")
+        self.assertEqual(values["--prob-crossover"], "0.7")
+        self.assertEqual(values["--prob-mutacion"], "0.05")
+
+    def test_evolmd_command_builds_proposal_specific_ga_flags(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "evolmd")
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["evolmd"],
+                "proposalConfigs": {
+                    "evolmd": {
+                        "cliValues": {
+                            "--k": "5",
+                            "--prob-crossover": "0.7",
+                            "--prob-mutacion": "0.05",
+                        }
+                    }
+                },
+            }
+        )
+        command = service._build_command(
+            {"config": config},
+            proposal,
+            Path("."),
+            Path("out"),
+            Path("reference.txt"),
+            777,
+        )
+        self.assertEqual(command[command.index("--k") + 1], "5")
+        self.assertEqual(command[command.index("--prob-crossover") + 1], "0.7")
+        self.assertEqual(command[command.index("--prob-mutacion") + 1], "0.05")
+
+    def test_evolmd_command_does_not_force_proposal_specific_defaults(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "evolmd")
+        command = service._build_command(
+            {"config": service._read_config({"referenceText": "reference", "selectedProposalIds": ["evolmd"]})},
+            proposal,
+            Path("."),
+            Path("out"),
+            Path("reference.txt"),
+            777,
+        )
+        self.assertNotIn("--k", command)
+        self.assertNotIn("--prob-crossover", command)
+        self.assertNotIn("--prob-mutacion", command)
+
+    def test_comparator_rejects_structured_managed_or_unknown_cli_values(self):
+        service = ComparatorService(Path("."))
+        for flag in ("--seed", "--missing"):
+            with self.subTest(flag=flag):
+                with self.assertRaises(ValueError):
+                    service._read_config(
+                        {
+                            "referenceText": "reference",
+                            "selectedProposalIds": ["binary-mopso-cd"],
+                            "proposalConfigs": {"binary-mopso-cd": {"cliValues": {flag: "1"}}},
+                        }
+                    )
+
+    def test_comparator_rejects_unknown_selected_proposal(self):
+        service = ComparatorService(Path("."))
+        with self.assertRaises(ValueError):
+            service._read_config({"referenceText": "reference", "selectedProposalIds": ["missing"]})
+
+    def test_binary_extra_args_cannot_override_managed_isolation_flags(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        for flag in ("--outdir-base", "--seed"):
+            with self.subTest(flag=flag):
+                with self.assertRaises(ValueError):
+                    service._validate_extra_args(proposal, [flag, "other"])
+
+    def test_extra_args_cannot_override_common_comparison_flags(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "evolmd")
+        for flag in ("--n", "--generaciones", "--model"):
+            with self.subTest(flag=flag):
+                with self.assertRaises(ValueError):
+                    service._validate_extra_args(proposal, [flag, "other"])
+
+    def test_extra_args_cannot_override_common_flags_with_equals_syntax(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        for flag in ("--n=99", "--iterations=99", "--model=other"):
+            with self.subTest(flag=flag):
+                with self.assertRaises(ValueError):
+                    service._validate_extra_args(proposal, [flag])
+
+    def test_binary_extra_args_cannot_override_managed_flags_with_equals_syntax(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        for flag in ("--outdir-base=other", "--reference-text=other", "--runs=3", "--seed=999"):
+            with self.subTest(flag=flag):
+                with self.assertRaises(ValueError):
+                    service._validate_extra_args(proposal, [flag])
+
+    def test_binary_command_uses_repetition_seed(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        command = service._build_command(
+            {"config": service._read_config({"referenceText": "reference", "selectedProposalIds": ["binary-mopso-cd"]})},
+            proposal,
+            Path("."),
+            Path("out"),
+            Path("reference.txt"),
+            777,
+        )
+        self.assertIn("--seed", command)
+        self.assertEqual(command[command.index("--seed") + 1], "777")
+
+    def test_binary_command_builds_structured_cli_values(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {
+                    "binary-mopso-cd": {
+                        "cliValues": {
+                            "--bert-model": "gte-small",
+                            "--freeze-components": ["role", "topic"],
+                            "--enable-monitor": True,
+                            "--router-heuristic": {"word_replacement_candidates": False},
+                            "--task-model": {"synthetic_text_generation": "llama3.1:8b"},
+                        }
+                    }
+                },
+            }
+        )
+        command = service._build_command(
+            {"config": config},
+            proposal,
+            Path("."),
+            Path("out"),
+            Path("reference.txt"),
+            777,
+        )
+        self.assertEqual(command[command.index("--bert-model") + 1], "gte-small")
+        self.assertEqual(command.count("--bert-model"), 1)
+        self.assertEqual(command[command.index("--freeze-components") + 1], "role,topic")
+        self.assertIn("--enable-monitor", command)
+        self.assertIn("word_replacement_candidates=false", command)
+        self.assertIn("synthetic_text_generation=llama3.1:8b", command)
+
+    def test_selected_proposals_validate_dependencies_before_starting(self):
+        service = ComparatorService(Path("."))
+        with patch.object(comparator_module, "proposal_entrypoint_exists", return_value=True), patch.object(
+            comparator_module,
+            "check_proposal_dependencies",
+            return_value={
+                "ok": False,
+                "missing": ["torch"],
+                "pythonExecutable": "python",
+                "error": None,
+            },
+        ):
+            with self.assertRaisesRegex(ValueError, "missing modules: torch"):
+                service._validate_selected_proposals_available(
+                    {
+                        "selectedProposalIds": ["evolmd"],
+                    }
+                )
 
     def test_initial_population_config_accepts_repetitions(self):
         service = InitialPopulationComparisonService(Path("."))
@@ -81,8 +305,88 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(aggregated["completedRepetitions"], 2)
         self.assertAlmostEqual(aggregated["metrics"]["completedRows"], 9.0)
         self.assertEqual(aggregated["metrics"]["bestObjectiveLabel"], "[0.700000]")
+        self.assertEqual(aggregated["metrics"]["nonDominatedRows"], 3.0)
+        self.assertEqual(aggregated["metrics"]["postHocNonDominatedRows"], 3.0)
         self.assertEqual(aggregated["cost"]["llmCalls"], 5)
         self.assertEqual(aggregated["rows"][0]["repetitionSeed"], 10)
+
+    def test_aggregate_series_averages_by_generation(self):
+        series = aggregate_series([
+            {"series": [{"generation": 1, "hypervolume": 0.2, "nonDominatedRows": 2, "spread": 0.5}]},
+            {"series": [{"generation": 1, "hypervolume": 0.4, "nonDominatedRows": 4, "spread": 0.3}]},
+        ])
+        self.assertEqual(len(series), 1)
+        self.assertAlmostEqual(series[0]["hypervolume"], 0.3)
+        self.assertAlmostEqual(series[0]["nonDominatedRows"], 3.0)
+        self.assertAlmostEqual(series[0]["spread"], 0.4)
+
+    def test_binary_rows_normalize_from_native_outputs(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        rows = service._normalize_rows(
+            proposal,
+            [
+                {
+                    "solution_id": "s1",
+                    "generated_text": "Generated",
+                    "prompt": "Prompt",
+                    "objectives": {"f1": 0.7, "f2": 0.4},
+                    "components": {"role": "resident"},
+                }
+            ],
+            top_k=5,
+        )
+        self.assertEqual(rows[0]["proposalId"], "binary-mopso-cd")
+        self.assertEqual(rows[0]["objectiveVector"], [0.7, 0.4])
+        self.assertTrue(rows[0]["nonDominated"])
+
+    def test_single_objective_summary_reports_posthoc_non_dominated_count(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "evolmd")
+        metrics = service._summarize_rows(
+            proposal,
+            [
+                {
+                    "status": "ok",
+                    "objectiveVector": [0.8],
+                    "diagnosticObjectiveVector": [0.8, 0.2],
+                    "postHocNonDominated": True,
+                },
+                {
+                    "status": "ok",
+                    "objectiveVector": [0.7],
+                    "diagnosticObjectiveVector": [0.7, 0.5],
+                    "postHocNonDominated": True,
+                },
+                {
+                    "status": "ok",
+                    "objectiveVector": [0.6],
+                    "diagnosticObjectiveVector": [0.6, 0.1],
+                    "postHocNonDominated": False,
+                },
+            ],
+            Path("out"),
+        )
+        self.assertTrue(metrics["postHocDiagnostic"])
+        self.assertEqual(metrics["postHocNonDominatedRows"], 2)
+        self.assertEqual(metrics["nonDominatedRows"], 2)
+
+    def test_binary_summary_uses_native_diversity_scale_for_hypervolume(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        rows = service._normalize_rows(
+            proposal,
+            [
+                {
+                    "solution_id": "s1",
+                    "generated_text": "Generated",
+                    "objectives": {"f1": 0.0, "f2": 1.5},
+                }
+            ],
+            top_k=5,
+        )
+        metrics = service._summarize_rows(proposal, rows, Path("out"))
+        self.assertAlmostEqual(metrics["hypervolume"], 0.375)
 
     def test_evolmd_bertscore_guard_assigns_zero_to_empty_outputs(self):
         with tempfile.TemporaryDirectory() as temp_dir:

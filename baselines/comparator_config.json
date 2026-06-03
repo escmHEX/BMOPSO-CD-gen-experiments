@@ -1,0 +1,39 @@
+{
+  "defaults": {
+    "selectedProposalIds": ["evolmd", "evolmd-mo", "binary-mopso-cd"],
+    "model": "llama3",
+    "posthocEmbeddingModel": "all-MiniLM-L6-v2",
+    "topK": 10,
+    "n": 10,
+    "generaciones": 3,
+    "seed": 42,
+    "repetitionsK": 1,
+    "proposalParallelism": 1,
+    "timeoutMinutes": 60
+  },
+  "proposals": {
+    "evolmd": {
+      "repositoryPath": "baselines/external/evolmd",
+      "pythonExecutable": "",
+      "pythonPathEntries": [],
+      "requiredModules": ["torch", "bert_score", "ollama", "nltk", "pydantic", "tqdm"]
+    },
+    "evolmd-mo": {
+      "repositoryPath": "baselines/external/evolmd-mo",
+      "pythonExecutable": "",
+      "pythonPathEntries": [],
+      "requiredModules": ["torch", "bert_score", "sentence_transformers", "sklearn", "pandas", "numpy", "spacy", "pymoo", "ollama"]
+    },
+    "binary-mopso-cd": {
+      "repositoryPath": "C:\\Users\\Admin\\Desktop\\Implementaci\u00f3n\\Binary MOPSO-CD",
+      "pythonExecutable": "C:\\Users\\Admin\\Desktop\\Implementaci\u00f3n\\Binary MOPSO-CD\\.venv\\Scripts\\python.exe",
+      "pythonPathEntries": [],
+      "requiredModules": ["torch", "sentence_transformers", "sklearn", "numpy", "spacy", "ollama"]
+    }
+  },
+  "charting": {
+    "library": "Apache ECharts",
+    "version": "5.5.1",
+    "localPath": "LLM/vendor/echarts.min.js"
+  }
+}
