@@ -98,6 +98,8 @@ POSTHOC_EMBEDDING_MODEL = str(COMPARATOR_DEFAULTS.get("posthocEmbeddingModel") o
 DEFAULT_SELECTED_PROPOSALS = tuple(COMPARATOR_DEFAULTS.get("selectedProposalIds") or ("evolmd", "evolmd-mo", "binary-mopso-cd"))
 DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN = config_bool(COMPARATOR_DEFAULTS.get("updateRepositoriesBeforeRun"), False)
 DEFAULT_EXECUTION_MODE = str(COMPARATOR_DEFAULTS.get("executionMode") or EXECUTION_MODE_FAIR_SEQUENTIAL)
+METRIC_SCHEMA_VERSION = 2
+METRIC_COORDINATE_SPACE = "comparable_normalized"
 
 
 def utc_now() -> str:
@@ -647,6 +649,8 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
             "comparableObjectiveNames": list(COMPARABLE_OBJECTIVE_NAMES),
             "bestComparableObjectiveVector": [],
             "bestComparableObjectiveLabel": "--",
+            "metricSchemaVersion": METRIC_SCHEMA_VERSION,
+            "metricCoordinateSpace": METRIC_COORDINATE_SPACE,
             "nonDominatedRows": 0,
             "hypervolume": None,
             "hypervolumeLabel": "No aplica",
@@ -676,6 +680,8 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
         "comparableObjectiveNames": first_metrics.get("comparableObjectiveNames") or list(COMPARABLE_OBJECTIVE_NAMES),
         "bestComparableObjectiveVector": best_comparable_vector,
         "bestComparableObjectiveLabel": objective_label(best_comparable_vector),
+        "metricSchemaVersion": METRIC_SCHEMA_VERSION,
+        "metricCoordinateSpace": METRIC_COORDINATE_SPACE,
         "nonDominatedRows": average_present([metrics.get("nonDominatedRows") for metrics in metrics_list]),
         "hypervolume": hypervolume,
         "hypervolumeLabel": f"{hypervolume:.6f}" if hypervolume is not None else "No aplica",
@@ -1121,6 +1127,8 @@ class ComparatorService:
         return {
             "updateRepositoriesBeforeRun": DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN,
             "executionMode": DEFAULT_EXECUTION_MODE,
+            "metricSchemaVersion": METRIC_SCHEMA_VERSION,
+            "metricCoordinateSpace": METRIC_COORDINATE_SPACE,
         }
 
     def _initial_proposal_state(self, proposal: ProposalDefinition) -> dict[str, Any]:
@@ -1154,6 +1162,8 @@ class ComparatorService:
             "startedAtEpoch": None,
             "runDir": str(run_dir),
             "config": config,
+            "metricSchemaVersion": METRIC_SCHEMA_VERSION,
+            "metricCoordinateSpace": METRIC_COORDINATE_SPACE,
             "logs": [],
             "proposals": [],
             "proposalStates": {
@@ -1193,8 +1203,39 @@ class ComparatorService:
 
         summary_path = self.runs_root / run_id / "summary.json"
         if summary_path.exists():
-            return read_json(summary_path)
+            return self._with_metric_recompute_status(read_json(summary_path))
         return None
+
+    def recompute_run_metrics(self, run_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            active_run = self._runs.get(run_id)
+            source_run = self._public_run(active_run) if active_run else None
+
+        summary_path = self.runs_root / run_id / "summary.json"
+        if source_run is None:
+            if not summary_path.exists():
+                return None
+            source_run = read_json(summary_path)
+
+        if source_run.get("status") != STATUS_COMPLETED:
+            raise ValueError("Solo se pueden recalcular metricas de corridas completadas.")
+
+        recomputed_run = self._recompute_run_metrics_payload(source_run)
+        with self._lock:
+            active_run = self._runs.get(run_id)
+            if active_run:
+                hidden = {
+                    "activeProcesses": active_run.get("activeProcesses", {}),
+                    "startedAtEpoch": active_run.get("startedAtEpoch"),
+                }
+                active_run.clear()
+                active_run.update(recomputed_run)
+                active_run.update(hidden)
+                self._write_summary_unlocked(active_run)
+                return self._public_run(active_run)
+
+            write_json(summary_path, recomputed_run)
+            return self._with_metric_recompute_status(recomputed_run)
 
     def cancel_run(self, run_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -1213,6 +1254,123 @@ class ComparatorService:
         with self._lock:
             self._write_summary_unlocked(run)
             return self._public_run(run)
+
+    def _recompute_run_metrics_payload(self, run: dict[str, Any]) -> dict[str, Any]:
+        started = time.perf_counter()
+        config = run.get("config") if isinstance(run.get("config"), dict) else {}
+        proposals: list[dict[str, Any]] = []
+        recomputed_ids: list[str] = []
+
+        for result in run.get("proposals") or []:
+            if not isinstance(result, dict) or result.get("status") != STATUS_COMPLETED:
+                proposals.append(result)
+                continue
+            proposal = PROPOSAL_BY_ID.get(str(result.get("proposalId") or ""))
+            if proposal is None:
+                proposals.append(result)
+                continue
+            recomputed = self._recompute_proposal_metrics(proposal, result, config)
+            proposals.append(recomputed)
+            recomputed_ids.append(proposal.proposal_id)
+
+        elapsed = time.perf_counter() - started
+        updated = {
+            **run,
+            "proposals": proposals,
+            "metricSchemaVersion": METRIC_SCHEMA_VERSION,
+            "metricCoordinateSpace": METRIC_COORDINATE_SPACE,
+            "metricsRecomputedAt": utc_now(),
+            "metricRecompute": {
+                "recomputedAt": utc_now(),
+                "wallClockSeconds": elapsed,
+                "wallClockLabel": label_from_seconds(elapsed),
+                "proposalIds": recomputed_ids,
+                "note": "Recalculo desde artefactos Python reales; no reejecuta propuestas ni LLM.",
+            },
+            "updatedAt": utc_now(),
+        }
+        logs = list(updated.get("logs") or [])
+        logs.append(
+            {
+                "at": utc_now(),
+                "proposalId": "system",
+                "message": (
+                    "Metric recomputation completed using comparable normalized objectives "
+                    f"for {', '.join(recomputed_ids) or 'no proposals'}."
+                ),
+            }
+        )
+        updated["logs"] = logs[-250:]
+        return self._with_metric_recompute_status(updated)
+
+    def _recompute_proposal_metrics(
+        self,
+        proposal: ProposalDefinition,
+        result: dict[str, Any],
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        repetitions = result.get("repetitions") if isinstance(result.get("repetitions"), list) else []
+        if repetitions:
+            recomputed_repetitions: list[dict[str, Any]] = []
+            for repetition in repetitions:
+                if isinstance(repetition, dict) and repetition.get("status") == STATUS_COMPLETED:
+                    recomputed_repetitions.append(
+                        self._recompute_single_proposal_result(proposal, repetition, config)
+                    )
+                elif isinstance(repetition, dict):
+                    recomputed_repetitions.append(repetition)
+            aggregated = aggregate_proposal_repetitions(
+                proposal,
+                Path(str(result.get("outputDir") or ".")),
+                recomputed_repetitions,
+                int(result.get("repetitionsK") or config.get("repetitionsK") or 1),
+            )
+            for key in ("gitRevision", "command", "outputFiles"):
+                if result.get(key) is not None:
+                    aggregated[key] = result.get(key)
+            return aggregated
+
+        return self._recompute_single_proposal_result(proposal, result, config)
+
+    def _recompute_single_proposal_result(
+        self,
+        proposal: ProposalDefinition,
+        result: dict[str, Any],
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        output_dir = Path(str(result.get("outputDir") or ""))
+        if not output_dir.exists():
+            raise ValueError(f"No existe el directorio de salida para {proposal.display_name}: {output_dir}")
+        result_path = output_dir / proposal.result_file
+        if not result_path.exists():
+            raise ValueError(f"No existe {proposal.result_file} para {proposal.display_name}: {result_path}")
+
+        top_k = int(config.get("topK") or 10)
+        reference_text = str(config.get("referenceText") or "")
+        rows = self._normalize_rows(proposal, read_json(result_path), top_k, reference_text=reference_text)
+        selected_rows, _selection_seconds = self._select_final_rows(
+            proposal,
+            rows,
+            output_dir,
+            write_if_missing=False,
+        )
+        self._mark_selected_rows(rows, selected_rows)
+        metrics = self._summarize_rows(proposal, rows, output_dir)
+        series = self._build_metric_series(proposal, output_dir, rows, reference_text)
+        charts = self._build_chart_payload(proposal, rows, selected_rows, series)
+        return {
+            **result,
+            "status": STATUS_COMPLETED,
+            "rows": rows[:top_k],
+            "selectedRows": selected_rows,
+            "metrics": metrics,
+            "series": series,
+            "charts": charts,
+            "outputFiles": self._output_files(proposal, output_dir),
+            "metricSchemaVersion": METRIC_SCHEMA_VERSION,
+            "metricCoordinateSpace": METRIC_COORDINATE_SPACE,
+            "error": None,
+        }
 
     def _read_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         reference_text = str(payload.get("referenceText", "")).strip()
@@ -2238,6 +2396,7 @@ class ComparatorService:
         proposal: ProposalDefinition,
         rows: list[dict[str, Any]],
         output_dir: Path,
+        write_if_missing: bool = True,
     ) -> tuple[list[dict[str, Any]], float]:
         started = time.perf_counter()
         selected_from_file = self._read_selected_rows(proposal, output_dir)
@@ -2247,7 +2406,8 @@ class ComparatorService:
 
         if proposal.kind in {"evolmd", "evolmd-mo"}:
             selected = self._entropy_topsis_mmr_selection(rows, proposal.kind == "evolmd")
-            write_json(output_dir / "comparator_final_selection.json", selected)
+            if write_if_missing:
+                write_json(output_dir / "comparator_final_selection.json", selected)
             return selected, time.perf_counter() - started
 
         selected = rows[:5]
@@ -2371,6 +2531,9 @@ class ComparatorService:
         reference_text: str,
     ) -> list[dict[str, Any]]:
         if proposal.kind == "binary-mopso-cd":
+            archive_series = self._read_binary_archive_metric_series(proposal, output_dir)
+            if archive_series:
+                return archive_series
             series = self._read_binary_metric_series(output_dir)
             if series:
                 return series
@@ -2381,6 +2544,40 @@ class ComparatorService:
         if csv_series:
             return csv_series
         return [self._final_series_point(proposal, final_rows)]
+
+    def _read_binary_archive_metric_series(
+        self,
+        proposal: ProposalDefinition,
+        output_dir: Path,
+    ) -> list[dict[str, Any]]:
+        path = output_dir / "archive_history.jsonl"
+        if not path.exists():
+            return []
+        series: list[dict[str, Any]] = []
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            archive = payload.get("archive") if isinstance(payload.get("archive"), list) else []
+            if not archive:
+                continue
+            rows = self._normalize_rows(proposal, archive, top_k=len(archive))
+            metrics = self._summarize_rows(proposal, rows, Path("."))
+            series.append(
+                {
+                    "generation": int(finite_float(payload.get("generation"))),
+                    "hypervolume": metrics.get("hypervolume"),
+                    "nonDominatedRows": metrics.get("nonDominatedRows"),
+                    "spread": metrics.get("spread"),
+                    "source": "archive_history",
+                }
+            )
+        return [item for item in series if item["generation"] > 0]
 
     def _read_binary_metric_series(self, output_dir: Path) -> list[dict[str, Any]]:
         rows = self._read_csv_dicts(output_dir / "evolucion_metricas.csv")
@@ -3181,6 +3378,8 @@ class ComparatorService:
             "comparableObjectiveNames": list(COMPARABLE_OBJECTIVE_NAMES),
             "bestComparableObjectiveVector": best_comparable_vector,
             "bestComparableObjectiveLabel": objective_label(best_comparable_vector),
+            "metricSchemaVersion": METRIC_SCHEMA_VERSION,
+            "metricCoordinateSpace": METRIC_COORDINATE_SPACE,
             "nonDominatedRows": sum(1 for row in rows if row.get("nonDominated")),
             "hypervolume": None,
             "hypervolumeLabel": "No aplica",
@@ -3271,6 +3470,8 @@ class ComparatorService:
                 "comparableObjectiveNames": list(COMPARABLE_OBJECTIVE_NAMES),
                 "bestComparableObjectiveVector": [],
                 "bestComparableObjectiveLabel": "--",
+                "metricSchemaVersion": METRIC_SCHEMA_VERSION,
+                "metricCoordinateSpace": METRIC_COORDINATE_SPACE,
                 "nonDominatedRows": 0,
                 "hypervolume": None,
                 "hypervolumeLabel": "No aplica",
@@ -3314,11 +3515,50 @@ class ComparatorService:
         self._apply_log_progress_unlocked(run, proposal_id, clean_message)
 
     def _public_run(self, run: dict[str, Any]) -> dict[str, Any]:
-        return {
+        public = {
             key: value
             for key, value in run.items()
             if key not in {"activeProcesses", "startedAtEpoch"}
         }
+        return self._with_metric_recompute_status(public)
+
+    def _with_metric_recompute_status(self, run: dict[str, Any]) -> dict[str, Any]:
+        public = dict(run)
+        public["metricRecomputeStatus"] = self._metric_recompute_status(public)
+        return public
+
+    def _metric_recompute_status(self, run: dict[str, Any]) -> dict[str, Any]:
+        available = run.get("status") == STATUS_COMPLETED
+        current_schema = int(finite_float(run.get("metricSchemaVersion"), 0))
+        coordinate_space = str(run.get("metricCoordinateSpace") or "")
+        legacy_points = any(self._proposal_has_legacy_chart_points(proposal) for proposal in run.get("proposals") or [])
+        recommended = available and (
+            current_schema != METRIC_SCHEMA_VERSION
+            or coordinate_space != METRIC_COORDINATE_SPACE
+            or legacy_points
+        )
+        return {
+            "available": available,
+            "recommended": recommended,
+            "currentSchemaVersion": current_schema or None,
+            "expectedSchemaVersion": METRIC_SCHEMA_VERSION,
+            "coordinateSpace": coordinate_space or None,
+            "expectedCoordinateSpace": METRIC_COORDINATE_SPACE,
+            "legacyChartPointsDetected": legacy_points,
+        }
+
+    def _proposal_has_legacy_chart_points(self, proposal: Any) -> bool:
+        if not isinstance(proposal, dict):
+            return False
+        for key in ("pareto", "selected", "nonDominated"):
+            points = ((proposal.get("charts") or {}).get(key) or [])
+            for point in points[:3]:
+                if isinstance(point, dict) and point.get("coordinateSpace") != METRIC_COORDINATE_SPACE:
+                    return True
+        for row in (proposal.get("rows") or [])[:3]:
+            if isinstance(row, dict) and not row.get("comparableObjectiveVector"):
+                return True
+        return False
 
     def _write_summary_unlocked(self, run: dict[str, Any]) -> None:
         write_json(Path(run["runDir"]) / "summary.json", self._public_run(run))

@@ -311,7 +311,17 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
             if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "cancel":
+                self.read_request_body()
                 run = self.comparator_service.cancel_run(path_parts[1])
+                if not run:
+                    self.send_json(404, {"error": "Run not found."})
+                    return
+                self.send_json(200, run)
+                return
+
+            if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "recompute-metrics":
+                self.read_request_body()
+                run = self.comparator_service.recompute_run_metrics(path_parts[1])
                 if not run:
                     self.send_json(404, {"error": "Run not found."})
                     return

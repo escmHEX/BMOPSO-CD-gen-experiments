@@ -2051,6 +2051,7 @@ Context:
               <div class="inline-actions">
                 <button id="runComparatorButton" type="button">Ejecutar comparacion</button>
                 <button id="cancelComparatorButton" class="danger" type="button" disabled>Cancelar</button>
+                <button id="recomputeComparatorMetricsButton" class="secondary" type="button" disabled>Recalcular metricas</button>
                 <button id="clearComparatorButton" class="secondary" type="button">Limpiar</button>
               </div>
               <div class="resume-run-control">
@@ -2126,7 +2127,7 @@ Context:
             <article class="metric">
               <span>Textos en tabla</span>
               <strong id="comparatorShownRows">--</strong>
-              <p>Filas mostradas segun el Top K configurado.</p>
+              <p>Soluciones visibles segun el Top K configurado.</p>
             </article>
             <article class="metric">
               <span>Run ID</span>
@@ -2157,7 +2158,7 @@ Context:
           <section class="panel">
             <div class="panel-title">
               <h2>Resumen por propuesta</h2>
-              <span>EVOLMD reporta HV y spread post-hoc; EVOLMD-MO los reporta sobre su frente multiobjetivo.</span>
+              <span>Soluciones finales indica OK/total del archivo final normalizado; no corresponde a generaciones.</span>
             </div>
             <div id="comparatorProposalCards" class="proposal-card-grid">
               <article class="proposal-card">
@@ -2226,8 +2227,8 @@ Context:
                     <th>Propuesta</th>
                     <th>Rank</th>
                     <th>Texto generado</th>
-                    <th>Vector F.O.</th>
-                    <th>Vector post-hoc</th>
+                    <th>Vector nativo</th>
+                    <th>Vector comparable</th>
                     <th>Prompt</th>
                     <th>Estado</th>
                     <th>No dominada</th>

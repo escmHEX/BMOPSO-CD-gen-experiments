@@ -692,6 +692,7 @@ const dom = {
   comparatorGeneraciones: document.querySelector("#comparatorGeneraciones"),
   runComparatorButton: document.querySelector("#runComparatorButton"),
   cancelComparatorButton: document.querySelector("#cancelComparatorButton"),
+  recomputeComparatorMetricsButton: document.querySelector("#recomputeComparatorMetricsButton"),
   clearComparatorButton: document.querySelector("#clearComparatorButton"),
   comparatorResumeRunId: document.querySelector("#comparatorResumeRunId"),
   resumeComparatorButton: document.querySelector("#resumeComparatorButton"),
@@ -4413,6 +4414,9 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
   dom.runComparatorButton.disabled = isRunning;
   dom.cancelComparatorButton.disabled = !isRunning || !currentComparatorRunId || cancelRequested;
   dom.cancelComparatorButton.textContent = cancelRequested ? "Cancelando..." : "Cancelar";
+  if (dom.recomputeComparatorMetricsButton && isRunning) {
+    dom.recomputeComparatorMetricsButton.disabled = true;
+  }
   dom.clearComparatorButton.disabled = isRunning;
   if (dom.resumeComparatorButton) {
     dom.resumeComparatorButton.disabled = isRunning;
@@ -4451,6 +4455,9 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
     }
   });
   syncComparatorExecutionModeControls(isRunning);
+  if (!isRunning) {
+    syncComparatorRecomputeButton(latestComparatorRun);
+  }
 }
 
 function syncComparatorExecutionModeControls(isRunning = false) {
@@ -4505,6 +4512,20 @@ function clearStoredComparatorRunId() {
   } catch (_error) {
     // Nothing to clear when local storage is unavailable.
   }
+}
+
+function syncComparatorRecomputeButton(run = null) {
+  if (!dom.recomputeComparatorMetricsButton) return;
+  const status = run?.metricRecomputeStatus || {};
+  const available = Boolean(status.available);
+  const recommended = Boolean(status.recommended);
+  dom.recomputeComparatorMetricsButton.disabled = !available;
+  dom.recomputeComparatorMetricsButton.textContent = recommended
+    ? "Recalcular metricas recomendado"
+    : "Recalcular metricas";
+  dom.recomputeComparatorMetricsButton.title = available
+    ? "Reconstruye metricas y graficos desde los artefactos Python reales, sin reejecutar propuestas ni LLM."
+    : "Disponible solo para corridas completadas.";
 }
 
 function setComparatorLogCopyButton(hasLogs) {
@@ -4580,6 +4601,7 @@ function resetComparatorUi(options = {}) {
   setComparatorLogCopyButton(false);
   renderComparatorProgress(null);
   setComparatorRunning(false);
+  syncComparatorRecomputeButton(null);
   setStatus(
     dom.comparatorStatusTone,
     dom.comparatorStatusTitle,
@@ -5163,6 +5185,45 @@ async function resumeComparatorRun() {
   }
 }
 
+async function recomputeComparatorMetrics() {
+  const runId = (currentComparatorRunId || dom.comparatorResumeRunId?.value || loadStoredComparatorRunId()).trim();
+  if (!runId) {
+    setStatus(
+      dom.comparatorStatusTone,
+      dom.comparatorStatusTitle,
+      dom.comparatorStatusDetail,
+      "Run ID requerido",
+      "Reanuda o ingresa una corrida completada antes de recalcular metricas.",
+      "error",
+    );
+    return;
+  }
+
+  dom.recomputeComparatorMetricsButton.disabled = true;
+  dom.recomputeComparatorMetricsButton.textContent = "Recalculando...";
+  setStatus(
+    dom.comparatorStatusTone,
+    dom.comparatorStatusTitle,
+    dom.comparatorStatusDetail,
+    "Recalculando metricas",
+    "El backend reconstruye metricas y graficos desde artefactos Python reales, sin reejecutar propuestas ni LLM.",
+    "busy",
+  );
+
+  try {
+    const run = await requestComparatorJson(`/runs/${encodeURIComponent(runId)}/recompute-metrics`, {
+      method: "POST",
+      body: "{}",
+    });
+    currentComparatorRunId = run.runId;
+    renderComparatorRun(run);
+    setComparatorRunning(false);
+  } catch (error) {
+    setComparatorRunning(false);
+    setStatus(dom.comparatorStatusTone, dom.comparatorStatusTitle, dom.comparatorStatusDetail, "No se pudo recalcular", error.message, "error");
+  }
+}
+
 async function cancelComparatorRun() {
   if (!currentComparatorRunId) {
     return;
@@ -5280,6 +5341,7 @@ function renderComparatorRun(run) {
   dom.comparatorConnectionText.textContent = status;
   dom.comparatorConnectionDot.classList.toggle("is-busy", run.status === "queued" || run.status === "running");
   dom.comparatorConnectionDot.classList.toggle("is-error", run.status === "failed");
+  syncComparatorRecomputeButton(run);
 
   renderComparatorProgress(run.progress || null, run.config || null);
   renderComparatorCostSummary(run.costSummary || null);
@@ -5340,7 +5402,7 @@ function renderComparatorCards(proposals) {
         </div>
         <p>${escapeHtml(stageLabel)} (${progressPercent}%)</p>
         <dl>
-          <dt>Filas</dt><dd>${escapeHtml(String(metrics.completedRows ?? 0))}/${escapeHtml(String(metrics.totalRows ?? 0))}</dd>
+          <dt>Soluciones finales</dt><dd>${escapeHtml(String(metrics.completedRows ?? 0))}/${escapeHtml(String(metrics.totalRows ?? 0))} <small>OK/total; no es G</small></dd>
           <dt>Mejor F.O.</dt><dd>${escapeHtml(metrics.bestObjectiveLabel || "--")}</dd>
           <dt>Mejor comp.</dt><dd>${escapeHtml(metrics.bestComparableObjectiveLabel || "--")}</dd>
           <dt>${escapeHtml(nonDominatedLabel)}</dt><dd>${escapeHtml(String((metrics.postHocDiagnostic ? metrics.postHocNonDominatedRows : metrics.nonDominatedRows) ?? 0))}</dd>
@@ -5998,8 +6060,8 @@ function renderComparatorRows(rows) {
         <td>${escapeHtml(row.displayName || row.proposalId)}</td>
         <td>${escapeHtml(String(row.rank ?? "--"))}</td>
         <td class="context-cell long-cell">${escapeHtml(row.generatedText || "--")}</td>
-        <td>${escapeHtml(row.objectiveLabel || "--")}</td>
-        <td>${escapeHtml(row.diagnosticObjectiveLabel || "--")}</td>
+        <td>${escapeHtml(row.diagnosticObjectiveLabel || row.objectiveLabel || "--")}</td>
+        <td>${escapeHtml(row.comparableObjectiveLabel || "--")}</td>
         <td class="context-cell long-cell">${escapeHtml(row.prompt || "--")}</td>
         <td><span class="${comparatorStatusClass(status)}">${escapeHtml(status)}</span></td>
         <td>${nonDominatedLabel}</td>
@@ -6599,6 +6661,7 @@ dom.turbulenceCandidateModalBody.addEventListener("click", async (event) => {
 });
 dom.runComparatorButton.addEventListener("click", runComparator);
 dom.cancelComparatorButton.addEventListener("click", cancelComparatorRun);
+dom.recomputeComparatorMetricsButton?.addEventListener("click", recomputeComparatorMetrics);
 dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
 dom.resumeComparatorButton?.addEventListener("click", resumeComparatorRun);
 dom.copyComparatorLogButton.addEventListener("click", copyComparatorLog);

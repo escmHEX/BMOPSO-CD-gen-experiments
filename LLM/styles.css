@@ -1039,6 +1039,14 @@ label span {
   padding: 18px;
 }
 
+.proposal-card dd small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.25;
+  margin-top: 2px;
+}
+
 .metric strong {
   color: var(--blue);
   font-size: clamp(1.45rem, 3vw, 2.35rem);

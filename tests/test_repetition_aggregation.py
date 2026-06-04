@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -815,6 +816,96 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(binary_rows[0]["comparableObjectiveVector"], [0.5, 0.75])
         self.assertAlmostEqual(service._summarize_rows(evolmd_mo, mo_rows, Path("out"))["hypervolume"], 0.375)
         self.assertAlmostEqual(service._summarize_rows(binary, binary_rows, Path("out"))["hypervolume"], 0.375)
+
+    def test_evolmd_mo_comparable_vector_divides_diversity_by_two(self):
+        service = ComparatorService(Path("."))
+        evolmd_mo = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
+
+        rows = service._normalize_rows(
+            evolmd_mo,
+            [{"generated_data": "Generated", "objetivos": [0.957685112953186, 0.4842589497566223]}],
+            top_k=5,
+        )
+
+        self.assertAlmostEqual(rows[0]["comparableObjectiveVector"][0], 0.978842556476593)
+        self.assertAlmostEqual(rows[0]["comparableObjectiveVector"][1], 0.24212947487831116)
+
+    def test_legacy_summary_without_comparable_points_is_recompute_recommended(self):
+        service = ComparatorService(Path("."))
+        run = {
+            "status": "completed",
+            "proposals": [
+                {
+                    "proposalId": "evolmd-mo",
+                    "rows": [{"objectiveVector": [0.9, 0.5]}],
+                    "charts": {"pareto": [{"x": 0.9, "y": 0.5}]},
+                }
+            ],
+        }
+
+        status = service._with_metric_recompute_status(run)["metricRecomputeStatus"]
+
+        self.assertTrue(status["available"])
+        self.assertTrue(status["recommended"])
+        self.assertTrue(status["legacyChartPointsDetected"])
+
+    def test_recompute_run_metrics_rebuilds_legacy_summary_from_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_id = "legacy-run"
+            run_dir = root / "runs" / "comparator" / run_id
+            output_dir = run_dir / "evolmd-mo" / "exec" / "out"
+            output_dir.mkdir(parents=True)
+            (output_dir / "pareto_front.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "generated_data": "Generated",
+                            "prompt": "Prompt",
+                            "objetivos": [0.0, 1.5],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            summary = {
+                "runId": run_id,
+                "status": "completed",
+                "runDir": str(run_dir),
+                "config": {"referenceText": "reference", "topK": 10, "repetitionsK": 1},
+                "logs": [],
+                "proposals": [
+                    {
+                        "proposalId": "evolmd-mo",
+                        "displayName": "EVOLMD-MO",
+                        "status": "completed",
+                        "outputDir": str(output_dir),
+                        "rows": [
+                            {
+                                "proposalId": "evolmd-mo",
+                                "status": "ok",
+                                "objectiveVector": [0.0, 1.5],
+                                "generatedText": "Generated",
+                            }
+                        ],
+                        "metrics": {"hypervolume": 0.75},
+                        "charts": {"pareto": [{"x": 0.0, "y": 1.5}]},
+                        "cost": {},
+                    }
+                ],
+            }
+            (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+            recomputed = service.recompute_run_metrics(run_id)
+            proposal = recomputed["proposals"][0]
+
+        self.assertEqual(recomputed["metricSchemaVersion"], 2)
+        self.assertEqual(recomputed["metricCoordinateSpace"], "comparable_normalized")
+        self.assertFalse(recomputed["metricRecomputeStatus"]["recommended"])
+        self.assertAlmostEqual(proposal["metrics"]["hypervolume"], 0.375)
+        self.assertEqual(proposal["rows"][0]["comparableObjectiveVector"], [0.5, 0.75])
+        self.assertEqual(proposal["charts"]["pareto"][0]["coordinateSpace"], "comparable_normalized")
 
     def test_evolmd_bertscore_guard_assigns_zero_to_empty_outputs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
