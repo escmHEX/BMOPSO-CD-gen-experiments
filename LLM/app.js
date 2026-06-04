@@ -4576,7 +4576,7 @@ function resetComparatorUi(options = {}) {
   dom.comparatorRunId.textContent = "--";
   dom.comparatorConnectionText.textContent = "Sin ejecucion";
   dom.comparatorConnectionDot.classList.remove("is-busy", "is-error");
-  dom.comparatorResultsBody.innerHTML = '<tr><td colspan="8">Sin resultados todavia.</td></tr>';
+  dom.comparatorResultsBody.innerHTML = '<tr><td colspan="9">Sin resultados todavia.</td></tr>';
   dom.comparatorParetoCharts.replaceChildren();
   if (dom.comparatorChartProposalFilters) {
     dom.comparatorChartProposalFilters.innerHTML = '<span class="muted-text">Ejecuta una comparacion para activar filtros.</span>';
@@ -5065,7 +5065,7 @@ async function runComparator() {
   comparatorChartFilterIds = new Set();
   comparatorChartFilterSignature = "";
   setComparatorRunning(true);
-  dom.comparatorResultsBody.innerHTML = '<tr><td colspan="8">Esperando resultados.</td></tr>';
+  dom.comparatorResultsBody.innerHTML = '<tr><td colspan="9">Esperando resultados.</td></tr>';
   dom.comparatorProposalCards.innerHTML = "";
   dom.comparatorLogOutput.textContent = "Iniciando corrida...";
   setComparatorLogCopyButton(false);
@@ -6043,7 +6043,7 @@ function activateComparatorTab(tabName) {
 
 function renderComparatorRows(rows) {
   if (!rows.length) {
-    dom.comparatorResultsBody.innerHTML = '<tr><td colspan="8">Sin resultados todavia.</td></tr>';
+    dom.comparatorResultsBody.innerHTML = '<tr><td colspan="9">Sin resultados todavia.</td></tr>';
     return;
   }
 
@@ -6056,9 +6056,14 @@ function renderComparatorRows(rows) {
         : row.postHocNonDominated
           ? '<span class="valid">si post-hoc</span>'
           : "--";
+      const referenceText = row.referenceText
+        || latestComparatorRun?.config?.referenceText
+        || latestComparatorRun?.referenceText
+        || "--";
       tr.innerHTML = `
         <td>${escapeHtml(row.displayName || row.proposalId)}</td>
         <td>${escapeHtml(String(row.rank ?? "--"))}</td>
+        <td class="context-cell long-cell">${escapeHtml(referenceText)}</td>
         <td class="context-cell long-cell">${escapeHtml(row.generatedText || "--")}</td>
         <td>${escapeHtml(row.diagnosticObjectiveLabel || row.objectiveLabel || "--")}</td>
         <td>${escapeHtml(row.comparableObjectiveLabel || "--")}</td>
