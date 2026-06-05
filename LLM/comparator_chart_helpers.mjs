@@ -39,6 +39,12 @@ export function comparatorMetricMetadata(metricKey) {
   if (metricKey === "nonDominatedRows") {
     return { description: "Mayor cantidad de soluciones no dominadas es mejor.", higherIsBetter: true };
   }
+  if (metricKey === "globalInertia") {
+    return { description: "Mayor inercia indica mayor dispersion global de embeddings.", higherIsBetter: true };
+  }
+  if (metricKey === "globalEntropy") {
+    return { description: "Mayor entropia indica mayor variedad conceptual global.", higherIsBetter: true };
+  }
   return { description: "Mayor HV es mejor.", higherIsBetter: true };
 }
 

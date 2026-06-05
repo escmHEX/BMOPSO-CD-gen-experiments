@@ -2538,9 +2538,10 @@ class ComparatorService:
             if series:
                 return series
         history = self._read_population_history(output_dir)
-        if history:
-            return [self._history_entry_metrics(proposal, entry, reference_text) for entry in history]
         csv_series = self._read_legacy_metric_series(proposal, output_dir)
+        if history:
+            history_series = [self._history_entry_metrics(proposal, entry, reference_text) for entry in history]
+            return self._merge_series_diagnostics(history_series, csv_series)
         if csv_series:
             return csv_series
         return [self._final_series_point(proposal, final_rows)]
@@ -2610,10 +2611,34 @@ class ComparatorService:
                     "hypervolume": None,
                     "nonDominatedRows": None,
                     "spread": None,
+                    "globalInertia": finite_float(item.get("Inercia_Global"), None),
+                    "globalEntropy": finite_float(item.get("Entropia_Global"), None),
                     "source": "legacy_csv_without_front",
                 }
             )
         return series
+
+    def _merge_series_diagnostics(
+        self,
+        base_series: list[dict[str, Any]],
+        diagnostic_series: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not diagnostic_series:
+            return base_series
+        diagnostics_by_generation = {
+            int(finite_float(point.get("generation"), -1)): point
+            for point in diagnostic_series
+        }
+        merged: list[dict[str, Any]] = []
+        for point in base_series:
+            generation = int(finite_float(point.get("generation"), -1))
+            diagnostic = diagnostics_by_generation.get(generation) or {}
+            merged_point = dict(point)
+            for key in ("globalInertia", "globalEntropy"):
+                if merged_point.get(key) is None and diagnostic.get(key) is not None:
+                    merged_point[key] = diagnostic.get(key)
+            merged.append(merged_point)
+        return merged
 
     def _read_csv_dicts(self, path: Path) -> list[dict[str, str]]:
         if not path.exists():

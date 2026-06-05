@@ -723,6 +723,8 @@ const dom = {
   comparatorHvChart: document.querySelector("#comparatorHvChart"),
   comparatorNonDominatedChart: document.querySelector("#comparatorNonDominatedChart"),
   comparatorSpreadChart: document.querySelector("#comparatorSpreadChart"),
+  comparatorGlobalInertiaChart: document.querySelector("#comparatorGlobalInertiaChart"),
+  comparatorGlobalEntropyChart: document.querySelector("#comparatorGlobalEntropyChart"),
   comparatorCostExplanation: document.querySelector("#comparatorCostExplanation"),
   comparatorCostTableHead: document.querySelector("#comparatorCostTableHead"),
   comparatorCostTableBody: document.querySelector("#comparatorCostTableBody"),
@@ -4586,6 +4588,8 @@ function resetComparatorUi(options = {}) {
   dom.comparatorHvChart.innerHTML = "";
   dom.comparatorNonDominatedChart.innerHTML = "";
   dom.comparatorSpreadChart.innerHTML = "";
+  dom.comparatorGlobalInertiaChart.innerHTML = "";
+  dom.comparatorGlobalEntropyChart.innerHTML = "";
   renderComparatorCostDetails(null);
   comparatorChartSignature = "";
   comparatorChartFilterIds = new Set();
@@ -5654,6 +5658,8 @@ function renderComparatorCharts(run) {
   renderComparatorMetricLine(dom.comparatorHvChart, filteredProposals, "hypervolume", "HV por iteracion");
   renderComparatorMetricLine(dom.comparatorNonDominatedChart, filteredProposals, "nonDominatedRows", "Soluciones no dominadas");
   renderComparatorMetricLine(dom.comparatorSpreadChart, filteredProposals, "spread", "Spread por iteracion");
+  renderComparatorMetricLine(dom.comparatorGlobalInertiaChart, filteredProposals, "globalInertia", "Inercia global por iteracion");
+  renderComparatorMetricLine(dom.comparatorGlobalEntropyChart, filteredProposals, "globalEntropy", "Entropia global por iteracion");
 }
 
 function comparatorChartsSignature(run) {
@@ -5667,6 +5673,14 @@ function comparatorChartsSignature(run) {
       selected: ((proposal.charts || {}).selected || []).length,
       nonDominated: ((proposal.charts || {}).nonDominated || []).length,
       series: (proposal.series || []).length,
+      seriesValues: (proposal.series || []).map((point) => [
+        point.generation,
+        point.hypervolume,
+        point.nonDominatedRows,
+        point.spread,
+        point.globalInertia,
+        point.globalEntropy,
+      ]),
       rows: (proposal.rows || []).length,
     })),
   });

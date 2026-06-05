@@ -830,6 +830,110 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertAlmostEqual(rows[0]["comparableObjectiveVector"][0], 0.978842556476593)
         self.assertAlmostEqual(rows[0]["comparableObjectiveVector"][1], 0.24212947487831116)
 
+    def test_evolmd_mo_legacy_series_reads_global_inertia_and_entropy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "\n".join(
+                    [
+                        "Generacion,Max_Fidelidad,Max_Diversidad_Individual,Inercia_Global,Entropia_Global",
+                        "1,0.8,0.7,0.3689031219,0.6886581024",
+                        "2,0.9,0.8,0.3678999329,0.6905771496",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(Path("."))
+            evolmd_mo = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
+
+            series = service._read_legacy_metric_series(evolmd_mo, output_dir)
+
+        self.assertEqual(len(series), 2)
+        self.assertEqual(series[0]["generation"], 1)
+        self.assertAlmostEqual(series[0]["globalInertia"], 0.3689031219)
+        self.assertAlmostEqual(series[0]["globalEntropy"], 0.6886581024)
+        self.assertIsNone(series[0]["hypervolume"])
+
+    def test_evolmd_mo_history_series_merges_global_diagnostics_from_csv(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "population_history.jsonl").write_text(
+                json.dumps(
+                    {
+                        "generation": 1,
+                        "population": [
+                            {"generated_data": "Generated A", "objetivos": [0.0, 1.0]},
+                            {"generated_data": "Generated B", "objetivos": [0.2, 0.8]},
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "\n".join(
+                    [
+                        "Generacion,Max_Fidelidad,Max_Diversidad_Individual,Inercia_Global,Entropia_Global",
+                        "1,0.8,0.7,0.3689031219,0.6886581024",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(Path("."))
+            evolmd_mo = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
+
+            series = service._build_metric_series(evolmd_mo, output_dir, [], "reference")
+
+        self.assertEqual(len(series), 1)
+        self.assertIsNotNone(series[0]["hypervolume"])
+        self.assertAlmostEqual(series[0]["globalInertia"], 0.3689031219)
+        self.assertAlmostEqual(series[0]["globalEntropy"], 0.6886581024)
+        self.assertEqual(series[0]["source"], "population_history")
+
+    def test_legacy_series_without_global_diagnostics_keeps_missing_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "\n".join(
+                    [
+                        "Generacion,Max_Fidelidad,Max_Diversidad_Individual",
+                        "1,0.8,0.7",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(Path("."))
+            evolmd_mo = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
+
+            series = service._read_legacy_metric_series(evolmd_mo, output_dir)
+
+        self.assertEqual(len(series), 1)
+        self.assertIsNone(series[0]["globalInertia"])
+        self.assertIsNone(series[0]["globalEntropy"])
+
+    def test_aggregate_series_preserves_global_diagnostics(self):
+        series = aggregate_series(
+            [
+                {
+                    "series": [
+                        {"generation": 1, "globalInertia": 0.2, "globalEntropy": 0.6},
+                        {"generation": 2, "globalInertia": 0.4, "globalEntropy": 0.8},
+                    ]
+                },
+                {
+                    "series": [
+                        {"generation": 1, "globalInertia": 0.4, "globalEntropy": 0.8},
+                        {"generation": 2},
+                    ]
+                },
+            ]
+        )
+
+        self.assertAlmostEqual(series[0]["globalInertia"], 0.3)
+        self.assertAlmostEqual(series[0]["globalEntropy"], 0.7)
+        self.assertAlmostEqual(series[1]["globalInertia"], 0.4)
+        self.assertAlmostEqual(series[1]["globalEntropy"], 0.8)
+
     def test_legacy_summary_without_comparable_points_is_recompute_recommended(self):
         service = ComparatorService(Path("."))
         run = {

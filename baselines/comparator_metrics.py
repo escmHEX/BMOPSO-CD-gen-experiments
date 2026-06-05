@@ -219,7 +219,16 @@ def aggregate_series(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
             generation = int(finite_float(point.get("generation"), -1))
             if generation < 0:
                 continue
-            bucket = buckets.setdefault(generation, {"hypervolume": [], "nonDominatedRows": [], "spread": []})
+            bucket = buckets.setdefault(
+                generation,
+                {
+                    "hypervolume": [],
+                    "nonDominatedRows": [],
+                    "spread": [],
+                    "globalInertia": [],
+                    "globalEntropy": [],
+                },
+            )
             sources[generation] = str(point.get("source") or sources.get(generation) or "aggregated")
             for key in bucket:
                 value = point.get(key)
@@ -234,6 +243,8 @@ def aggregate_series(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "hypervolume": sum(bucket["hypervolume"]) / len(bucket["hypervolume"]) if bucket["hypervolume"] else None,
                 "nonDominatedRows": sum(bucket["nonDominatedRows"]) / len(bucket["nonDominatedRows"]) if bucket["nonDominatedRows"] else None,
                 "spread": sum(bucket["spread"]) / len(bucket["spread"]) if bucket["spread"] else None,
+                "globalInertia": sum(bucket["globalInertia"]) / len(bucket["globalInertia"]) if bucket["globalInertia"] else None,
+                "globalEntropy": sum(bucket["globalEntropy"]) / len(bucket["globalEntropy"]) if bucket["globalEntropy"] else None,
                 "source": sources.get(generation, "aggregated"),
             }
         )

@@ -7,6 +7,7 @@ import {
   comparatorGlobalNonDominatedFront,
   comparatorIsGloballyNonDominated,
   comparatorMetricExtremes,
+  comparatorMetricMetadata,
 } from "../LLM/comparator_chart_helpers.mjs";
 
 test("global non-dominated front is computed from all proposal points", () => {
@@ -51,6 +52,17 @@ test("metric extremes respect best direction", () => {
   assert.deepEqual(comparatorMetricExtremes([0.2, 0.8, 0.4], false), {
     bestValue: 0.2,
     worstValue: 0.8,
+  });
+});
+
+test("diagnostic iteration metrics use higher-is-better metadata", () => {
+  assert.deepEqual(comparatorMetricMetadata("globalInertia"), {
+    description: "Mayor inercia indica mayor dispersion global de embeddings.",
+    higherIsBetter: true,
+  });
+  assert.deepEqual(comparatorMetricMetadata("globalEntropy"), {
+    description: "Mayor entropia indica mayor variedad conceptual global.",
+    higherIsBetter: true,
   });
 });
 
