@@ -32,6 +32,61 @@ export function comparatorCountByProposal(points) {
   }, new Map());
 }
 
+export function comparatorHypervolumeArea(points) {
+  const frontCoordinates = comparatorGlobalNonDominatedFront(points)
+    .map(comparatorPointCoordinates)
+    .filter(Boolean)
+    .map((point) => ({
+      x: Math.max(0, point.x),
+      y: Math.max(0, point.y),
+    }));
+  if (!frontCoordinates.length) return null;
+
+  const collapsed = new Map();
+  frontCoordinates.forEach((point) => {
+    collapsed.set(point.x, Math.max(collapsed.get(point.x) ?? 0, point.y));
+  });
+
+  const ordered = [...collapsed.entries()]
+    .map(([x, y]) => ({ x, y }))
+    .sort((a, b) => a.x - b.x);
+  if (!ordered.length) return null;
+
+  const lineData = [[0, ordered[0].y]];
+  let previousX = 0;
+  let area = 0;
+  let weightedX = 0;
+  let weightedY = 0;
+
+  ordered.forEach((point, index) => {
+    if (index > 0) {
+      lineData.push([previousX, point.y]);
+    }
+    lineData.push([point.x, point.y]);
+
+    const width = Math.max(0, point.x - previousX);
+    const rectangleArea = width * point.y;
+    if (rectangleArea > 0) {
+      area += rectangleArea;
+      weightedX += rectangleArea * ((previousX + point.x) / 2);
+      weightedY += rectangleArea * (point.y / 2);
+    }
+    previousX = point.x;
+  });
+
+  lineData.push([previousX, 0]);
+
+  const maxY = Math.max(...ordered.map((point) => point.y));
+  const labelPosition = area > 0.02
+    ? [weightedX / area, weightedY / area]
+    : [
+        Math.max(0.06, previousX * 0.5),
+        Math.max(0.06, maxY * 0.55),
+      ];
+
+  return { lineData, labelPosition, area };
+}
+
 export function comparatorMetricMetadata(metricKey) {
   if (metricKey === "spread") {
     return { description: "Menor spread es mejor.", higherIsBetter: false };

@@ -2,6 +2,7 @@ import {
   comparatorBestCostProposalIds,
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
+  comparatorHypervolumeArea,
   comparatorIsGloballyNonDominated,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
@@ -5759,7 +5760,7 @@ function renderComparatorParetoCharts(proposals) {
       window.queueMicrotask(() => {
         const chart = window.echarts.init(chartNode);
         comparatorCharts.push(chart);
-        chart.setOption(paretoChartOption(proposal.displayName, proposal.charts || {}));
+        chart.setOption(paretoChartOption(proposal.displayName, proposal.charts || {}, proposal.metrics || {}));
       });
       return article;
     }),
@@ -5849,7 +5850,7 @@ function renderComparatorMetricLine(container, proposals, metricKey, title) {
   });
 }
 
-function paretoChartOption(title, charts) {
+function paretoChartOption(title, charts, metrics = {}) {
   const allPoints = (charts.pareto || []).map((point) => ({
     value: [point.x, point.y],
     labelText: point.label,
@@ -5868,12 +5869,51 @@ function paretoChartOption(title, charts) {
     comparableObjectiveVector: point.comparableObjectiveVector,
     coordinateSpace: point.coordinateSpace,
   }));
+  const hvAreaSeries = comparatorHypervolumeAreaSeries(charts.nonDominated || [], metrics.hypervolumeLabel || "");
   return baseScatterOption(title, [
+    ...hvAreaSeries,
     { name: "Individuos", type: "scatter", symbolSize: 8, data: allPoints, label: { show: false }, itemStyle: { color: "#60a5fa", opacity: 0.72 } },
     { name: "Seleccionadas", type: "scatter", symbol: "diamond", symbolSize: 15, data: selectedPoints, label: { show: false }, itemStyle: { color: "#b42318" } },
   ], {
-    description: "Ejes normalizados comparables. Mayor fidelidad y diversidad es mejor.",
+    description: "Ejes normalizados comparables. Area sombreada: HV dominado respecto a [0, 0].",
   });
+}
+
+function comparatorHypervolumeAreaSeries(points, hypervolumeLabel) {
+  if (!hypervolumeLabel || hypervolumeLabel === "No aplica") return [];
+  const area = comparatorHypervolumeArea(points);
+  if (!area) return [];
+  return [
+    {
+      name: "Area HV",
+      type: "line",
+      data: area.lineData,
+      showSymbol: false,
+      silent: true,
+      tooltip: { show: false },
+      lineStyle: { color: "#2563eb", width: 1.2, opacity: 0.5 },
+      areaStyle: { color: "rgba(37, 99, 235, 0.16)" },
+      z: 0,
+      markPoint: {
+        silent: true,
+        symbol: "rect",
+        symbolSize: [92, 26],
+        itemStyle: {
+          color: "rgba(255, 255, 255, 0.9)",
+          borderColor: "#93c5fd",
+          borderWidth: 1,
+        },
+        label: {
+          show: true,
+          formatter: `HV = ${hypervolumeLabel}`,
+          color: "#1e3a8a",
+          fontWeight: 700,
+          fontSize: 11,
+        },
+        data: [{ coord: area.labelPosition }],
+      },
+    },
+  ];
 }
 
 function baseScatterOption(title, series, options = {}) {

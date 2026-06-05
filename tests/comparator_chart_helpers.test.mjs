@@ -5,6 +5,7 @@ import {
   comparatorBestCostProposalIds,
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
+  comparatorHypervolumeArea,
   comparatorIsGloballyNonDominated,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
@@ -42,6 +43,58 @@ test("global front counts are grouped by proposal", () => {
 
   assert.equal(counts.get("evolmd"), 1);
   assert.equal(counts.get("binary-mopso-cd"), 2);
+});
+
+test("hypervolume area uses stepped front from reference origin", () => {
+  const area = comparatorHypervolumeArea([
+    { x: 0.5, y: 0.8 },
+    { x: 0.9, y: 0.4 },
+  ]);
+
+  assert.deepEqual(area.lineData, [
+    [0, 0.8],
+    [0.5, 0.8],
+    [0.5, 0.4],
+    [0.9, 0.4],
+    [0.9, 0],
+  ]);
+  assert.equal(Number(area.area.toFixed(6)), 0.56);
+});
+
+test("hypervolume area ignores dominated points", () => {
+  const withDominated = comparatorHypervolumeArea([
+    { x: 0.5, y: 0.8 },
+    { x: 0.9, y: 0.4 },
+    { x: 0.4, y: 0.3 },
+  ]);
+  const withoutDominated = comparatorHypervolumeArea([
+    { x: 0.5, y: 0.8 },
+    { x: 0.9, y: 0.4 },
+  ]);
+
+  assert.deepEqual(withDominated.lineData, withoutDominated.lineData);
+  assert.equal(withDominated.area, withoutDominated.area);
+});
+
+test("hypervolume area collapses equal fidelity with maximum diversity", () => {
+  const area = comparatorHypervolumeArea([
+    { x: 0.5, y: 0.4 },
+    { x: 0.5, y: 0.8 },
+    { x: 0.9, y: 0.4 },
+  ]);
+
+  assert.deepEqual(area.lineData, [
+    [0, 0.8],
+    [0.5, 0.8],
+    [0.5, 0.4],
+    [0.9, 0.4],
+    [0.9, 0],
+  ]);
+});
+
+test("hypervolume area returns null without valid points", () => {
+  assert.equal(comparatorHypervolumeArea([]), null);
+  assert.equal(comparatorHypervolumeArea([{ x: "bad", y: 0.4 }]), null);
 });
 
 test("metric extremes respect best direction", () => {
