@@ -118,6 +118,9 @@ def finite_float(value: Any, default: float = 0.0) -> float:
     return number if math.isfinite(number) else default
 
 
+COMPARATOR_RUN_LOG_LIMIT = max(250, int(finite_float(COMPARATOR_DEFAULTS.get("runLogLimit"), 1000)))
+
+
 def objective_label(vector: list[float]) -> str:
     if not vector:
         return "--"
@@ -1300,7 +1303,7 @@ class ComparatorService:
                 ),
             }
         )
-        updated["logs"] = logs[-250:]
+        updated["logs"] = logs[-COMPARATOR_RUN_LOG_LIMIT:]
         return self._with_metric_recompute_status(updated)
 
     def _recompute_proposal_metrics(
@@ -3535,7 +3538,7 @@ class ComparatorService:
                 "message": clean_message,
             }
         )
-        run["logs"] = run["logs"][-250:]
+        run["logs"] = run["logs"][-COMPARATOR_RUN_LOG_LIMIT:]
         run["updatedAt"] = utc_now()
         self._apply_log_progress_unlocked(run, proposal_id, clean_message)
 

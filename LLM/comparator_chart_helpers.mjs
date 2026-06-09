@@ -6,6 +6,40 @@ export function comparatorPointCoordinates(point) {
   return { x, y };
 }
 
+export const COMPARATOR_RAW_OBJECTIVE_BOUNDS = {
+  xMin: -1,
+  xMax: 1,
+  yMin: 0,
+  yMax: 2,
+};
+
+export function comparatorRawPointCoordinates(point) {
+  const vector = point?.nativeObjectiveVector;
+  if (!Array.isArray(vector) || vector.length < 2) return null;
+  const x = Number(vector[0]);
+  const y = Number(vector[1]);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+}
+
+export function comparatorRawChartPoint(point) {
+  const coordinates = comparatorRawPointCoordinates(point);
+  if (!coordinates) return null;
+  return {
+    ...point,
+    x: coordinates.x,
+    y: coordinates.y,
+    value: [coordinates.x, coordinates.y],
+    coordinateSpace: "semantic_raw",
+  };
+}
+
+export function comparatorRawChartPoints(points) {
+  return points
+    .map(comparatorRawChartPoint)
+    .filter(Boolean);
+}
+
 export function comparatorDominates(candidate, point) {
   const candidateCoordinates = comparatorPointCoordinates(candidate);
   const pointCoordinates = comparatorPointCoordinates(point);

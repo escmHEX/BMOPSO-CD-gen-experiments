@@ -797,6 +797,24 @@ input[type="checkbox"]:disabled {
   min-height: 400px;
 }
 
+.pareto-chart-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.pareto-chart-pane {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pareto-chart-pane h3 {
+  margin: 0;
+  color: #0f2742;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
 .small-chart {
   min-height: 340px;
 }

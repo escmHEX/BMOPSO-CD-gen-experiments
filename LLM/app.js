@@ -1,4 +1,5 @@
 import {
+  COMPARATOR_RAW_OBJECTIVE_BOUNDS,
   comparatorBestCostProposalIds,
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
@@ -7,6 +8,7 @@ import {
   comparatorMetricExtremes,
   comparatorMetricMetadata,
   comparatorPointCoordinates,
+  comparatorRawChartPoints,
 } from "./comparator_chart_helpers.mjs";
 
 const EMBEDDING_MODELS = {
@@ -767,6 +769,7 @@ const DEFAULT_SYSTEM_PROMPT_TEMPLATES = {
 const COMPARATOR_API = "/api/comparator";
 const COMPARATOR_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const COMPARATOR_MAX_TRANSIENT_POLL_FAILURES = 5;
+const COMPARATOR_VISIBLE_LOG_LIMIT = 1000;
 const COMPARATOR_LAST_RUN_ID_STORAGE_KEY = "comparator:lastRunId";
 const INITIAL_POPULATION_API = "/api/initial-population";
 const INITIAL_POPULATION_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
@@ -5350,7 +5353,7 @@ function renderComparatorRun(run) {
 
   renderComparatorProgress(run.progress || null, run.config || null);
   renderComparatorCostSummary(run.costSummary || null);
-  renderComparatorCards(comparatorProposalViews(run));
+  renderComparatorCards(comparatorProposalViews(run), run.config || null);
   renderComparatorRows(rows);
   renderComparatorCostDetails(run);
   renderComparatorCharts(run);
@@ -5371,7 +5374,14 @@ function renderComparatorRun(run) {
   );
 }
 
-function renderComparatorCards(proposals) {
+function comparatorProposalParameterLabel(config) {
+  if (!config) return "--";
+  const n = config.n ?? "--";
+  const generations = config.generaciones ?? config.iterations ?? "--";
+  return `N = ${n}; G = ${generations}`;
+}
+
+function renderComparatorCards(proposals, config = null) {
   if (!proposals.length) {
     dom.comparatorProposalCards.innerHTML = `
       <article class="proposal-card">
@@ -5397,6 +5407,7 @@ function renderComparatorCards(proposals) {
       const gitLabel = git.shortCommit
         ? `${git.configuredBranch || git.branch || "--"} @ ${git.shortCommit}${git.dirty ? " (local dirty)" : ""}`
         : "--";
+      const parameterLabel = comparatorProposalParameterLabel(config);
       const article = document.createElement("article");
       article.className = "proposal-card";
       article.innerHTML = `
@@ -5407,6 +5418,7 @@ function renderComparatorCards(proposals) {
         </div>
         <p>${escapeHtml(stageLabel)} (${progressPercent}%)</p>
         <dl>
+          <dt>Parametros</dt><dd>${escapeHtml(parameterLabel)}</dd>
           <dt>Soluciones finales</dt><dd>${escapeHtml(String(metrics.completedRows ?? 0))}/${escapeHtml(String(metrics.totalRows ?? 0))} <small>OK/total; no es G</small></dd>
           <dt>Mejor F.O.</dt><dd>${escapeHtml(metrics.bestObjectiveLabel || "--")}</dd>
           <dt>Mejor comp.</dt><dd>${escapeHtml(metrics.bestComparableObjectiveLabel || "--")}</dd>
@@ -5754,13 +5766,25 @@ function renderComparatorParetoCharts(proposals) {
           <h2>${escapeHtml(proposal.displayName)}</h2>
           <span>Frente de Pareto</span>
         </div>
-        <div class="chart-surface" data-chart></div>
+        <div class="pareto-chart-stack">
+          <section class="pareto-chart-pane">
+            <h3>Normalizado</h3>
+            <div class="chart-surface" data-normalized-chart></div>
+          </section>
+          <section class="pareto-chart-pane">
+            <h3>No normalizado</h3>
+            <div class="chart-surface" data-raw-chart></div>
+          </section>
+        </div>
       `;
-      const chartNode = article.querySelector("[data-chart]");
+      const normalizedChartNode = article.querySelector("[data-normalized-chart]");
+      const rawChartNode = article.querySelector("[data-raw-chart]");
       window.queueMicrotask(() => {
-        const chart = window.echarts.init(chartNode);
-        comparatorCharts.push(chart);
-        chart.setOption(paretoChartOption(proposal.displayName, proposal.charts || {}, proposal.metrics || {}));
+        const normalizedChart = window.echarts.init(normalizedChartNode);
+        const rawChart = window.echarts.init(rawChartNode);
+        comparatorCharts.push(normalizedChart, rawChart);
+        normalizedChart.setOption(paretoChartOption("Frente comparable normalizado", proposal.charts || {}, proposal.metrics || {}));
+        rawChart.setOption(rawParetoChartOption("Frente semantico no normalizado", proposal.charts || {}));
       });
       return article;
     }),
@@ -5879,6 +5903,41 @@ function paretoChartOption(title, charts, metrics = {}) {
   });
 }
 
+function rawParetoChartOption(title, charts) {
+  const allPoints = comparatorRawChartPoints(charts.pareto || []).map((point) => ({
+    value: point.value,
+    labelText: point.label,
+    prompt: point.prompt,
+    rank: point.rank,
+    nativeObjectiveVector: point.nativeObjectiveVector,
+    comparableObjectiveVector: point.comparableObjectiveVector,
+    coordinateSpace: point.coordinateSpace,
+  }));
+  const selectedPoints = comparatorRawChartPoints(charts.selected || []).map((point) => ({
+    value: point.value,
+    labelText: point.label,
+    prompt: point.prompt,
+    rank: point.rank,
+    nativeObjectiveVector: point.nativeObjectiveVector,
+    comparableObjectiveVector: point.comparableObjectiveVector,
+    coordinateSpace: point.coordinateSpace,
+  }));
+  return baseScatterOption(title, [
+    { name: "Individuos", type: "scatter", symbolSize: 8, data: allPoints, label: { show: false }, itemStyle: { color: "#60a5fa", opacity: 0.72 } },
+    { name: "Seleccionadas", type: "scatter", symbol: "diamond", symbolSize: 15, data: selectedPoints, label: { show: false }, itemStyle: { color: "#b42318" } },
+  ], {
+    description: "Ejes semanticos raw comunes: fidelidad [-1, 1], diversidad [0, 2]. HV no se calcula en este espacio.",
+    tooltipFormatter: comparatorRawScatterTooltipFormatter,
+    xAxisName: "Fidelidad semantica raw",
+    yAxisName: "Diversidad semantica raw",
+    xAxisMin: COMPARATOR_RAW_OBJECTIVE_BOUNDS.xMin,
+    xAxisMax: COMPARATOR_RAW_OBJECTIVE_BOUNDS.xMax,
+    yAxisMin: COMPARATOR_RAW_OBJECTIVE_BOUNDS.yMin,
+    yAxisMax: COMPARATOR_RAW_OBJECTIVE_BOUNDS.yMax,
+    idealPoint: [COMPARATOR_RAW_OBJECTIVE_BOUNDS.xMax, COMPARATOR_RAW_OBJECTIVE_BOUNDS.yMax],
+  });
+}
+
 function comparatorHypervolumeAreaSeries(points, hypervolumeLabel) {
   if (!hypervolumeLabel || hypervolumeLabel === "No aplica") return [];
   const area = comparatorHypervolumeArea(points);
@@ -5917,7 +5976,7 @@ function comparatorHypervolumeAreaSeries(points, hypervolumeLabel) {
 }
 
 function baseScatterOption(title, series, options = {}) {
-  const idealSeries = comparatorIdealSeries(series);
+  const idealSeries = comparatorIdealSeries(series, options.idealPoint);
   const renderedSeries = idealSeries ? [...series, idealSeries] : series;
   return {
     title: {
@@ -5928,13 +5987,29 @@ function baseScatterOption(title, series, options = {}) {
       textStyle: { fontSize: 13 },
       subtextStyle: { fontSize: 11, color: "#64748b" },
     },
-    tooltip: safeChartTooltip("item", comparatorScatterTooltipFormatter),
+    tooltip: safeChartTooltip("item", options.tooltipFormatter || comparatorScatterTooltipFormatter),
     legend: { top: 62, type: "scroll" },
     grid: { left: 58, right: 24, top: 112, bottom: 78, containLabel: true },
     toolbox: { feature: { saveAsImage: {}, dataZoom: {} }, right: 8, top: 38 },
     dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 12 }],
-    xAxis: { type: "value", name: "Fidelidad normalizada", nameLocation: "middle", nameGap: 42, scale: true },
-    yAxis: { type: "value", name: "Diversidad normalizada", nameLocation: "middle", nameGap: 44, scale: true },
+    xAxis: {
+      type: "value",
+      name: options.xAxisName || "Fidelidad normalizada",
+      nameLocation: "middle",
+      nameGap: 42,
+      scale: true,
+      min: options.xAxisMin,
+      max: options.xAxisMax,
+    },
+    yAxis: {
+      type: "value",
+      name: options.yAxisName || "Diversidad normalizada",
+      nameLocation: "middle",
+      nameGap: 44,
+      scale: true,
+      min: options.yAxisMin,
+      max: options.yAxisMax,
+    },
     graphic: comparatorEmptyChartGraphic(renderedSeries, "Sin datos para las propuestas filtradas."),
     series: renderedSeries,
   };
@@ -5976,12 +6051,12 @@ function comparatorChartPointData(point, color, options = {}) {
   };
 }
 
-function comparatorIdealSeries(series) {
+function comparatorIdealSeries(series, fixedPoint = null) {
   const points = series.flatMap((item) => item.data || []);
   const coordinates = points.map(comparatorPointCoordinates).filter(Boolean);
   if (coordinates.length === 0) return null;
-  const idealX = Math.max(1, ...coordinates.map((point) => point.x));
-  const idealY = Math.max(1, ...coordinates.map((point) => point.y));
+  const idealX = fixedPoint ? fixedPoint[0] : Math.max(1, ...coordinates.map((point) => point.x));
+  const idealY = fixedPoint ? fixedPoint[1] : Math.max(1, ...coordinates.map((point) => point.y));
   return {
     name: "Punto ideal",
     type: "scatter",
@@ -6070,6 +6145,21 @@ function comparatorScatterTooltipFormatter(params) {
   `;
 }
 
+function comparatorRawScatterTooltipFormatter(params) {
+  const data = params.data || {};
+  const value = params.value || [];
+  const normalized = Array.isArray(data.comparableObjectiveVector) && data.comparableObjectiveVector.length >= 2
+    ? `<br>Vector normalizado: [${formatOptionalNumber(data.comparableObjectiveVector[0], 6)}, ${formatOptionalNumber(data.comparableObjectiveVector[1], 6)}]`
+    : "";
+  return `
+    <strong>${escapeHtml(params.seriesName)}</strong><br>
+    Fidelidad raw: ${formatOptionalNumber(value[0], 6)}<br>
+    Diversidad raw: ${formatOptionalNumber(value[1], 6)}${normalized}<br>
+    Rank: ${escapeHtml(String(data.rank ?? "--"))}<br>
+    ${escapeHtml(String(data.labelText || "")).slice(0, 300)}
+  `;
+}
+
 function comparatorLineTooltipFormatter(params) {
   const items = Array.isArray(params) ? params : [params];
   return items.map((item) => {
@@ -6137,7 +6227,7 @@ function renderComparatorLogs(logs) {
     return;
   }
   dom.comparatorLogOutput.textContent = logs
-    .slice(-40)
+    .slice(-COMPARATOR_VISIBLE_LOG_LIMIT)
     .map((entry) => `[${entry.proposalId}] ${entry.message}`)
     .join("\n");
   setComparatorLogCopyButton(true);

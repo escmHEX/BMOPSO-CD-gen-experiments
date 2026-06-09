@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  COMPARATOR_RAW_OBJECTIVE_BOUNDS,
   comparatorBestCostProposalIds,
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
@@ -9,6 +10,7 @@ import {
   comparatorIsGloballyNonDominated,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
+  comparatorRawChartPoints,
 } from "../LLM/comparator_chart_helpers.mjs";
 
 test("global non-dominated front is computed from all proposal points", () => {
@@ -43,6 +45,44 @@ test("global front counts are grouped by proposal", () => {
 
   assert.equal(counts.get("evolmd"), 1);
   assert.equal(counts.get("binary-mopso-cd"), 2);
+});
+
+test("raw chart points use native semantic objectives", () => {
+  const points = comparatorRawChartPoints([
+    {
+      label: "row",
+      value: [0.95, 0.2],
+      nativeObjectiveVector: [0.9, 1.4],
+      comparableObjectiveVector: [0.95, 0.7],
+    },
+  ]);
+
+  assert.deepEqual(points[0].value, [0.9, 1.4]);
+  assert.equal(points[0].x, 0.9);
+  assert.equal(points[0].y, 1.4);
+  assert.equal(points[0].coordinateSpace, "semantic_raw");
+  assert.deepEqual(points[0].comparableObjectiveVector, [0.95, 0.7]);
+});
+
+test("raw chart points skip missing or invalid native vectors", () => {
+  const points = comparatorRawChartPoints([
+    { nativeObjectiveVector: [0.9] },
+    { nativeObjectiveVector: ["bad", 0.4] },
+    { value: [0.4, 0.5] },
+    { nativeObjectiveVector: [-0.2, 1.1] },
+  ]);
+
+  assert.equal(points.length, 1);
+  assert.deepEqual(points[0].value, [-0.2, 1.1]);
+});
+
+test("raw semantic chart bounds are fixed for cross-proposal comparison", () => {
+  assert.deepEqual(COMPARATOR_RAW_OBJECTIVE_BOUNDS, {
+    xMin: -1,
+    xMax: 1,
+    yMin: 0,
+    yMax: 2,
+  });
 });
 
 test("hypervolume area uses stepped front from reference origin", () => {
