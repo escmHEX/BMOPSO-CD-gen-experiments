@@ -371,6 +371,7 @@ let comparatorPollFailureCount = 0;
 let latestComparatorRun = null;
 let comparatorProposals = [];
 let comparatorInstances = [];
+let comparatorInstancesInitialized = false;
 let comparatorInstanceModalState = null;
 let comparatorCharts = [];
 let comparatorChartSignature = "";
@@ -4854,9 +4855,37 @@ function ensureComparatorInstances() {
   comparatorInstances = comparatorInstances
     .filter((instance) => availableIds.has(instance.proposalId))
     .map((instance, index) => normalizeComparatorInstance(instance, index));
-  if (!comparatorInstances.length) {
+  if (!comparatorInstancesInitialized && !comparatorInstances.length) {
     comparatorInstances = comparatorDefaultInstances(comparatorProposals);
   }
+  comparatorInstancesInitialized = true;
+}
+
+function comparatorProposalInstanceCount(proposalId) {
+  return comparatorInstances.filter((instance) => instance.proposalId === proposalId).length;
+}
+
+function syncComparatorProposalCatalogSelectionStates() {
+  if (!dom.comparatorProposalSelector) return;
+  dom.comparatorProposalSelector.querySelectorAll("[data-proposal-catalog-card]").forEach((card) => {
+    const proposalId = card.dataset.proposalCatalogCard;
+    const selectedCount = comparatorProposalInstanceCount(proposalId);
+    card.dataset.selected = selectedCount ? "1" : "0";
+    const selectionLabel = card.querySelector("[data-comparator-proposal-selection]");
+    if (selectionLabel) {
+      selectionLabel.textContent = selectedCount
+        ? `Seleccionada: ${selectedCount} configuracion(es)`
+        : "No seleccionada";
+    }
+    const addButton = card.querySelector("[data-add-comparator-instance]");
+    if (addButton) {
+      addButton.textContent = selectedCount ? "Agregar otra configuracion" : "Seleccionar propuesta";
+    }
+    const removeButton = card.querySelector("[data-remove-comparator-proposal]");
+    if (removeButton) {
+      removeButton.hidden = selectedCount === 0;
+    }
+  });
 }
 
 function renderComparatorProposalControls(proposals) {
@@ -4866,10 +4895,12 @@ function renderComparatorProposalControls(proposals) {
   ensureComparatorInstances();
   dom.comparatorProposalSelector.replaceChildren(
     ...comparatorProposals.map((proposal) => {
+      const selectedCount = comparatorProposalInstanceCount(proposal.proposalId);
       const card = document.createElement("article");
       card.className = "proposal-catalog-card";
       card.dataset.proposalCatalogCard = proposal.proposalId;
       card.dataset.available = proposal.available ? "1" : "0";
+      card.dataset.selected = selectedCount ? "1" : "0";
       const missing = (proposal.dependencyStatus?.missing || []).join(", ");
       const availabilityDetail = proposal.available
         ? "Disponible"
@@ -4884,6 +4915,7 @@ function renderComparatorProposalControls(proposals) {
           <div>
             <strong>${escapeHtml(proposal.displayName)}</strong>
             <small>${escapeHtml(availabilityDetail)} - ${escapeHtml((proposal.objectiveNames || []).join(", "))}</small>
+            <small data-comparator-proposal-selection>${selectedCount ? `Seleccionada: ${selectedCount} configuracion(es)` : "No seleccionada"}</small>
           </div>
         </div>
         <p>${escapeHtml(proposal.description || "")}</p>
@@ -4909,7 +4941,10 @@ function renderComparatorProposalControls(proposals) {
             </label>
           </div>
         </div>
-        <button type="button" class="secondary" data-add-comparator-instance="${escapeHtml(proposal.proposalId)}" ${proposal.available ? "" : "disabled"}>Agregar configuracion</button>
+        <div class="proposal-catalog-actions">
+          <button type="button" class="secondary" data-add-comparator-instance="${escapeHtml(proposal.proposalId)}" ${proposal.available ? "" : "disabled"}>${selectedCount ? "Agregar otra configuracion" : "Seleccionar propuesta"}</button>
+          <button type="button" class="danger" data-remove-comparator-proposal="${escapeHtml(proposal.proposalId)}" ${selectedCount ? "" : "hidden"} ${proposal.available ? "" : "disabled"}>Deseleccionar</button>
+        </div>
       `;
       return card;
     }),
@@ -5444,12 +5479,20 @@ function saveComparatorInstanceModal() {
     comparatorInstances = [...comparatorInstances, draft];
   }
   renderComparatorInstanceList();
+  syncComparatorProposalCatalogSelectionStates();
   closeComparatorInstanceModal();
 }
 
 function deleteComparatorInstance(instanceId) {
   comparatorInstances = comparatorInstances.filter((instance) => instance.instanceId !== instanceId);
   renderComparatorInstanceList();
+  syncComparatorProposalCatalogSelectionStates();
+}
+
+function removeComparatorProposalInstances(proposalId) {
+  comparatorInstances = comparatorInstances.filter((instance) => instance.proposalId !== proposalId);
+  renderComparatorInstanceList();
+  syncComparatorProposalCatalogSelectionStates();
 }
 
 function findDuplicateComparatorInstances() {
@@ -7546,6 +7589,11 @@ dom.comparatorChartProposalFilters?.addEventListener("change", onComparatorChart
 dom.comparatorExecutionMode.addEventListener("change", () => syncComparatorExecutionModeControls(false));
 dom.comparatorProposalSelector?.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) return;
+  const removeButton = event.target.closest("[data-remove-comparator-proposal]");
+  if (removeButton) {
+    removeComparatorProposalInstances(removeButton.dataset.removeComparatorProposal);
+    return;
+  }
   const button = event.target.closest("[data-add-comparator-instance]");
   if (!button) return;
   openComparatorInstanceModal(button.dataset.addComparatorInstance);

@@ -345,6 +345,12 @@ label span,
   box-shadow: 0 8px 24px rgba(19, 32, 44, 0.04);
 }
 
+.proposal-catalog-card[data-selected="1"] {
+  border-color: rgba(15, 118, 110, 0.44);
+  background: #f4fbfa;
+  box-shadow: 0 10px 28px rgba(15, 118, 110, 0.08);
+}
+
 .proposal-catalog-card p {
   color: #52687c;
   font-size: 0.84rem;
@@ -388,6 +394,16 @@ label span,
 .proposal-catalog-status.is-unavailable {
   border-color: #c8d7e5;
   background: #f3f6f9;
+}
+
+.proposal-catalog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.proposal-catalog-actions button {
+  flex: 1 1 160px;
 }
 
 .checkbox-grid > label,
