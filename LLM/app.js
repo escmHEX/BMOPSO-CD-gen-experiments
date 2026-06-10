@@ -375,6 +375,13 @@ let comparatorChartSignature = "";
 let comparatorChoiceInstances = [];
 let comparatorChartFilterIds = new Set();
 let comparatorChartFilterSignature = "";
+let comparatorLogRunId = null;
+let comparatorLogOffset = 0;
+let comparatorLogLines = [];
+let comparatorLogLoading = false;
+let comparatorLogComplete = false;
+let comparatorLogTerminalRefreshDone = false;
+let comparatorLogLoadToken = 0;
 let initialPopulationPollTimer = null;
 let currentInitialPopulationRunId = null;
 let initialComparisonPollTimer = null;
@@ -769,7 +776,7 @@ const DEFAULT_SYSTEM_PROMPT_TEMPLATES = {
 const COMPARATOR_API = "/api/comparator";
 const COMPARATOR_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const COMPARATOR_MAX_TRANSIENT_POLL_FAILURES = 5;
-const COMPARATOR_VISIBLE_LOG_LIMIT = 1000;
+const COMPARATOR_LOG_CHUNK_LIMIT = 5000;
 const COMPARATOR_LAST_RUN_ID_STORAGE_KEY = "comparator:lastRunId";
 const INITIAL_POPULATION_API = "/api/initial-population";
 const INITIAL_POPULATION_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
@@ -780,6 +787,99 @@ const TURBULENCE_COMPARISON_API = "/api/turbulence-comparison";
 const TURBULENCE_COMPARISON_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const SBERT_API = "/api/sbert";
 const LM_STUDIO_API = "/api/lm-studio";
+
+const ABBREVIATION_TOOLTIPS = Object.freeze({
+  "#": "Numero de fila o identificador ordinal.",
+  "api": "Application Programming Interface.",
+  "bd pso": "Base de datos de individuos PSO.",
+  "distilbert": "Modelo DistilBERT usado por la estrategia correspondiente.",
+  "evolmd post-hoc": "Metricas diagnosticas calculadas despues de la ejecucion nativa de EVOLMD.",
+  "f.o": "Funcion objetivo.",
+  "f.o.": "Funcion objetivo.",
+  "f.o. comun": "Funcion objetivo comun usada para comparar estrategias.",
+  "f.o. nativa": "Funcion objetivo nativa reportada por la estrategia.",
+  "git": "Sistema de control de versiones Git.",
+  "g": "Cantidad de generaciones o iteraciones configuradas.",
+  "hv": "Hypervolume.",
+  "hv comp.": "Hypervolume comparable en el espacio objetivo normalizado.",
+  "hv comp. post-hoc": "Hypervolume comparable calculado post-hoc.",
+  "hv por iteracion": "Hypervolume por iteracion.",
+  "k": "Cantidad de repeticiones independientes.",
+  "llm": "Large Language Model.",
+  "llm actual": "Large Language Model actualmente configurado.",
+  "llamadas llm": "Llamadas al Large Language Model.",
+  "mejor comp.": "Mejor vector comparable normalizado.",
+  "mejor f.o.": "Mejor funcion objetivo.",
+  "mejor f.o. comun": "Mejor funcion objetivo comun.",
+  "metricas web": "Metricas calculadas por el backend web despues de la ejecucion.",
+  "mo comparable": "Comparacion multiobjetivo en el espacio objetivo normalizado comun.",
+  "mteb average (56)": "Promedio MTEB sobre 56 tareas de evaluacion.",
+  "n": "Tamano de poblacion o cantidad de individuos.",
+  "n individuos": "Tamano de poblacion o cantidad de individuos.",
+  "no dom. post-hoc": "Soluciones no dominadas calculadas post-hoc.",
+  "no dominadas": "Soluciones no dominadas.",
+  "no dominadas globales": "Soluciones no dominadas al comparar la union de propuestas.",
+  "no dominadas nativas": "Soluciones no dominadas en el espacio nativo de la estrategia.",
+  "ollama": "Servidor local Ollama usado para ejecutar el modelo LLM.",
+  "ppdb": "Paraphrase Database.",
+  "prom. llamada": "Tiempo promedio por llamada.",
+  "prom. llm / individuo": "Tiempo promedio de LLM por individuo.",
+  "pso": "Particle Swarm Optimization.",
+  "rank": "Orden de la solucion dentro de la tabla o seleccion.",
+  "run": "Identificador de ejecucion.",
+  "run id": "Identificador de ejecucion.",
+  "sbert": "Sentence-BERT.",
+  "sin paralelismo estim.": "Estimacion sin ejecutar estrategias en paralelo.",
+  "spread comp.": "Spread comparable en el espacio objetivo normalizado.",
+  "spread comp. post-hoc": "Spread comparable calculado post-hoc.",
+  "temp. prompts": "Temperatura usada para generar prompts.",
+  "tiempo llm": "Tiempo acumulado asociado a llamadas LLM.",
+  "tiempo llm cliente": "Suma de latencias cliente de llamadas LLM.",
+  "tiempo llm total": "Tiempo total asociado a llamadas LLM.",
+  "top p": "Parametro nucleus sampling top-p.",
+  "total prop.": "Tiempo total de la propuesta.",
+  "vector f.o": "Vector de funcion objetivo.",
+  "vector f.o.": "Vector de funcion objetivo.",
+  "wordnet": "Base lexical WordNet.",
+  "wordnet+ppdb+sbert": "Estrategia que combina WordNet, PPDB y Sentence-BERT.",
+});
+
+const ABBREVIATION_TOKEN_TOOLTIPS = Object.freeze([
+  { pattern: /\bAPI\b/u, title: "API = Application Programming Interface" },
+  { pattern: /\bBD\b/u, title: "BD = Base de datos" },
+  { pattern: /\bcomp\./iu, title: "comp. = comparable" },
+  { pattern: /\bestim\./iu, title: "estim. = estimado" },
+  { pattern: /\bF\.?\s*O\.?\b/u, title: "F.O. = funcion objetivo" },
+  { pattern: /\bG\b/u, title: "G = generaciones o iteraciones" },
+  { pattern: /\bGit\b/u, title: "Git = sistema de control de versiones" },
+  { pattern: /\bHV\b/u, title: "HV = Hypervolume" },
+  { pattern: /\bK\b/u, title: "K = repeticiones independientes" },
+  { pattern: /\bLLM\b/u, title: "LLM = Large Language Model" },
+  { pattern: /\bm(?:a|\u00e1)x\./iu, title: "max. = maximo" },
+  { pattern: /\bm(?:i|\u00ed)n\./iu, title: "min. = minimo" },
+  { pattern: /\bMO\b/u, title: "MO = multiobjetivo" },
+  { pattern: /\bMTEB\b/u, title: "MTEB = Massive Text Embedding Benchmark" },
+  { pattern: /\bN\b/u, title: "N = tamano de poblacion o cantidad de individuos" },
+  { pattern: /\bpost-hoc\b/iu, title: "post-hoc = calculado despues de la ejecucion nativa" },
+  { pattern: /\bPPDB\b/u, title: "PPDB = Paraphrase Database" },
+  { pattern: /\bprom\./iu, title: "prom. = promedio" },
+  { pattern: /\bprop\./iu, title: "prop. = propuesta" },
+  { pattern: /\bPSO\b/u, title: "PSO = Particle Swarm Optimization" },
+  { pattern: /\bSBERT\b/u, title: "SBERT = Sentence-BERT" },
+]);
+
+const ABBREVIATION_TOOLTIP_SELECTOR = [
+  "dt",
+  "th",
+  ".eyebrow",
+  ".panel-title h2",
+  ".panel-title span",
+  ".stat-card span",
+  ".metric-card span",
+  "label > span",
+  "summary",
+  "button.compact",
+].join(", ");
 
 function setStatus(toneElement, titleElement, detailElement, title, detail, state = "ready") {
   titleElement.textContent = title;
@@ -803,6 +903,48 @@ function formatDuration(milliseconds) {
     return `${formatNumber(milliseconds, 0)} ms`;
   }
   return `${formatNumber(milliseconds / 1000, 2)} s`;
+}
+
+function abbreviationTooltipFor(text) {
+  const rawText = String(text || "");
+  const key = rawText
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/:$/u, "")
+    .toLocaleLowerCase("es-CL");
+  if (!key) return "";
+  if (ABBREVIATION_TOOLTIPS[key]) return ABBREVIATION_TOOLTIPS[key];
+  const withoutTrailingDot = key.replace(/\.$/u, "");
+  if (ABBREVIATION_TOOLTIPS[withoutTrailingDot]) return ABBREVIATION_TOOLTIPS[withoutTrailingDot];
+  const tokenTooltips = ABBREVIATION_TOKEN_TOOLTIPS
+    .filter(({ pattern }) => pattern.test(rawText))
+    .map(({ title }) => title);
+  return [...new Set(tokenTooltips)].join("; ");
+}
+
+function applyAbbreviationTooltip(element, text = element?.textContent) {
+  if (!(element instanceof Element)) return;
+  if (element.title) {
+    element.classList.add("has-abbreviation-tooltip");
+    return;
+  }
+  const tooltip = abbreviationTooltipFor(text);
+  if (!tooltip) return;
+  element.title = tooltip;
+  if (!element.hasAttribute("aria-label")) {
+    element.setAttribute("aria-label", `${String(text || "").trim()}: ${tooltip}`);
+  }
+  element.classList.add("has-abbreviation-tooltip");
+}
+
+function decorateAbbreviationTooltips(root = document) {
+  if (!(root instanceof Document || root instanceof Element)) return;
+  const elements = [];
+  if (root instanceof Element && root.matches(ABBREVIATION_TOOLTIP_SELECTOR)) {
+    elements.push(root);
+  }
+  elements.push(...root.querySelectorAll(ABBREVIATION_TOOLTIP_SELECTOR));
+  elements.forEach((element) => applyAbbreviationTooltip(element));
 }
 
 function readClampedNumber(input, label, min, max) {
@@ -844,6 +986,7 @@ function renderDefinitionList(container, entries) {
       const dt = document.createElement("dt");
       const dd = document.createElement("dd");
       dt.textContent = term;
+      applyAbbreviationTooltip(dt, term);
       dd.textContent = description;
       wrapper.append(dt, dd);
       return wrapper;
@@ -4605,6 +4748,7 @@ function resetComparatorUi(options = {}) {
       <p>Ejecuta el comparador para ver los resumenes.</p>
     </article>
   `;
+  resetComparatorLogLoader(null);
   dom.comparatorLogOutput.textContent = "Sin logs todavia.";
   setComparatorLogCopyButton(false);
   renderComparatorProgress(null);
@@ -5072,6 +5216,7 @@ async function runComparator() {
   comparatorChartSignature = "";
   comparatorChartFilterIds = new Set();
   comparatorChartFilterSignature = "";
+  resetComparatorLogLoader(null);
   setComparatorRunning(true);
   dom.comparatorResultsBody.innerHTML = '<tr><td colspan="9">Esperando resultados.</td></tr>';
   dom.comparatorProposalCards.innerHTML = "";
@@ -5357,7 +5502,7 @@ function renderComparatorRun(run) {
   renderComparatorRows(rows);
   renderComparatorCostDetails(run);
   renderComparatorCharts(run);
-  renderComparatorLogs(run.logs || []);
+  renderComparatorLogs(run);
 
   const detail = run.error
     ? run.error
@@ -5372,6 +5517,7 @@ function renderComparatorRun(run) {
     detail,
     run.status === "running" || run.status === "queued" ? "busy" : run.status === "failed" ? "error" : "ready",
   );
+  decorateAbbreviationTooltips(document.getElementById("proposalComparator") || document);
 }
 
 function comparatorProposalParameterLabel(config) {
@@ -5379,6 +5525,86 @@ function comparatorProposalParameterLabel(config) {
   const n = config.n ?? "--";
   const generations = config.generaciones ?? config.iterations ?? "--";
   return `N = ${n}; G = ${generations}`;
+}
+
+function comparatorRepetitionProgressLabel(progressState, config) {
+  const total = Math.max(1, Number(progressState?.totalRepetitions ?? config?.repetitionsK ?? 1));
+  const completed = Math.max(0, Math.min(total, Number(progressState?.completedRepetitions ?? 0)));
+  const current = progressState?.currentRepetitionIndex
+    ? `; actual ${Math.max(1, Number(progressState.currentRepetitionIndex))}/${total}`
+    : "";
+  return {
+    text: `Repeticion estocastica: ${completed}/${total}`,
+    title: `Repeticiones estocasticas completadas sobre el total configurado${current}.`,
+  };
+}
+
+function comparatorProposalSummaryTooltip(label, metrics = {}) {
+  const key = String(label || "").trim().toLocaleLowerCase("es-CL");
+  const diagnosticSuffix = metrics.postHocDiagnostic
+    ? " En EVOLMD se calcula como diagnostico post-hoc; no fue optimizado por el algoritmo."
+    : "";
+  if (key === "parametros") {
+    return "Parametros comunes enviados por CLI: N es poblacion; G es generaciones o iteraciones.";
+  }
+  if (key === "soluciones finales") {
+    return "Soluciones finales normalizadas correctamente sobre el total del archivo final; no corresponde a generaciones.";
+  }
+  if (key === "mejor f.o.") {
+    return "Vector nativo de la solucion rank 1. En MO: no dominadas primero y luego mayor suma de objetivos nativos; en EVOLMD: mayor fitness.";
+  }
+  if (key === "mejor comp.") {
+    return "Vector comparable normalizado de la solucion con mayor suma f1_n + f2_n. Ambos objetivos se maximizan; no reemplaza el analisis Pareto.";
+  }
+  if (key.startsWith("no dom")) {
+    return `Cantidad de soluciones no dominadas: ninguna otra solucion es igual o mejor en todos los objetivos y mejor en al menos uno.${diagnosticSuffix}`;
+  }
+  if (key.startsWith("hv")) {
+    return `Hypervolume del frente no dominado en el espacio comparable normalizado con referencia [0,0]. Mayor es mejor.${diagnosticSuffix}`;
+  }
+  if (key.startsWith("spread")) {
+    return `Uniformidad del frente no dominado en el espacio comparable normalizado. Menor es mejor; valores altos indican distancias mas irregulares.${diagnosticSuffix}`;
+  }
+  if (key === "vector post-hoc") {
+    return "Vector diagnostico SBERT/diversidad calculado despues de ejecutar EVOLMD; se usa para comparar, no para decidir dentro de EVOLMD.";
+  }
+  if (key === "algoritmo") {
+    return "Tiempo wall-clock del proceso Python de la propuesta; no incluye metricas ni graficos del comparador.";
+  }
+  if (key === "total prop.") {
+    return "Tiempo de la propuesta mas post-procesamiento externo del comparador; no altera el costo interno del algoritmo.";
+  }
+  if (key === "post") {
+    return "Tiempo de seleccion o ranking externo posterior a la ejecucion; se reporta separado del algoritmo.";
+  }
+  if (key === "metricas web") {
+    return "Tiempo de normalizacion y metricas calculadas por la web despues de ejecutar la propuesta.";
+  }
+  if (key === "llamadas llm") {
+    return "Cantidad de llamadas registradas al modelo LLM durante la ejecucion de la propuesta.";
+  }
+  if (key === "tiempo llm") {
+    return "Suma de latencias cliente de llamadas LLM reportadas por la propuesta o wrapper.";
+  }
+  if (key === "prom. llamada") {
+    return "Tiempo LLM promedio por llamada registrada. Menor indica llamadas mas rapidas.";
+  }
+  if (key === "tokens") {
+    return "Tokens reportados por la propuesta cuando existen; No reportado no se interpreta como cero.";
+  }
+  if (key === "git") {
+    return "Rama y commit local usados para ejecutar la propuesta.";
+  }
+  if (key === "salida") {
+    return "Directorio donde quedaron artefactos, resultados y logs de esa propuesta.";
+  }
+  return abbreviationTooltipFor(label);
+}
+
+function comparatorProposalSummaryTerm(label, metrics = {}) {
+  const tooltip = comparatorProposalSummaryTooltip(label, metrics);
+  const title = tooltip ? ` title="${escapeHtml(tooltip)}"` : "";
+  return `<dt${title}>${escapeHtml(label)}</dt>`;
 }
 
 function renderComparatorCards(proposals, config = null) {
@@ -5403,11 +5629,13 @@ function renderComparatorCards(proposals, config = null) {
       const progressState = proposal.progressState || proposal;
       const progressPercent = Math.round(Math.max(0, Math.min(1, Number(progressState.progress || 0))) * 100);
       const stageLabel = progressState.stageLabel || comparatorStatusLabel(proposal.status);
+      const repetitionProgress = comparatorRepetitionProgressLabel(progressState, config);
       const git = proposal.gitRevision || {};
       const gitLabel = git.shortCommit
         ? `${git.configuredBranch || git.branch || "--"} @ ${git.shortCommit}${git.dirty ? " (local dirty)" : ""}`
         : "--";
       const parameterLabel = comparatorProposalParameterLabel(config);
+      const term = (label) => comparatorProposalSummaryTerm(label, metrics);
       const article = document.createElement("article");
       article.className = "proposal-card";
       article.innerHTML = `
@@ -5417,25 +5645,26 @@ function renderComparatorCards(proposals, config = null) {
           <span style="width: ${progressPercent}%"></span>
         </div>
         <p>${escapeHtml(stageLabel)} (${progressPercent}%)</p>
+        <p title="${escapeHtml(repetitionProgress.title)}">${escapeHtml(repetitionProgress.text)}</p>
         <dl>
-          <dt>Parametros</dt><dd>${escapeHtml(parameterLabel)}</dd>
-          <dt>Soluciones finales</dt><dd>${escapeHtml(String(metrics.completedRows ?? 0))}/${escapeHtml(String(metrics.totalRows ?? 0))} <small>OK/total; no es G</small></dd>
-          <dt>Mejor F.O.</dt><dd>${escapeHtml(metrics.bestObjectiveLabel || "--")}</dd>
-          <dt>Mejor comp.</dt><dd>${escapeHtml(metrics.bestComparableObjectiveLabel || "--")}</dd>
-          <dt>${escapeHtml(nonDominatedLabel)}</dt><dd>${escapeHtml(String((metrics.postHocDiagnostic ? metrics.postHocNonDominatedRows : metrics.nonDominatedRows) ?? 0))}</dd>
-          <dt>${escapeHtml(hvLabel)}</dt><dd>${escapeHtml(metrics.hypervolumeLabel || "No aplica")}</dd>
-          <dt>${escapeHtml(spreadLabel)}</dt><dd>${escapeHtml(metrics.spreadLabel || "No aplica")}</dd>
-          ${metrics.postHocDiagnostic ? `<dt>Vector post-hoc</dt><dd>${escapeHtml(metrics.bestDiagnosticObjectiveLabel || "--")}</dd>` : ""}
-          <dt>Algoritmo</dt><dd>${escapeHtml(cost.processWallClockLabel || "--")}</dd>
-          <dt>Total prop.</dt><dd>${escapeHtml(cost.proposalTotalWallClockLabel || cost.processWallClockLabel || "--")}</dd>
-          <dt>Post</dt><dd>${escapeHtml(cost.postProcessingWallClockLabel || "0s")}</dd>
-          <dt>Metricas web</dt><dd>${escapeHtml(cost.metricExtractionLabel || "0s")}</dd>
-          <dt>Llamadas LLM</dt><dd>${escapeHtml(String(cost.llmCalls ?? 0))}</dd>
-          <dt>Tiempo LLM</dt><dd>${escapeHtml(cost.llmClientWallClockLabel || "--")}</dd>
-          <dt>Prom. llamada</dt><dd>${escapeHtml(cost.llmAverageCallLabel || "No disponible")}</dd>
-          <dt>Tokens</dt><dd>${escapeHtml(tokenValue)}</dd>
-          <dt>Git</dt><dd>${escapeHtml(gitLabel)}</dd>
-          <dt>Salida</dt><dd>${escapeHtml(metrics.outputDir || proposal.outputDir || "--")}</dd>
+          ${term("Parametros")}<dd title="N: tamano de poblacion o cantidad de individuos; G: generaciones o iteraciones configuradas.">${escapeHtml(parameterLabel)}</dd>
+          ${term("Soluciones finales")}<dd>${escapeHtml(String(metrics.completedRows ?? 0))}/${escapeHtml(String(metrics.totalRows ?? 0))} <small title="OK/total: soluciones finales normalizadas correctamente sobre el total del archivo final; no corresponde a G.">OK/total; no es G</small></dd>
+          ${term("Mejor F.O.")}<dd>${escapeHtml(metrics.bestObjectiveLabel || "--")}</dd>
+          ${term("Mejor comp.")}<dd>${escapeHtml(metrics.bestComparableObjectiveLabel || "--")}</dd>
+          ${term(nonDominatedLabel)}<dd>${escapeHtml(String((metrics.postHocDiagnostic ? metrics.postHocNonDominatedRows : metrics.nonDominatedRows) ?? 0))}</dd>
+          ${term(hvLabel)}<dd>${escapeHtml(metrics.hypervolumeLabel || "No aplica")}</dd>
+          ${term(spreadLabel)}<dd>${escapeHtml(metrics.spreadLabel || "No aplica")}</dd>
+          ${metrics.postHocDiagnostic ? `${term("Vector post-hoc")}<dd>${escapeHtml(metrics.bestDiagnosticObjectiveLabel || "--")}</dd>` : ""}
+          ${term("Algoritmo")}<dd>${escapeHtml(cost.processWallClockLabel || "--")}</dd>
+          ${term("Total prop.")}<dd>${escapeHtml(cost.proposalTotalWallClockLabel || cost.processWallClockLabel || "--")}</dd>
+          ${term("Post")}<dd>${escapeHtml(cost.postProcessingWallClockLabel || "0s")}</dd>
+          ${term("Metricas web")}<dd>${escapeHtml(cost.metricExtractionLabel || "0s")}</dd>
+          ${term("Llamadas LLM")}<dd>${escapeHtml(String(cost.llmCalls ?? 0))}</dd>
+          ${term("Tiempo LLM")}<dd>${escapeHtml(cost.llmClientWallClockLabel || "--")}</dd>
+          ${term("Prom. llamada")}<dd>${escapeHtml(cost.llmAverageCallLabel || "No disponible")}</dd>
+          ${term("Tokens")}<dd>${escapeHtml(tokenValue)}</dd>
+          ${term("Git")}<dd>${escapeHtml(gitLabel)}</dd>
+          ${term("Salida")}<dd>${escapeHtml(metrics.outputDir || proposal.outputDir || "--")}</dd>
         </dl>
       `;
       return article;
@@ -5614,6 +5843,7 @@ function renderComparatorCostTable(proposals, policy) {
       return tr;
     }),
   );
+  decorateAbbreviationTooltips(document.getElementById("comparatorCostsTab") || dom.comparatorCostTableBody);
 }
 
 function comparatorCostMetricCell(proposal, metric, winners) {
@@ -6220,17 +6450,102 @@ function renderComparatorRows(rows) {
   );
 }
 
-function renderComparatorLogs(logs) {
-  if (!logs.length) {
-    dom.comparatorLogOutput.textContent = "Sin logs todavia.";
+function formatComparatorLogEntry(entry) {
+  return `[${entry?.proposalId || "system"}] ${entry?.message || ""}`;
+}
+
+function renderComparatorLogLines() {
+  if (!comparatorLogLines.length) {
+    dom.comparatorLogOutput.textContent = comparatorLogLoading ? "Cargando log completo..." : "Sin logs todavia.";
     setComparatorLogCopyButton(false);
     return;
   }
-  dom.comparatorLogOutput.textContent = logs
-    .slice(-COMPARATOR_VISIBLE_LOG_LIMIT)
-    .map((entry) => `[${entry.proposalId}] ${entry.message}`)
-    .join("\n");
+  dom.comparatorLogOutput.textContent = comparatorLogLines.join("\n");
   setComparatorLogCopyButton(true);
+}
+
+function resetComparatorLogLoader(runId = null) {
+  comparatorLogRunId = runId;
+  comparatorLogOffset = 0;
+  comparatorLogLines = [];
+  comparatorLogLoading = false;
+  comparatorLogComplete = false;
+  comparatorLogTerminalRefreshDone = false;
+  comparatorLogLoadToken += 1;
+}
+
+function renderComparatorLogs(run) {
+  if (!run?.runId) {
+    resetComparatorLogLoader(null);
+    renderComparatorLogLines();
+    return;
+  }
+
+  if (comparatorLogRunId !== run.runId) {
+    resetComparatorLogLoader(run.runId);
+    const summaryTail = (run.logs || []).map(formatComparatorLogEntry);
+    if (summaryTail.length) {
+      comparatorLogLines = [
+        "Cargando log completo desde el backend...",
+        "",
+        ...summaryTail,
+      ];
+      setComparatorLogCopyButton(true);
+    }
+    renderComparatorLogLines();
+  }
+
+  if (comparatorLogComplete && !COMPARATOR_TERMINAL_STATUSES.has(run.status)) {
+    comparatorLogComplete = false;
+  }
+  if (comparatorLogComplete && COMPARATOR_TERMINAL_STATUSES.has(run.status) && !comparatorLogTerminalRefreshDone) {
+    comparatorLogComplete = false;
+    comparatorLogTerminalRefreshDone = true;
+  }
+
+  if (!comparatorLogLoading && !comparatorLogComplete) {
+    loadComparatorLogChunks(run.runId);
+  }
+}
+
+async function loadComparatorLogChunks(runId) {
+  if (!runId || comparatorLogLoading) return;
+  comparatorLogLoading = true;
+  const token = ++comparatorLogLoadToken;
+  try {
+    while (token === comparatorLogLoadToken && comparatorLogRunId === runId) {
+      const payload = await requestComparatorJson(
+        `/runs/${encodeURIComponent(runId)}/logs?offset=${encodeURIComponent(String(comparatorLogOffset))}&limit=${COMPARATOR_LOG_CHUNK_LIMIT}`,
+      );
+      if (token !== comparatorLogLoadToken || comparatorLogRunId !== runId) return;
+      const chunk = Array.isArray(payload.logs) ? payload.logs : [];
+      if (comparatorLogOffset === 0) {
+        comparatorLogLines = [];
+      }
+      if (chunk.length) {
+        comparatorLogLines.push(...chunk.map(formatComparatorLogEntry));
+        comparatorLogOffset = Number(payload.nextOffset ?? comparatorLogOffset + chunk.length);
+        renderComparatorLogLines();
+      } else {
+        comparatorLogOffset = Number(payload.nextOffset ?? comparatorLogOffset);
+      }
+      comparatorLogComplete = !payload.hasMore;
+      if (comparatorLogComplete) {
+        renderComparatorLogLines();
+        return;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    }
+  } catch (error) {
+    const fallbackLogs = latestComparatorRun?.runId === runId ? latestComparatorRun.logs || [] : [];
+    if (!comparatorLogLines.length && fallbackLogs.length) {
+      comparatorLogLines = fallbackLogs.map(formatComparatorLogEntry);
+      renderComparatorLogLines();
+    }
+    comparatorLogComplete = true;
+  } finally {
+    comparatorLogLoading = false;
+  }
 }
 
 async function loadPsoDatabase() {
@@ -6900,3 +7215,4 @@ if (dom.comparatorResumeRunId) {
 loadComparatorProposals();
 dom.renderedPromptPreview.textContent = renderPrompt();
 updateSimulationModeUi();
+decorateAbbreviationTooltips(document);

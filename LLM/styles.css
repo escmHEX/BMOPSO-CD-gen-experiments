@@ -79,6 +79,12 @@ button.compact {
   padding: 0 0.85rem;
 }
 
+.has-abbreviation-tooltip {
+  cursor: help;
+  text-decoration: underline dotted rgba(97, 113, 131, 0.55);
+  text-underline-offset: 3px;
+}
+
 input,
 select,
 textarea {

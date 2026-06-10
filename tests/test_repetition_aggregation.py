@@ -101,6 +101,81 @@ class RepetitionAggregationTests(unittest.TestCase):
             "https://github.com/escmHEX/BMOPSO-CD.git",
         )
 
+    def test_comparator_tracks_completed_repetitions_in_proposal_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+            run = {
+                "runId": "run-1",
+                "runDir": str(root / "runs" / "comparator" / "run-1"),
+                "status": "running",
+                "startedAtEpoch": None,
+                "config": {"repetitionsK": 3, "seed": 100, "generaciones": 2},
+                "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal, 3)},
+                "proposals": [],
+                "progress": {},
+                "costSummary": {},
+                "logs": [],
+            }
+
+            def fake_execute_once(_run, _proposal, output_dir, seed):
+                return {
+                    "proposalId": proposal.proposal_id,
+                    "displayName": proposal.display_name,
+                    "status": "completed",
+                    "outputDir": str(output_dir),
+                    "rows": [],
+                    "selectedRows": [],
+                    "metrics": {},
+                    "series": [],
+                    "charts": {},
+                    "cost": {},
+                    "error": None,
+                    "seed": seed,
+                }
+
+            with patch.object(service, "_execute_proposal_once", side_effect=fake_execute_once):
+                result = service._execute_proposal(run, proposal)
+
+            state = run["proposalStates"][proposal.proposal_id]
+            self.assertEqual(result["completedRepetitions"], 3)
+            self.assertEqual(result["repetitionsK"], 3)
+            self.assertEqual(state["completedRepetitions"], 3)
+            self.assertEqual(state["totalRepetitions"], 3)
+            self.assertEqual(state["currentRepetitionIndex"], 3)
+
+    def test_comparator_reads_full_logs_in_chunks(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_dir = root / "runs" / "comparator" / "run-logs"
+            run_dir.mkdir(parents=True)
+            run = {
+                "runId": "run-logs",
+                "runDir": str(run_dir),
+                "status": "running",
+                "config": {},
+                "proposalStates": {},
+                "progress": {},
+                "logs": [],
+            }
+            service._runs["run-logs"] = run
+            for index in range(7):
+                service._append_log_unlocked(run, "system", f"line {index}")
+
+            first = service.get_run_logs("run-logs", offset=0, limit=3)
+            second = service.get_run_logs("run-logs", offset=first["nextOffset"], limit=3)
+            third = service.get_run_logs("run-logs", offset=second["nextOffset"], limit=3)
+
+            self.assertEqual([entry["message"] for entry in first["logs"]], ["line 0", "line 1", "line 2"])
+            self.assertTrue(first["hasMore"])
+            self.assertEqual([entry["message"] for entry in second["logs"]], ["line 3", "line 4", "line 5"])
+            self.assertTrue(second["hasMore"])
+            self.assertEqual([entry["message"] for entry in third["logs"]], ["line 6"])
+            self.assertFalse(third["hasMore"])
+            self.assertEqual(third["source"], "jsonl")
+
     def test_fair_sequential_forces_effective_parallelism_to_one(self):
         service = ComparatorService(Path("."))
         parsed = service._read_config(

@@ -299,6 +299,21 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(200, run)
             return
 
+        if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "logs":
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            try:
+                offset = int((query.get("offset") or ["0"])[0] or 0)
+                limit = int((query.get("limit") or ["5000"])[0] or 5000)
+            except ValueError:
+                self.send_json(400, {"error": "offset and limit must be integers."})
+                return
+            payload = self.comparator_service.get_run_logs(path_parts[1], offset=offset, limit=limit)
+            if not payload:
+                self.send_json(404, {"error": "Run not found."})
+                return
+            self.send_json(200, payload)
+            return
+
         self.send_json(404, {"error": "Not found."})
 
     def handle_comparator_post(self) -> None:

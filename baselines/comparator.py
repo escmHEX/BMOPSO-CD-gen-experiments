@@ -118,7 +118,8 @@ def finite_float(value: Any, default: float = 0.0) -> float:
     return number if math.isfinite(number) else default
 
 
-COMPARATOR_RUN_LOG_LIMIT = max(250, int(finite_float(COMPARATOR_DEFAULTS.get("runLogLimit"), 1000)))
+COMPARATOR_RUN_LOG_LIMIT = max(250, int(finite_float(COMPARATOR_DEFAULTS.get("runLogTailLimit"), 1000)))
+COMPARATOR_LOG_CHUNK_LIMIT = max(1000, int(finite_float(COMPARATOR_DEFAULTS.get("logChunkLimit"), 5000)))
 
 
 def objective_label(vector: list[float]) -> str:
@@ -1134,7 +1135,8 @@ class ComparatorService:
             "metricCoordinateSpace": METRIC_COORDINATE_SPACE,
         }
 
-    def _initial_proposal_state(self, proposal: ProposalDefinition) -> dict[str, Any]:
+    def _initial_proposal_state(self, proposal: ProposalDefinition, repetitions_k: int | None = None) -> dict[str, Any]:
+        total_repetitions = max(1, int(repetitions_k or 1))
         return {
             "proposalId": proposal.proposal_id,
             "displayName": proposal.display_name,
@@ -1144,6 +1146,9 @@ class ComparatorService:
             "stageTotal": PROPOSAL_TOTALS.get(proposal.proposal_id, 1),
             "generationIndex": None,
             "generationTotal": None,
+            "currentRepetitionIndex": None,
+            "completedRepetitions": 0,
+            "totalRepetitions": total_repetitions,
             "iterationTiming": empty_iteration_timing(),
             "progress": 0.0,
             "logs": 0,
@@ -1170,7 +1175,7 @@ class ComparatorService:
             "logs": [],
             "proposals": [],
             "proposalStates": {
-                proposal.proposal_id: self._initial_proposal_state(proposal)
+                proposal.proposal_id: self._initial_proposal_state(proposal, config.get("repetitionsK"))
                 for proposal in self._selected_proposals(config)
             },
             "progress": {
@@ -1208,6 +1213,55 @@ class ComparatorService:
         if summary_path.exists():
             return self._with_metric_recompute_status(read_json(summary_path))
         return None
+
+    def get_run_logs(self, run_id: str, offset: int = 0, limit: int | None = None) -> dict[str, Any] | None:
+        run = self.get_run(run_id)
+        if not run:
+            return None
+        safe_offset = max(0, int(offset or 0))
+        safe_limit = max(1, min(int(limit or COMPARATOR_LOG_CHUNK_LIMIT), COMPARATOR_LOG_CHUNK_LIMIT))
+        log_path = self._run_log_path(run)
+        if not log_path.exists():
+            logs = list(run.get("logs") or [])
+            chunk = logs[safe_offset:safe_offset + safe_limit]
+            next_offset = safe_offset + len(chunk)
+            return {
+                "runId": run_id,
+                "offset": safe_offset,
+                "nextOffset": next_offset,
+                "limit": safe_limit,
+                "hasMore": next_offset < len(logs),
+                "logs": chunk,
+                "source": "summary_tail",
+            }
+
+        file_size = log_path.stat().st_size
+        safe_offset = min(safe_offset, file_size)
+        entries: list[dict[str, Any]] = []
+        with log_path.open("rb") as handle:
+            handle.seek(safe_offset)
+            while len(entries) < safe_limit:
+                line_bytes = handle.readline()
+                if not line_bytes:
+                    break
+                line = line_bytes.decode("utf-8", errors="replace")
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    entry = {"at": None, "proposalId": "system", "message": line.rstrip("\n")}
+                if isinstance(entry, dict):
+                    entries.append(entry)
+            next_offset = handle.tell()
+        return {
+            "runId": run_id,
+            "offset": safe_offset,
+            "nextOffset": next_offset,
+            "limit": safe_limit,
+            "hasMore": next_offset < file_size,
+            "logs": entries,
+            "source": "jsonl",
+            "offsetUnit": "bytes",
+        }
 
     def recompute_run_metrics(self, run_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -1293,16 +1347,16 @@ class ComparatorService:
             "updatedAt": utc_now(),
         }
         logs = list(updated.get("logs") or [])
-        logs.append(
-            {
-                "at": utc_now(),
-                "proposalId": "system",
-                "message": (
-                    "Metric recomputation completed using comparable normalized objectives "
-                    f"for {', '.join(recomputed_ids) or 'no proposals'}."
-                ),
-            }
-        )
+        log_entry = {
+            "at": utc_now(),
+            "proposalId": "system",
+            "message": (
+                "Metric recomputation completed using comparable normalized objectives "
+                f"for {', '.join(recomputed_ids) or 'no proposals'}."
+            ),
+        }
+        logs.append(log_entry)
+        self._append_log_entry_to_file(updated, log_entry)
         updated["logs"] = logs[-COMPARATOR_RUN_LOG_LIMIT:]
         return self._with_metric_recompute_status(updated)
 
@@ -2061,6 +2115,10 @@ class ComparatorService:
         state["status"] = result["status"]
         state["stageLabel"] = comparator_status_message(result["status"])
         state["progress"] = 1.0
+        total_repetitions = max(1, int(result.get("repetitionsK") or run.get("config", {}).get("repetitionsK") or 1))
+        state["totalRepetitions"] = total_repetitions
+        state["completedRepetitions"] = min(total_repetitions, int(result.get("completedRepetitions") or total_repetitions))
+        state["currentRepetitionIndex"] = state["completedRepetitions"] or total_repetitions
         state["updatedAt"] = utc_now()
         run["updatedAt"] = utc_now()
         self._refresh_run_progress_unlocked(run)
@@ -2087,13 +2145,30 @@ class ComparatorService:
     def _execute_proposal(self, run: dict[str, Any], proposal: ProposalDefinition) -> dict[str, Any]:
         repetitions_k = int(run["config"].get("repetitionsK") or 1)
         base_dir = Path(run["runDir"]) / proposal.proposal_id
+        with self._lock:
+            state = run["proposalStates"].get(proposal.proposal_id)
+            if state:
+                state["totalRepetitions"] = repetitions_k
+                state["completedRepetitions"] = 0
+                state["currentRepetitionIndex"] = 1 if repetitions_k > 0 else None
+                state["updatedAt"] = utc_now()
         if repetitions_k <= 1:
-            return self._execute_proposal_once(
+            result = self._execute_proposal_once(
                 run,
                 proposal,
                 base_dir,
                 self._repetition_seed(run["config"].get("seed"), 0),
             )
+            result["completedRepetitions"] = 1 if result.get("status") in {STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED} else 0
+            result["repetitionsK"] = 1
+            with self._lock:
+                state = run["proposalStates"].get(proposal.proposal_id)
+                if state:
+                    state["totalRepetitions"] = 1
+                    state["completedRepetitions"] = int(result["completedRepetitions"])
+                    state["currentRepetitionIndex"] = 1
+                    state["updatedAt"] = utc_now()
+            return result
 
         base_dir.mkdir(parents=True, exist_ok=True)
         results: list[dict[str, Any]] = []
@@ -2111,6 +2186,8 @@ class ComparatorService:
                 state = run["proposalStates"].get(proposal.proposal_id)
                 if state:
                     state["currentRepetitionIndex"] = repetition_index + 1
+                    state["completedRepetitions"] = repetition_index
+                    state["totalRepetitions"] = repetitions_k
                     timing = self._iteration_timing(state)
                     timing["activeIterationKey"] = None
                     timing["activeStartedAtEpoch"] = None
@@ -2125,8 +2202,17 @@ class ComparatorService:
             result["repetitionSeed"] = repetition_seed
             results.append(result)
             write_json(repetition_dir / "summary.json", result)
+            with self._lock:
+                state = run["proposalStates"].get(proposal.proposal_id)
+                if state:
+                    state["completedRepetitions"] = len(results)
+                    state["currentRepetitionIndex"] = min(len(results) + 1, repetitions_k)
+                    state["totalRepetitions"] = repetitions_k
+                    state["updatedAt"] = utc_now()
 
-        return aggregate_proposal_repetitions(proposal, base_dir, results, repetitions_k)
+        aggregated = aggregate_proposal_repetitions(proposal, base_dir, results, repetitions_k)
+        aggregated["completedRepetitions"] = len(results)
+        return aggregated
 
     def _build_command(
         self,
@@ -2725,6 +2811,8 @@ class ComparatorService:
             },
         )
         state.setdefault("iterationTiming", empty_iteration_timing())
+        state.setdefault("completedRepetitions", 0)
+        state.setdefault("totalRepetitions", max(1, int((run.get("config") or {}).get("repetitionsK") or 1)))
         state["status"] = status
         state["stageLabel"] = stage_label
         if progress is not None:
@@ -3531,16 +3619,28 @@ class ComparatorService:
         clean_message = clean_log_message(message)
         if not clean_message:
             return
-        run["logs"].append(
-            {
-                "at": utc_now(),
-                "proposalId": proposal_id,
-                "message": clean_message,
-            }
-        )
+        entry = {
+            "at": utc_now(),
+            "proposalId": proposal_id,
+            "message": clean_message,
+        }
+        self._append_log_entry_to_file(run, entry)
+        run["logs"].append(entry)
         run["logs"] = run["logs"][-COMPARATOR_RUN_LOG_LIMIT:]
         run["updatedAt"] = utc_now()
         self._apply_log_progress_unlocked(run, proposal_id, clean_message)
+
+    def _run_log_path(self, run: dict[str, Any]) -> Path:
+        return Path(run["runDir"]) / "logs.jsonl"
+
+    def _append_log_entry_to_file(self, run: dict[str, Any], entry: dict[str, Any]) -> None:
+        try:
+            log_path = self._run_log_path(run)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
 
     def _public_run(self, run: dict[str, Any]) -> dict[str, Any]:
         public = {
