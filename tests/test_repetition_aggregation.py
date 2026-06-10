@@ -18,6 +18,18 @@ from initial_population.comparison import InitialPopulationComparisonService
 from turbulence_comparison.service import aggregate_turbulence_repetitions
 
 
+def command_set_values(command: list[str]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for index, item in enumerate(command):
+        if item == "--set" and index + 1 < len(command):
+            path, value = command[index + 1].split("=", 1)
+            values[path] = value
+        elif item.startswith("--set="):
+            path, value = item[len("--set="):].split("=", 1)
+            values[path] = value
+    return values
+
+
 class RepetitionAggregationTests(unittest.TestCase):
     def test_proposal_python_executable_detects_venv_for_any_proposal(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -69,11 +81,87 @@ class RepetitionAggregationTests(unittest.TestCase):
             {
                 "referenceText": "reference",
                 "selectedProposalIds": ["binary-mopso-cd"],
-                "proposalConfigs": {"binary-mopso-cd": {"extraArgs": "--freeze-components role"}},
+                "proposalConfigs": {"binary-mopso-cd": {"extraArgs": "--set selection.k=4"}},
             }
         )
         self.assertEqual(parsed["selectedProposalIds"], ["binary-mopso-cd"])
-        self.assertEqual(parsed["proposalConfigs"]["binary-mopso-cd"]["extraArgs"], "--freeze-components role")
+        self.assertEqual(parsed["proposalConfigs"]["binary-mopso-cd"]["extraArgs"], "--set selection.k=4")
+
+    def test_comparator_config_accepts_multiple_instances_for_same_proposal(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "proposalInstances": [
+                    {
+                        "instanceId": "binary-a",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary A",
+                        "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                    },
+                    {
+                        "instanceId": "binary-b",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary B",
+                        "proposalConfig": {"cliValues": {"selection.k": "5"}},
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(parsed["selectedProposalIds"], ["binary-mopso-cd"])
+        self.assertEqual(len(parsed["proposalInstances"]), 2)
+        instances = service._selected_instances(parsed)
+        self.assertEqual([instance.instance_id for instance in instances], ["binary-a", "binary-b"])
+        self.assertEqual(instances[0].proposal_config["cliValues"]["selection.k"], "4")
+        self.assertEqual(instances[1].proposal_config["cliValues"]["selection.k"], "5")
+
+    def test_comparator_config_rejects_duplicate_instances_for_same_proposal(self):
+        service = ComparatorService(Path("."))
+        with self.assertRaisesRegex(ValueError, "duplicateProposalInstances"):
+            service._read_config(
+                {
+                    "referenceText": "reference",
+                    "proposalInstances": [
+                        {
+                            "instanceId": "binary-a",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary A",
+                            "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        },
+                        {
+                            "instanceId": "binary-b",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary B",
+                            "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        },
+                    ],
+                }
+            )
+
+    def test_comparator_config_allows_same_config_for_different_proposals(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "proposalInstances": [
+                    {
+                        "instanceId": "evolmd-mo-a",
+                        "proposalId": "evolmd-mo",
+                        "displayName": "EVOLMD-MO A",
+                        "proposalConfig": {"cliValues": {}},
+                    },
+                    {
+                        "instanceId": "binary-a",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary A",
+                        "proposalConfig": {"cliValues": {}},
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(parsed["selectedProposalIds"], ["evolmd-mo", "binary-mopso-cd"])
 
     def test_comparator_config_accepts_repository_update_settings(self):
         service = ComparatorService(Path("."))
@@ -144,6 +232,60 @@ class RepetitionAggregationTests(unittest.TestCase):
             self.assertEqual(state["completedRepetitions"], 3)
             self.assertEqual(state["totalRepetitions"], 3)
             self.assertEqual(state["currentRepetitionIndex"], 3)
+
+    def test_comparator_executes_instance_in_isolated_output_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            config = service._read_config(
+                {
+                    "referenceText": "reference",
+                    "proposalInstances": [
+                        {
+                            "instanceId": "binary-a",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary A",
+                            "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        }
+                    ],
+                }
+            )
+            instance = service._selected_instances(config)[0]
+            run = {
+                "runId": "run-1",
+                "runDir": str(root / "runs" / "comparator" / "run-1"),
+                "status": "running",
+                "startedAtEpoch": None,
+                "config": config,
+                "proposalStates": {instance.instance_id: service._initial_proposal_state(instance, 1)},
+                "proposals": [],
+                "progress": {},
+                "costSummary": {},
+                "logs": [],
+            }
+            observed_dirs = []
+
+            def fake_execute_once(_run, _instance, output_dir, seed):
+                observed_dirs.append(output_dir)
+                return {
+                    "status": "completed",
+                    "outputDir": str(output_dir),
+                    "rows": [],
+                    "selectedRows": [],
+                    "metrics": {},
+                    "series": [],
+                    "charts": {},
+                    "cost": {},
+                    "error": None,
+                    "seed": seed,
+                }
+
+            with patch.object(service, "_execute_proposal_once", side_effect=fake_execute_once):
+                result = service._execute_proposal(run, instance)
+
+            self.assertEqual(observed_dirs[0], Path(run["runDir"]) / "binary-a")
+            self.assertEqual(result["instanceId"], "binary-a")
+            self.assertEqual(result["proposalId"], "binary-mopso-cd")
 
     def test_comparator_reads_full_logs_in_chunks(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -379,20 +521,38 @@ class RepetitionAggregationTests(unittest.TestCase):
                 "proposalConfigs": {
                     "binary-mopso-cd": {
                         "cliValues": {
-                            "--freeze-components": ["role", "topic"],
-                            "--enable-monitor": True,
-                            "--router-heuristic": {"word_replacement_candidates": False},
-                            "--task-model": {"synthetic_text_generation": "llama3.1:8b"},
+                            "experiment.frozen_components": '["role","topic"]',
+                            "monitor.enabled": True,
+                            "router.heuristics.word_replacement_candidates": False,
+                            "router.task_models.synthetic_text_generation": "llama3.1:8b",
+                            "models.sbert.default": "gte-small",
                         }
                     }
                 },
             }
         )
         values = parsed["proposalConfigs"]["binary-mopso-cd"]["cliValues"]
-        self.assertEqual(values["--freeze-components"], ["role", "topic"])
-        self.assertTrue(values["--enable-monitor"])
-        self.assertFalse(values["--router-heuristic"]["word_replacement_candidates"])
-        self.assertEqual(values["--task-model"]["synthetic_text_generation"], "llama3.1:8b")
+        self.assertEqual(values["experiment.frozen_components"], '["role","topic"]')
+        self.assertTrue(values["monitor.enabled"])
+        self.assertFalse(values["router.heuristics.word_replacement_candidates"])
+        self.assertEqual(values["router.task_models.synthetic_text_generation"], "llama3.1:8b")
+        self.assertEqual(values["models.sbert.default"], "gte-small")
+
+    def test_binary_cli_options_are_generated_from_default_yaml(self):
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        options_by_key = {
+            str(option.get("key") or option.get("configPath") or option.get("flag")): option
+            for option in proposal.cli_options
+        }
+
+        self.assertIn("--config", options_by_key)
+        self.assertIn("mopso.archive_multiplier", options_by_key)
+        self.assertIn("router.task_models.synthetic_text_generation", options_by_key)
+        self.assertIn("selection.lambda_mmr", options_by_key)
+        self.assertEqual(options_by_key["mopso.archive_multiplier"]["flag"], "--set")
+        self.assertEqual(options_by_key["router.heuristics.word_replacement_candidates"]["type"], "bool")
+        self.assertTrue(options_by_key["router.heuristics.word_replacement_candidates"]["allowFalse"])
+        self.assertEqual(options_by_key["experiment.n"]["source"], "managed")
 
     def test_evolmd_ga_flags_are_proposal_specific_cli_values(self):
         service = ComparatorService(Path("."))
@@ -464,7 +624,7 @@ class RepetitionAggregationTests(unittest.TestCase):
 
     def test_comparator_rejects_structured_managed_or_unknown_cli_values(self):
         service = ComparatorService(Path("."))
-        for flag in ("--seed", "--missing"):
+        for flag in ("experiment.seed", "--missing"):
             with self.subTest(flag=flag):
                 with self.assertRaises(ValueError):
                     service._read_config(
@@ -512,6 +672,19 @@ class RepetitionAggregationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     service._validate_extra_args(proposal, [flag])
 
+    def test_binary_extra_args_cannot_override_managed_yaml_paths(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        bad_args = [
+            ["--set", "experiment.n=99"],
+            ["--set=runtime.outdir_base=other"],
+            ["--set", "router.task_models.synthetic_text_generation=other"],
+        ]
+        for args in bad_args:
+            with self.subTest(args=args):
+                with self.assertRaises(ValueError):
+                    service._validate_extra_args(proposal, args)
+
     def test_binary_command_uses_repetition_seed(self):
         service = ComparatorService(Path("."))
         proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
@@ -523,8 +696,8 @@ class RepetitionAggregationTests(unittest.TestCase):
             Path("reference.txt"),
             777,
         )
-        self.assertIn("--seed", command)
-        self.assertEqual(command[command.index("--seed") + 1], "777")
+        self.assertNotIn("--seed", command)
+        self.assertEqual(command_set_values(command)["experiment.seed"], "777")
 
     def test_binary_command_builds_structured_cli_values(self):
         service = ComparatorService(Path("."))
@@ -536,11 +709,12 @@ class RepetitionAggregationTests(unittest.TestCase):
                 "proposalConfigs": {
                     "binary-mopso-cd": {
                         "cliValues": {
-                            "--bert-model": "gte-small",
-                            "--freeze-components": ["role", "topic"],
-                            "--enable-monitor": True,
-                            "--router-heuristic": {"word_replacement_candidates": False},
-                            "--task-model": {"synthetic_text_generation": "llama3.1:8b"},
+                            "--config": "configs/test.yaml",
+                            "models.sbert.default": "gte-small",
+                            "experiment.frozen_components": '["role","topic"]',
+                            "monitor.enabled": True,
+                            "router.heuristics.word_replacement_candidates": False,
+                            "router.task_models.synthetic_text_generation": "llama3.1:8b",
                         }
                     }
                 },
@@ -554,12 +728,54 @@ class RepetitionAggregationTests(unittest.TestCase):
             Path("reference.txt"),
             777,
         )
-        self.assertEqual(command[command.index("--bert-model") + 1], "gte-small")
-        self.assertEqual(command.count("--bert-model"), 1)
-        self.assertEqual(command[command.index("--freeze-components") + 1], "role,topic")
-        self.assertIn("--enable-monitor", command)
-        self.assertIn("word_replacement_candidates=false", command)
-        self.assertIn("synthetic_text_generation=llama3.1:8b", command)
+        self.assertEqual(command[:4], [command[0], "-m", "binary_mopso_cd", "--reference-text"])
+        self.assertNotIn("--bert-model", command)
+        self.assertNotIn("--freeze-components", command)
+        self.assertEqual(command[command.index("--config") + 1], "configs/test.yaml")
+        set_values = command_set_values(command)
+        self.assertEqual(set_values["experiment.n"], "10")
+        self.assertEqual(set_values["experiment.iterations"], "3")
+        self.assertEqual(set_values["experiment.runs"], "1")
+        self.assertEqual(set_values["experiment.seed"], "777")
+        self.assertEqual(set_values["runtime.outdir_base"], json.dumps(str(Path("out").resolve()), ensure_ascii=False))
+        self.assertEqual(set_values["ollama.default_model"], '"llama3"')
+        self.assertEqual(set_values["models.sbert.default"], '"gte-small"')
+        self.assertEqual(set_values["experiment.frozen_components"], '["role","topic"]')
+        self.assertEqual(set_values["monitor.enabled"], "true")
+        self.assertEqual(set_values["router.heuristics.word_replacement_candidates"], "false")
+        self.assertEqual(set_values["router.task_models.semantic_anchor_extraction"], '"llama3"')
+        self.assertEqual(set_values["router.task_models.synthetic_text_generation"], '"llama3.1:8b"')
+
+    def test_binary_command_uses_instance_specific_cli_values(self):
+        service = ComparatorService(Path("."))
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "proposalInstances": [
+                    {
+                        "instanceId": "binary-a",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary A",
+                        "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                    },
+                    {
+                        "instanceId": "binary-b",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary B",
+                        "proposalConfig": {"cliValues": {"selection.k": "5"}},
+                    },
+                ],
+            }
+        )
+        first, second = service._selected_instances(config)
+
+        first_command = service._build_command({"config": config}, first, Path("."), Path("out-a"), Path("reference.txt"), 777)
+        second_command = service._build_command({"config": config}, second, Path("."), Path("out-b"), Path("reference.txt"), 778)
+
+        self.assertEqual(command_set_values(first_command)["selection.k"], "4")
+        self.assertEqual(command_set_values(second_command)["selection.k"], "5")
+        self.assertEqual(command_set_values(first_command)["experiment.seed"], "777")
+        self.assertEqual(command_set_values(second_command)["experiment.seed"], "778")
 
     def test_repository_update_skips_dirty_repository(self):
         service = ComparatorService(Path("."))

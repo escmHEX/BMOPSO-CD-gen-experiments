@@ -47,6 +47,18 @@ test("global front counts are grouped by proposal", () => {
   assert.equal(counts.get("binary-mopso-cd"), 2);
 });
 
+test("global front counts are grouped by instance when available", () => {
+  const counts = comparatorCountByProposal([
+    { proposalId: "binary-mopso-cd", instanceId: "binary-a" },
+    { proposalId: "binary-mopso-cd", instanceId: "binary-b" },
+    { proposalId: "binary-mopso-cd", instanceId: "binary-b" },
+  ]);
+
+  assert.equal(counts.get("binary-a"), 1);
+  assert.equal(counts.get("binary-b"), 2);
+  assert.equal(counts.get("binary-mopso-cd"), undefined);
+});
+
 test("raw chart points use native semantic objectives", () => {
   const points = comparatorRawChartPoints([
     {
@@ -170,6 +182,18 @@ test("cost winners choose the lowest completed reported value", () => {
   }, { costsComparable: true });
 
   assert.deepEqual([...winners], ["evolmd-mo"]);
+});
+
+test("cost winners use instance ids when present", () => {
+  const proposals = [
+    { proposalId: "binary-mopso-cd", instanceId: "binary-a", status: "completed", cost: { seconds: 8 } },
+    { proposalId: "binary-mopso-cd", instanceId: "binary-b", status: "completed", cost: { seconds: 3 } },
+  ];
+  const winners = comparatorBestCostProposalIds(proposals, {
+    value: (_proposal, cost) => cost.seconds,
+  }, { costsComparable: true });
+
+  assert.deepEqual([...winners], ["binary-b"]);
 });
 
 test("cost winners are disabled in exploratory mode", () => {

@@ -51,6 +51,7 @@ PERCENT_RE = re.compile(r"(\d{1,3})%")
 TIMESTAMPED_LOG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+\|\s+[A-Z]+\s+\|\s+(.+)$")
 GIT_REMOTE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 SUPPORTED_GIT_PULL_MODES = {"ff-only"}
 EXECUTION_MODE_FAIR_SEQUENTIAL = "fair_sequential"
 EXECUTION_MODE_EXPLORATORY_PARALLEL = "exploratory_parallel"
@@ -100,6 +101,164 @@ DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN = config_bool(COMPARATOR_DEFAULTS.get("up
 DEFAULT_EXECUTION_MODE = str(COMPARATOR_DEFAULTS.get("executionMode") or EXECUTION_MODE_FAIR_SEQUENTIAL)
 METRIC_SCHEMA_VERSION = 2
 METRIC_COORDINATE_SPACE = "comparable_normalized"
+MODULE_ROOT = Path(__file__).resolve().parents[1]
+BINARY_PROPOSAL_ID = "binary-mopso-cd"
+BINARY_TASK_MODEL_PREFIX = "router.task_models."
+BINARY_MANAGED_CONFIG_PATHS = {
+    "experiment.n",
+    "experiment.iterations",
+    "experiment.runs",
+    "experiment.seed",
+    "runtime.outdir_base",
+    "ollama.default_model",
+}
+BINARY_REMOVED_CLI_FLAGS = {
+    "--n",
+    "--iterations",
+    "--runs",
+    "--seed",
+    "--model",
+    "--bert-model",
+    "--outdir-base",
+    "--freeze-components",
+    "--enable-monitor",
+    "--disable-selection",
+    "--router-heuristic",
+    "--task-model",
+    "--ppdb-source",
+    "--ppdb-index",
+    "--enable-checkpoint",
+    "--checkpoint-every",
+    "--checkpoint-interval",
+    "--resume-from",
+}
+BINARY_PATH_OPTION_TYPES = {
+    "runtime.resume_from": "path",
+    "runtime.outdir_base": "path",
+    "runtime.embedding_cache_file": "path",
+    "checkpoint.directory": "path",
+    "models.ppdb.source_path": "path",
+    "models.ppdb.index_path": "path",
+    "logging.file": "path",
+}
+BINARY_PATH_CHOICES = {
+    "logging.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+    "models.sbert.default": ["all-MiniLM-L6-v2", "gte-small"],
+}
+BINARY_PATH_HELP = {
+    "experiment.n": "Gestionado por el campo comun N del comparador.",
+    "experiment.iterations": "Gestionado por el campo comun G del comparador.",
+    "experiment.runs": "El comparador ejecuta K externamente; Binary corre una repeticion por proceso.",
+    "experiment.seed": "Gestionado por la semilla efectiva de cada repeticion.",
+    "runtime.outdir_base": "Gestionado por el comparador para aislar artefactos por corrida.",
+    "ollama.default_model": "Gestionado por el campo comun Modelo del comparador.",
+    "mopso.k_retry": "Debe permanecer en 0 segun la validacion actual de Binary.",
+    "ollama.speculative_decoding_enabled": "Binary bloquea esta opcion durante validacion.",
+}
+
+
+def module_relative_path(value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else MODULE_ROOT / path
+
+
+def configured_binary_repository_path() -> str:
+    binary_config = COMPARATOR_PROPOSAL_CONFIG.get(BINARY_PROPOSAL_ID)
+    binary_config = binary_config if isinstance(binary_config, dict) else {}
+    return str(
+        binary_config.get("repositoryPath")
+        or r"C:\Users\Admin\Desktop\ImplementaciÃ³n\Binary MOPSO-CD"
+    )
+
+
+def flatten_mapping_leaves(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    if isinstance(value, dict):
+        leaves: list[tuple[str, Any]] = []
+        for key, child in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            leaves.extend(flatten_mapping_leaves(child, path))
+        return leaves
+    return [(prefix, value)] if prefix else []
+
+
+def binary_option_label(path: str) -> str:
+    return path.split(".")[-1].replace("_", " ")
+
+
+def binary_option_group(path: str) -> str:
+    return path.split(".", 1)[0]
+
+
+def binary_option_type(path: str, value: Any) -> str:
+    if path in BINARY_PATH_OPTION_TYPES:
+        return BINARY_PATH_OPTION_TYPES[path]
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if value is None or isinstance(value, (list, dict)):
+        return "yaml"
+    return "string"
+
+
+def binary_default_config_path() -> Path:
+    return module_relative_path(configured_binary_repository_path()) / "configs" / "default.yaml"
+
+
+def load_binary_default_config(path: Path) -> dict[str, Any]:
+    try:
+        import yaml
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("PyYAML is required by the comparator backend to read Binary default.yaml.") from exc
+    if not path.exists():
+        raise FileNotFoundError(f"Binary default.yaml was not found at {path}.")
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"Binary default.yaml root must be a mapping: {path}.")
+    return payload
+
+
+def build_binary_cli_options() -> tuple[tuple[dict[str, Any], ...], str | None]:
+    base_options: list[dict[str, Any]] = [
+        {"flag": "--reference-text", "type": "string", "source": "managed"},
+        {
+            "flag": "--config",
+            "type": "path",
+            "label": "YAML base adicional",
+            "help": "Archivo YAML opcional que se mezcla sobre configs/default.yaml antes de aplicar overrides --set.",
+        },
+    ]
+    try:
+        config = load_binary_default_config(binary_default_config_path())
+    except Exception as exc:
+        return tuple(base_options), str(exc)
+
+    for path, default_value in sorted(flatten_mapping_leaves(config), key=lambda item: item[0]):
+        option_type = binary_option_type(path, default_value)
+        option: dict[str, Any] = {
+            "flag": "--set",
+            "key": path,
+            "configPath": path,
+            "type": option_type,
+            "default": default_value,
+            "group": binary_option_group(path),
+            "label": binary_option_label(path),
+            "help": BINARY_PATH_HELP.get(path, "Se envia a Binary como override YAML con --set path=value."),
+        }
+        if path in BINARY_MANAGED_CONFIG_PATHS:
+            option["source"] = "managed"
+        if option_type == "bool":
+            option["allowFalse"] = True
+        if path in BINARY_PATH_CHOICES:
+            option["choices"] = BINARY_PATH_CHOICES[path]
+            option["allowCustom"] = True
+        base_options.append(option)
+    return tuple(base_options), None
+
+
+BINARY_CLI_OPTIONS, BINARY_CONFIG_METADATA_ERROR = build_binary_cli_options()
 
 
 def utc_now() -> str:
@@ -718,14 +877,21 @@ def aggregate_proposal_repetitions(
     proposal_dir: Path,
     results: list[dict[str, Any]],
     repetitions_k: int,
+    identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    identity = identity or {
+        "instanceId": proposal.proposal_id,
+        "proposalId": proposal.proposal_id,
+        "displayName": proposal.display_name,
+        "baseDisplayName": proposal.display_name,
+        "proposalConfig": {"extraArgs": "", "cliValues": {}},
+    }
     completed = [result for result in results if result.get("status") == STATUS_COMPLETED]
     if not completed:
         failure = results[-1] if results else {}
         status = STATUS_CANCELLED if any(result.get("status") == STATUS_CANCELLED for result in results) else STATUS_FAILED
         return {
-            "proposalId": proposal.proposal_id,
-            "displayName": proposal.display_name,
+            **identity,
             "status": status,
             "outputDir": str(proposal_dir),
             "rows": [],
@@ -744,16 +910,31 @@ def aggregate_proposal_repetitions(
         repetition_seed = result.get("repetitionSeed")
         for row in result.get("rows") or []:
             if isinstance(row, dict):
-                rows.append({**row, "repetitionIndex": repetition_index, "repetitionSeed": repetition_seed})
+                rows.append({
+                    **row,
+                    "instanceId": row.get("instanceId") or identity.get("instanceId"),
+                    "proposalId": row.get("proposalId") or identity.get("proposalId"),
+                    "displayName": row.get("displayName") or identity.get("displayName"),
+                    "baseDisplayName": row.get("baseDisplayName") or identity.get("baseDisplayName"),
+                    "repetitionIndex": repetition_index,
+                    "repetitionSeed": repetition_seed,
+                })
         for row in result.get("selectedRows") or []:
             if isinstance(row, dict):
-                selected_rows.append({**row, "repetitionIndex": repetition_index, "repetitionSeed": repetition_seed})
+                selected_rows.append({
+                    **row,
+                    "instanceId": row.get("instanceId") or identity.get("instanceId"),
+                    "proposalId": row.get("proposalId") or identity.get("proposalId"),
+                    "displayName": row.get("displayName") or identity.get("displayName"),
+                    "baseDisplayName": row.get("baseDisplayName") or identity.get("baseDisplayName"),
+                    "repetitionIndex": repetition_index,
+                    "repetitionSeed": repetition_seed,
+                })
 
     series = aggregate_series(completed)
 
     return {
-        "proposalId": proposal.proposal_id,
-        "displayName": proposal.display_name,
+        **identity,
         "status": STATUS_COMPLETED,
         "outputDir": str(proposal_dir),
         "rows": rows,
@@ -808,6 +989,17 @@ class ProposalDefinition:
     git_branch: str = "main"
     git_pull_mode: str = "ff-only"
     git_expected_remote_url: str = ""
+
+
+@dataclass(frozen=True)
+class ProposalRunInstance:
+    instance_id: str
+    proposal_id: str
+    display_name: str
+    base_display_name: str
+    proposal: ProposalDefinition
+    proposal_config: dict[str, Any]
+    order_index: int
 
 
 PROPOSALS: tuple[ProposalDefinition, ...] = (
@@ -892,48 +1084,7 @@ PROPOSALS: tuple[ProposalDefinition, ...] = (
         entrypoint="-m binary_mopso_cd",
         final_selection_file="final_selection_hybrid.json",
         metrics_series_file="evolucion_metricas.csv",
-        cli_options=(
-            {"flag": "--reference-text", "type": "string", "source": "managed"},
-            {"flag": "--n", "type": "int", "source": "common"},
-            {"flag": "--iterations", "type": "int", "source": "common"},
-            {"flag": "--runs", "type": "int", "source": "managed"},
-            {"flag": "--seed", "type": "int", "source": "managed"},
-            {"flag": "--model", "type": "string", "source": "common"},
-            {"flag": "--bert-model", "type": "string", "default": "all-MiniLM-L6-v2", "choices": ["all-MiniLM-L6-v2", "gte-small"], "allowCustom": True},
-            {"flag": "--outdir-base", "type": "path", "source": "managed"},
-            {"flag": "--config", "type": "path"},
-            {"flag": "--freeze-components", "type": "multi_select", "choices": ["role", "topic", "action"]},
-            {"flag": "--enable-monitor", "type": "bool"},
-            {"flag": "--disable-selection", "type": "bool"},
-            {
-                "flag": "--router-heuristic",
-                "type": "repeatable_assignment_bool",
-                "assignments": [
-                    {"name": "semantic_anchor_extraction", "label": "Extraccion anclas"},
-                    {"name": "semantic_pool_generation", "label": "Generacion pools"},
-                    {"name": "semantic_pool_expansion", "label": "Expansion pools"},
-                    {"name": "semantic_component_influence_candidates", "label": "Candidatos influencia"},
-                    {"name": "word_replacement_candidates", "label": "Reemplazo palabras"},
-                ],
-            },
-            {
-                "flag": "--task-model",
-                "type": "repeatable_assignment",
-                "assignments": [
-                    {"name": "semantic_anchor_extraction", "label": "Extraccion anclas"},
-                    {"name": "semantic_pool_generation", "label": "Generacion pools"},
-                    {"name": "semantic_pool_expansion", "label": "Expansion pools"},
-                    {"name": "semantic_component_influence_candidates", "label": "Candidatos influencia"},
-                    {"name": "synthetic_text_generation", "label": "Texto sintetico"},
-                ],
-            },
-            {"flag": "--ppdb-source", "type": "path"},
-            {"flag": "--ppdb-index", "type": "path"},
-            {"flag": "--enable-checkpoint", "type": "bool"},
-            {"flag": "--checkpoint-every", "type": "int", "min": 1, "step": 1},
-            {"flag": "--checkpoint-interval", "type": "int", "min": 1, "step": 1},
-            {"flag": "--resume-from", "type": "path"},
-        ),
+        cli_options=BINARY_CLI_OPTIONS,
         preload_modules=("torch",),
         python_executable=str(proposal_config("binary-mopso-cd").get("pythonExecutable") or ""),
         python_path_entries=tuple_from_config(proposal_config("binary-mopso-cd").get("pythonPathEntries")),
@@ -1053,31 +1204,6 @@ def split_cli_args(raw: str) -> list[str]:
     return shlex.split(text)
 
 
-def cli_option_value(args: list[str], flag: str) -> str | None:
-    for index, item in enumerate(args):
-        if item == flag and index + 1 < len(args):
-            return args[index + 1]
-        if item.startswith(f"{flag}="):
-            return item.split("=", 1)[1]
-    return None
-
-
-def remove_cli_option(args: list[str], flag: str) -> list[str]:
-    filtered: list[str] = []
-    skip_next = False
-    for item in args:
-        if skip_next:
-            skip_next = False
-            continue
-        if item == flag:
-            skip_next = True
-            continue
-        if item.startswith(f"{flag}="):
-            continue
-        filtered.append(item)
-    return filtered
-
-
 def command_label(command: list[str]) -> str:
     return subprocess.list2cmdline([str(part) for part in command])
 
@@ -1100,6 +1226,14 @@ class ComparatorService:
                 "pythonExecutable": proposal_python_executable(self.root, repository, proposal),
                 "error": "Proposal entrypoint is missing.",
             }
+            if proposal.kind == "binary-mopso-cd" and BINARY_CONFIG_METADATA_ERROR:
+                dependencies = dict(dependencies)
+                missing = list(dependencies.get("missing") or [])
+                if "default.yaml" not in missing:
+                    missing.append("default.yaml")
+                dependencies["ok"] = False
+                dependencies["missing"] = missing
+                dependencies["error"] = BINARY_CONFIG_METADATA_ERROR
             git_config = self._default_git_config(proposal)
             proposals.append(
                 {
@@ -1135,15 +1269,23 @@ class ComparatorService:
             "metricCoordinateSpace": METRIC_COORDINATE_SPACE,
         }
 
-    def _initial_proposal_state(self, proposal: ProposalDefinition, repetitions_k: int | None = None) -> dict[str, Any]:
+    def _initial_proposal_state(
+        self,
+        proposal: ProposalDefinition | ProposalRunInstance,
+        repetitions_k: int | None = None,
+    ) -> dict[str, Any]:
+        instance = self._coerce_instance(proposal)
+        base_proposal = instance.proposal
         total_repetitions = max(1, int(repetitions_k or 1))
         return {
-            "proposalId": proposal.proposal_id,
-            "displayName": proposal.display_name,
+            "instanceId": instance.instance_id,
+            "proposalId": instance.proposal_id,
+            "displayName": instance.display_name,
+            "baseDisplayName": instance.base_display_name,
             "status": STATUS_QUEUED,
             "stageLabel": "En cola",
             "stageIndex": 0,
-            "stageTotal": PROPOSAL_TOTALS.get(proposal.proposal_id, 1),
+            "stageTotal": PROPOSAL_TOTALS.get(base_proposal.proposal_id, 1),
             "generationIndex": None,
             "generationTotal": None,
             "currentRepetitionIndex": None,
@@ -1162,6 +1304,7 @@ class ComparatorService:
         run_dir = self.runs_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
+        selected_instances = self._selected_instances(config)
         run = {
             "runId": run_id,
             "status": STATUS_QUEUED,
@@ -1175,8 +1318,8 @@ class ComparatorService:
             "logs": [],
             "proposals": [],
             "proposalStates": {
-                proposal.proposal_id: self._initial_proposal_state(proposal, config.get("repetitionsK"))
-                for proposal in self._selected_proposals(config)
+                instance.instance_id: self._initial_proposal_state(instance, config.get("repetitionsK"))
+                for instance in selected_instances
             },
             "progress": {
                 "percent": 0,
@@ -1381,6 +1524,7 @@ class ComparatorService:
                 Path(str(result.get("outputDir") or ".")),
                 recomputed_repetitions,
                 int(result.get("repetitionsK") or config.get("repetitionsK") or 1),
+                self._identity_from_result(proposal, result),
             )
             for key in ("gitRevision", "command", "outputFiles"):
                 if result.get(key) is not None:
@@ -1388,6 +1532,27 @@ class ComparatorService:
             return aggregated
 
         return self._recompute_single_proposal_result(proposal, result, config)
+
+    def _identity_from_result(self, proposal: ProposalDefinition, result: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "instanceId": str(result.get("instanceId") or result.get("proposalId") or proposal.proposal_id),
+            "proposalId": proposal.proposal_id,
+            "displayName": str(result.get("displayName") or proposal.display_name),
+            "baseDisplayName": str(result.get("baseDisplayName") or proposal.display_name),
+            "proposalConfig": result.get("proposalConfig") if isinstance(result.get("proposalConfig"), dict) else {"extraArgs": "", "cliValues": {}},
+        }
+
+    def _instance_from_result(self, proposal: ProposalDefinition, result: dict[str, Any]) -> ProposalRunInstance:
+        identity = self._identity_from_result(proposal, result)
+        return ProposalRunInstance(
+            instance_id=identity["instanceId"],
+            proposal_id=proposal.proposal_id,
+            display_name=identity["displayName"],
+            base_display_name=identity["baseDisplayName"],
+            proposal=proposal,
+            proposal_config=identity["proposalConfig"],
+            order_index=0,
+        )
 
     def _recompute_single_proposal_result(
         self,
@@ -1405,12 +1570,14 @@ class ComparatorService:
         top_k = int(config.get("topK") or 10)
         reference_text = str(config.get("referenceText") or "")
         rows = self._normalize_rows(proposal, read_json(result_path), top_k, reference_text=reference_text)
+        self._attach_instance_metadata(rows, self._instance_from_result(proposal, result))
         selected_rows, _selection_seconds = self._select_final_rows(
             proposal,
             rows,
             output_dir,
             write_if_missing=False,
         )
+        self._attach_instance_metadata(selected_rows, self._instance_from_result(proposal, result))
         self._mark_selected_rows(rows, selected_rows)
         metrics = self._summarize_rows(proposal, rows, output_dir)
         series = self._build_metric_series(proposal, output_dir, rows, reference_text)
@@ -1434,7 +1601,16 @@ class ComparatorService:
         if not reference_text:
             raise ValueError("referenceText is required.")
 
-        selected = self._selected_proposal_ids(payload.get("selectedProposalIds"))
+        raw_instances = payload.get("proposalInstances")
+        if raw_instances is not None:
+            proposal_instances = self._proposal_instances_config(raw_instances)
+            selected = self._selected_ids_from_instances(proposal_instances)
+            proposal_configs = self._legacy_proposal_configs_from_instances(proposal_instances)
+        else:
+            selected = self._selected_proposal_ids(payload.get("selectedProposalIds"))
+            proposal_configs = self._proposal_configs(payload.get("proposalConfigs"), selected)
+            proposal_instances = self._legacy_proposal_instances_config(selected, proposal_configs)
+
         execution_mode = self._execution_mode(payload.get("executionMode", DEFAULT_EXECUTION_MODE))
         requested_parallelism = self._int_between(
             payload.get("proposalParallelism", COMPARATOR_DEFAULTS.get("proposalParallelism", 1)),
@@ -1470,7 +1646,8 @@ class ComparatorService:
             },
             "timeoutMinutes": self._int_between(payload.get("timeoutMinutes", COMPARATOR_DEFAULTS.get("timeoutMinutes", 60)), "timeoutMinutes", 1, 1440),
             "selectedProposalIds": selected,
-            "proposalConfigs": self._proposal_configs(payload.get("proposalConfigs"), selected),
+            "proposalConfigs": proposal_configs,
+            "proposalInstances": proposal_instances,
             "updateRepositoriesBeforeRun": self._bool_config_value(
                 payload.get("updateRepositoriesBeforeRun", DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN),
                 "updateRepositoriesBeforeRun",
@@ -1502,6 +1679,107 @@ class ComparatorService:
             raise ValueError("Select at least one proposal.")
         return selected
 
+    def _selected_ids_from_instances(self, instances: list[dict[str, Any]]) -> list[str]:
+        selected: list[str] = []
+        for instance in instances:
+            proposal_id = str(instance.get("proposalId") or "").strip()
+            if proposal_id and proposal_id not in selected:
+                selected.append(proposal_id)
+        if not selected:
+            raise ValueError("Select at least one proposal instance.")
+        return selected
+
+    def _proposal_instances_config(self, value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            raise ValueError("proposalInstances must be a list.")
+        if not value:
+            raise ValueError("Agrega al menos una instancia de propuesta.")
+
+        result: list[dict[str, Any]] = []
+        seen_instance_ids: set[str] = set()
+        per_proposal_counts: dict[str, int] = {}
+        canonical_by_proposal: dict[str, dict[str, str]] = {}
+
+        for index, raw in enumerate(value):
+            if not isinstance(raw, dict):
+                raise ValueError(f"proposalInstances[{index}] must be an object.")
+            proposal_id = str(raw.get("proposalId") or "").strip()
+            if proposal_id not in PROPOSAL_BY_ID:
+                raise ValueError(f"Unknown proposalId: {proposal_id}.")
+            proposal = PROPOSAL_BY_ID[proposal_id]
+            per_proposal_counts[proposal_id] = per_proposal_counts.get(proposal_id, 0) + 1
+            instance_id = self._safe_instance_id(
+                raw.get("instanceId"),
+                proposal_id,
+                per_proposal_counts[proposal_id],
+                f"proposalInstances[{index}].instanceId",
+            )
+            if instance_id in seen_instance_ids:
+                raise ValueError(f"proposalInstances contains duplicate instanceId: {instance_id}.")
+            seen_instance_ids.add(instance_id)
+
+            display_name = str(raw.get("displayName") or "").strip()
+            if not display_name:
+                display_name = f"{proposal.display_name} - config {per_proposal_counts[proposal_id]}"
+            proposal_config = self._proposal_config_value(
+                proposal,
+                raw.get("proposalConfig") if "proposalConfig" in raw else raw.get("config"),
+                f"proposalInstances[{index}].proposalConfig",
+            )
+            canonical = self._canonical_proposal_config(proposal, proposal_config)
+            existing = canonical_by_proposal.setdefault(proposal_id, {})
+            if canonical in existing:
+                first_name = existing[canonical]
+                raise ValueError(
+                    "duplicateProposalInstances: No se puede ejecutar porque estas instancias "
+                    f"no difieren en configuracion: {first_name} y {display_name}."
+                )
+            existing[canonical] = display_name
+
+            result.append(
+                {
+                    "instanceId": instance_id,
+                    "proposalId": proposal_id,
+                    "displayName": display_name,
+                    "baseDisplayName": proposal.display_name,
+                    "proposalConfig": proposal_config,
+                    "orderIndex": index,
+                }
+            )
+        return result
+
+    def _legacy_proposal_instances_config(
+        self,
+        selected: list[str],
+        proposal_configs: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "instanceId": proposal_id,
+                "proposalId": proposal_id,
+                "displayName": PROPOSAL_BY_ID[proposal_id].display_name,
+                "baseDisplayName": PROPOSAL_BY_ID[proposal_id].display_name,
+                "proposalConfig": proposal_configs.get(proposal_id, {"extraArgs": "", "cliValues": {}}),
+                "orderIndex": index,
+            }
+            for index, proposal_id in enumerate(selected)
+        ]
+
+    def _legacy_proposal_configs_from_instances(self, instances: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        configs: dict[str, dict[str, Any]] = {}
+        for instance in instances:
+            proposal_id = str(instance.get("proposalId") or "")
+            configs.setdefault(proposal_id, instance.get("proposalConfig") or {"extraArgs": "", "cliValues": {}})
+        return configs
+
+    def _safe_instance_id(self, value: Any, proposal_id: str, index: int, label: str) -> str:
+        instance_id = str(value or "").strip()
+        if not instance_id:
+            instance_id = f"{proposal_id}-{index}"
+        if not INSTANCE_ID_RE.fullmatch(instance_id):
+            raise ValueError(f"{label} has unsupported characters. Use letters, numbers, dot, underscore or hyphen.")
+        return instance_id
+
     def _proposal_configs(self, value: Any, selected: list[str]) -> dict[str, dict[str, Any]]:
         if value is None:
             value = {}
@@ -1510,24 +1788,62 @@ class ComparatorService:
         result: dict[str, dict[str, Any]] = {}
         for proposal_id in selected:
             proposal = PROPOSAL_BY_ID[proposal_id]
-            raw = value.get(proposal_id) or {}
-            if not isinstance(raw, dict):
-                raise ValueError(f"proposalConfigs.{proposal_id} must be an object.")
-            extra_args = raw.get("extraArgs", "")
-            if extra_args is None:
-                extra_args = ""
-            if not isinstance(extra_args, str):
-                raise ValueError(f"proposalConfigs.{proposal_id}.extraArgs must be text.")
-            cli_values = raw.get("cliValues", {})
-            if cli_values is None:
-                cli_values = {}
-            if not isinstance(cli_values, dict):
-                raise ValueError(f"proposalConfigs.{proposal_id}.cliValues must be an object.")
-            result[proposal_id] = {
-                "extraArgs": extra_args.strip(),
-                "cliValues": self._normalize_cli_values(proposal, cli_values),
-            }
+            result[proposal_id] = self._proposal_config_value(
+                proposal,
+                value.get(proposal_id),
+                f"proposalConfigs.{proposal_id}",
+            )
         return result
+
+    def _proposal_config_value(self, proposal: ProposalDefinition, raw: Any, label: str) -> dict[str, Any]:
+        raw = raw or {}
+        if not isinstance(raw, dict):
+            raise ValueError(f"{label} must be an object.")
+        extra_args = raw.get("extraArgs", "")
+        if extra_args is None:
+            extra_args = ""
+        if not isinstance(extra_args, str):
+            raise ValueError(f"{label}.extraArgs must be text.")
+        cli_values = raw.get("cliValues", {})
+        if cli_values is None:
+            cli_values = {}
+        if not isinstance(cli_values, dict):
+            raise ValueError(f"{label}.cliValues must be an object.")
+        return {
+            "extraArgs": extra_args.strip(),
+            "cliValues": self._normalize_cli_values(proposal, cli_values),
+        }
+
+    def _canonical_proposal_config(self, proposal: ProposalDefinition, proposal_config: dict[str, Any]) -> str:
+        cli_values = self._canonical_cli_values_for_duplicates(proposal, proposal_config.get("cliValues") or {})
+        canonical = {
+            "extraArgs": str(proposal_config.get("extraArgs") or "").strip(),
+            "cliValues": cli_values,
+        }
+        return json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+    def _canonical_cli_values_for_duplicates(self, proposal: ProposalDefinition, values: dict[str, Any]) -> dict[str, Any]:
+        options = self._configurable_cli_options(proposal)
+        effective: dict[str, Any] = {}
+        for key, value in values.items():
+            option = options.get(str(key))
+            if option is None:
+                effective[str(key)] = value
+                continue
+            if "default" in option and self._cli_value_matches_default(value, option.get("default")):
+                continue
+            effective[str(key)] = value
+        return effective
+
+    def _cli_value_matches_default(self, value: Any, default: Any) -> bool:
+        if isinstance(default, bool):
+            return isinstance(value, bool) and value is default
+        if isinstance(default, (int, float)) and not isinstance(default, bool):
+            try:
+                return float(value) == float(default)
+            except (TypeError, ValueError):
+                return False
+        return str(value).strip() == str(default).strip()
 
     def _proposal_git_configs(self, value: Any, selected: list[str]) -> dict[str, dict[str, str]]:
         if value is None:
@@ -1603,58 +1919,65 @@ class ComparatorService:
 
     def _configurable_cli_options(self, proposal: ProposalDefinition) -> dict[str, dict[str, Any]]:
         return {
-            str(option["flag"]): option
+            self._cli_option_key(option): option
             for option in proposal.cli_options
             if option.get("source") not in {"managed", "common"}
         }
 
+    def _cli_option_key(self, option: dict[str, Any]) -> str:
+        return str(option.get("key") or option.get("configPath") or option.get("flag") or "")
+
     def _normalize_cli_values(self, proposal: ProposalDefinition, values: dict[str, Any]) -> dict[str, Any]:
         options = self._configurable_cli_options(proposal)
         normalized: dict[str, Any] = {}
-        for flag, raw_value in values.items():
-            flag_text = str(flag)
-            option = options.get(flag_text)
+        for key, raw_value in values.items():
+            key_text = str(key)
+            option = options.get(key_text)
             if option is None:
-                raise ValueError(f"{proposal.display_name}: {flag_text} is not configurable from proposalConfigs.")
+                raise ValueError(f"{proposal.display_name}: {key_text} is not configurable from proposalConfigs.")
             option_type = str(option.get("type") or "string")
             if option_type == "bool":
-                if raw_value in ("", None, False):
+                if raw_value in ("", None) or (raw_value is False and not option.get("allowFalse")):
                     continue
-                normalized[flag_text] = self._bool_cli_value(raw_value, f"{proposal.display_name}.{flag_text}")
+                normalized[key_text] = self._bool_cli_value(raw_value, f"{proposal.display_name}.{key_text}")
             elif option_type in {"int", "float", "string", "path"}:
                 text = str(raw_value or "").strip()
                 if not text:
                     continue
                 if option_type == "int":
-                    self._int_cli_value(text, f"{proposal.display_name}.{flag_text}", option)
+                    self._int_cli_value(text, f"{proposal.display_name}.{key_text}", option)
                 elif option_type == "float":
-                    self._float_cli_value(text, f"{proposal.display_name}.{flag_text}", option)
-                self._validate_cli_choice(option, text, f"{proposal.display_name}.{flag_text}")
-                normalized[flag_text] = text
+                    self._float_cli_value(text, f"{proposal.display_name}.{key_text}", option)
+                self._validate_cli_choice(option, text, f"{proposal.display_name}.{key_text}")
+                normalized[key_text] = text
+            elif option_type == "yaml":
+                text = str(raw_value or "").strip()
+                if text:
+                    normalized[key_text] = text
             elif option_type == "multi_select":
                 if not isinstance(raw_value, list):
-                    raise ValueError(f"{proposal.display_name}.{flag_text} must be a list.")
+                    raise ValueError(f"{proposal.display_name}.{key_text} must be a list.")
                 selected = [str(item).strip() for item in raw_value if str(item).strip()]
                 for item in selected:
-                    self._validate_cli_choice(option, item, f"{proposal.display_name}.{flag_text}")
+                    self._validate_cli_choice(option, item, f"{proposal.display_name}.{key_text}")
                 if selected:
-                    normalized[flag_text] = selected
+                    normalized[key_text] = selected
             elif option_type == "repeatable":
                 if not isinstance(raw_value, list):
-                    raise ValueError(f"{proposal.display_name}.{flag_text} must be a list.")
+                    raise ValueError(f"{proposal.display_name}.{key_text} must be a list.")
                 selected = [str(item).strip() for item in raw_value if str(item).strip()]
                 if selected:
-                    normalized[flag_text] = selected
+                    normalized[key_text] = selected
             elif option_type == "repeatable_assignment":
                 normalized_assignments = self._normalize_assignment_values(proposal, option, raw_value, bool_values=False)
                 if normalized_assignments:
-                    normalized[flag_text] = normalized_assignments
+                    normalized[key_text] = normalized_assignments
             elif option_type == "repeatable_assignment_bool":
                 normalized_assignments = self._normalize_assignment_values(proposal, option, raw_value, bool_values=True)
                 if normalized_assignments:
-                    normalized[flag_text] = normalized_assignments
+                    normalized[key_text] = normalized_assignments
             else:
-                raise ValueError(f"{proposal.display_name}.{flag_text} has unsupported option type: {option_type}.")
+                raise ValueError(f"{proposal.display_name}.{key_text} has unsupported option type: {option_type}.")
         return normalized
 
     def _normalize_assignment_values(
@@ -1766,6 +2089,79 @@ class ComparatorService:
     def _selected_proposals(self, config: dict[str, Any]) -> list[ProposalDefinition]:
         ids = config.get("selectedProposalIds") or list(DEFAULT_SELECTED_PROPOSALS)
         return [PROPOSAL_BY_ID[proposal_id] for proposal_id in ids]
+
+    def _selected_instances(self, config: dict[str, Any]) -> list[ProposalRunInstance]:
+        raw_instances = config.get("proposalInstances") or []
+        if not raw_instances:
+            proposal_configs = config.get("proposalConfigs") or {}
+            return [
+                ProposalRunInstance(
+                    instance_id=proposal.proposal_id,
+                    proposal_id=proposal.proposal_id,
+                    display_name=proposal.display_name,
+                    base_display_name=proposal.display_name,
+                    proposal=proposal,
+                    proposal_config=proposal_configs.get(proposal.proposal_id, {"extraArgs": "", "cliValues": {}}),
+                    order_index=index,
+                )
+                for index, proposal in enumerate(self._selected_proposals(config))
+            ]
+
+        instances: list[ProposalRunInstance] = []
+        for index, item in enumerate(raw_instances):
+            if not isinstance(item, dict):
+                continue
+            proposal_id = str(item.get("proposalId") or "").strip()
+            proposal = PROPOSAL_BY_ID.get(proposal_id)
+            if proposal is None:
+                continue
+            instance_id = str(item.get("instanceId") or proposal_id).strip() or proposal_id
+            display_name = str(item.get("displayName") or proposal.display_name).strip() or proposal.display_name
+            instances.append(
+                ProposalRunInstance(
+                    instance_id=instance_id,
+                    proposal_id=proposal_id,
+                    display_name=display_name,
+                    base_display_name=str(item.get("baseDisplayName") or proposal.display_name),
+                    proposal=proposal,
+                    proposal_config=item.get("proposalConfig") if isinstance(item.get("proposalConfig"), dict) else {"extraArgs": "", "cliValues": {}},
+                    order_index=int(finite_float(item.get("orderIndex"), index)),
+                )
+            )
+        return instances
+
+    def _coerce_instance(self, value: ProposalDefinition | ProposalRunInstance, config: dict[str, Any] | None = None) -> ProposalRunInstance:
+        if isinstance(value, ProposalRunInstance):
+            return value
+        proposal = value
+        proposal_config = ((config or {}).get("proposalConfigs") or {}).get(proposal.proposal_id, {"extraArgs": "", "cliValues": {}})
+        return ProposalRunInstance(
+            instance_id=proposal.proposal_id,
+            proposal_id=proposal.proposal_id,
+            display_name=proposal.display_name,
+            base_display_name=proposal.display_name,
+            proposal=proposal,
+            proposal_config=proposal_config,
+            order_index=0,
+        )
+
+    def _result_identity(self, instance: ProposalRunInstance) -> dict[str, Any]:
+        return {
+            "instanceId": instance.instance_id,
+            "proposalId": instance.proposal_id,
+            "displayName": instance.display_name,
+            "baseDisplayName": instance.base_display_name,
+            "proposalConfig": instance.proposal_config,
+        }
+
+    def _attach_instance_metadata(self, rows: list[dict[str, Any]], instance: ProposalRunInstance) -> None:
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row["instanceId"] = instance.instance_id
+            row["proposalId"] = instance.proposal_id
+            row["displayName"] = instance.display_name
+            row["baseDisplayName"] = instance.base_display_name
 
     def _validate_selected_proposals_available(self, config: dict[str, Any]) -> None:
         for proposal in self._selected_proposals(config):
@@ -1955,18 +2351,20 @@ class ComparatorService:
         git_configs = run["config"].get("proposalGitConfigs") or {}
 
         for proposal in proposals:
+            instance_ids = self._state_instance_ids_for_proposal(run, proposal.proposal_id)
             with self._lock:
                 if run.get("cancelRequested"):
                     self._append_log_unlocked(run, "system", "Run cancelled before repository preparation finished.")
                     self._write_summary_unlocked(run)
                     return
-                self._set_proposal_state_unlocked(
-                    run,
-                    proposal.proposal_id,
-                    STATUS_RUNNING,
-                    "Actualizando repositorio" if should_update else "Registrando revision Git",
-                    0.02,
-                )
+                for instance_id in instance_ids:
+                    self._set_proposal_state_unlocked(
+                        run,
+                        instance_id,
+                        STATUS_RUNNING,
+                        "Actualizando repositorio" if should_update else "Registrando revision Git",
+                        0.02,
+                    )
                 self._write_summary_unlocked(run)
 
             git_config = git_configs.get(proposal.proposal_id) or self._default_git_config(proposal)
@@ -1985,8 +2383,18 @@ class ComparatorService:
                     proposal.proposal_id,
                     f"Git {status}: {update.get('remote')}/{update.get('branch')} at {short_commit}. {update.get('message') or ''}",
                 )
-                self._set_proposal_state_unlocked(run, proposal.proposal_id, STATUS_QUEUED, "En cola", 0.0)
+                for instance_id in instance_ids:
+                    self._set_proposal_state_unlocked(run, instance_id, STATUS_QUEUED, "En cola", 0.0)
                 self._write_summary_unlocked(run)
+
+    def _state_instance_ids_for_proposal(self, run: dict[str, Any], proposal_id: str) -> list[str]:
+        states = run.get("proposalStates") or {}
+        ids = [
+            str(instance_id)
+            for instance_id, state in states.items()
+            if str((state or {}).get("proposalId") or instance_id) == proposal_id
+        ]
+        return ids or [proposal_id]
 
     def _run_worker(self, run_id: str) -> None:
         with self._lock:
@@ -1998,10 +2406,11 @@ class ComparatorService:
             self._write_summary_unlocked(run)
 
         try:
+            selected_instances = self._selected_instances(run["config"])
             selected_proposals = self._selected_proposals(run["config"])
             self._prepare_repositories_before_run(run, selected_proposals)
             policy = run["config"].get("executionPolicy") or {}
-            parallelism = min(run["config"].get("effectiveProposalParallelism", 1), len(selected_proposals))
+            parallelism = min(run["config"].get("effectiveProposalParallelism", 1), len(selected_instances))
             with self._lock:
                 self._append_log_unlocked(
                     run,
@@ -2014,16 +2423,16 @@ class ComparatorService:
                 )
                 self._write_summary_unlocked(run)
             if parallelism <= 1:
-                self._run_proposals_sequential(run, selected_proposals)
+                self._run_proposals_sequential(run, selected_instances)
             else:
-                self._run_proposals_parallel(run, selected_proposals, parallelism)
+                self._run_proposals_parallel(run, selected_instances, parallelism)
 
             with self._lock:
                 self._sort_proposals_unlocked(run)
                 failed = [item for item in run["proposals"] if item["status"] == STATUS_FAILED]
                 if run["cancelRequested"]:
                     run["status"] = STATUS_CANCELLED
-                elif failed and len(failed) == len(selected_proposals):
+                elif failed and len(failed) == len(selected_instances):
                     run["status"] = STATUS_FAILED
                     run["error"] = "All proposal executions failed."
                 elif failed:
@@ -2045,7 +2454,7 @@ class ComparatorService:
                 self._append_log_unlocked(run, "system", f"Unexpected error: {error}")
                 self._write_summary_unlocked(run)
 
-    def _run_proposals_sequential(self, run: dict[str, Any], proposals: list[ProposalDefinition]) -> None:
+    def _run_proposals_sequential(self, run: dict[str, Any], proposals: list[ProposalDefinition | ProposalRunInstance]) -> None:
         for proposal in proposals:
             with self._lock:
                 if run["cancelRequested"]:
@@ -2059,24 +2468,24 @@ class ComparatorService:
                 self._record_proposal_result_unlocked(run, result)
                 self._write_summary_unlocked(run)
 
-    def _run_proposals_parallel(self, run: dict[str, Any], proposals: list[ProposalDefinition], parallelism: int) -> None:
+    def _run_proposals_parallel(self, run: dict[str, Any], proposals: list[ProposalDefinition | ProposalRunInstance], parallelism: int) -> None:
         with ThreadPoolExecutor(max_workers=parallelism, thread_name_prefix="comparator") as executor:
-            futures: dict[Future[dict[str, Any]], ProposalDefinition] = {
+            futures: dict[Future[dict[str, Any]], ProposalDefinition | ProposalRunInstance] = {
                 executor.submit(self._execute_proposal, run, proposal): proposal
                 for proposal in proposals
             }
 
             for future in as_completed(futures):
-                proposal = futures[future]
+                proposal = self._coerce_instance(futures[future], run.get("config"))
                 if future.cancelled():
-                    result = self._cancelled_result(proposal, Path(run["runDir"]) / proposal.proposal_id)
+                    result = self._cancelled_result(proposal, Path(run["runDir"]) / proposal.instance_id)
                 else:
                     try:
                         result = future.result()
                     except Exception as error:
                         result = self._failed_result(
                             proposal,
-                            Path(run["runDir"]) / proposal.proposal_id,
+                            Path(run["runDir"]) / proposal.instance_id,
                             f"Unexpected proposal error: {error}",
                         )
 
@@ -2105,11 +2514,14 @@ class ComparatorService:
                 "status": repository_update.get("status"),
             }
         run["proposals"].append(result)
+        state_key = result.get("instanceId") or result["proposalId"]
         state = run["proposalStates"].setdefault(
-            result["proposalId"],
+            state_key,
             {
+                "instanceId": state_key,
                 "proposalId": result["proposalId"],
-                "displayName": result.get("displayName", result["proposalId"]),
+                "displayName": result.get("displayName", state_key),
+                "baseDisplayName": result.get("baseDisplayName", result["proposalId"]),
             },
         )
         state["status"] = result["status"]
@@ -2125,8 +2537,19 @@ class ComparatorService:
         self._refresh_cost_summary_unlocked(run)
 
     def _sort_proposals_unlocked(self, run: dict[str, Any]) -> None:
-        order = {proposal.proposal_id: index for index, proposal in enumerate(PROPOSALS)}
-        run["proposals"].sort(key=lambda item: order.get(item.get("proposalId"), len(order)))
+        instances = run.get("config", {}).get("proposalInstances") or []
+        instance_order = {
+            str(instance.get("instanceId")): index
+            for index, instance in enumerate(instances)
+            if isinstance(instance, dict) and instance.get("instanceId")
+        }
+        proposal_order = {proposal.proposal_id: index for index, proposal in enumerate(PROPOSALS)}
+        run["proposals"].sort(
+            key=lambda item: (
+                instance_order.get(str(item.get("instanceId") or ""), len(instance_order)),
+                proposal_order.get(item.get("proposalId"), len(proposal_order)),
+            )
+        )
 
     def _mark_queued_as_cancelled_unlocked(self, run: dict[str, Any]) -> None:
         for state in (run.get("proposalStates") or {}).values():
@@ -2142,11 +2565,13 @@ class ComparatorService:
         elapsed = max(0.0, time.time() - started_at) if started_at else 0.0
         run["costSummary"] = summarize_costs(run.get("proposals") or [], elapsed)
 
-    def _execute_proposal(self, run: dict[str, Any], proposal: ProposalDefinition) -> dict[str, Any]:
+    def _execute_proposal(self, run: dict[str, Any], proposal: ProposalDefinition | ProposalRunInstance) -> dict[str, Any]:
+        instance = self._coerce_instance(proposal, run.get("config"))
+        base_proposal = instance.proposal
         repetitions_k = int(run["config"].get("repetitionsK") or 1)
-        base_dir = Path(run["runDir"]) / proposal.proposal_id
+        base_dir = Path(run["runDir"]) / instance.instance_id
         with self._lock:
-            state = run["proposalStates"].get(proposal.proposal_id)
+            state = run["proposalStates"].get(instance.instance_id)
             if state:
                 state["totalRepetitions"] = repetitions_k
                 state["completedRepetitions"] = 0
@@ -2155,14 +2580,15 @@ class ComparatorService:
         if repetitions_k <= 1:
             result = self._execute_proposal_once(
                 run,
-                proposal,
+                instance,
                 base_dir,
                 self._repetition_seed(run["config"].get("seed"), 0),
             )
+            result = {**self._result_identity(instance), **result}
             result["completedRepetitions"] = 1 if result.get("status") in {STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED} else 0
             result["repetitionsK"] = 1
             with self._lock:
-                state = run["proposalStates"].get(proposal.proposal_id)
+                state = run["proposalStates"].get(instance.instance_id)
                 if state:
                     state["totalRepetitions"] = 1
                     state["completedRepetitions"] = int(result["completedRepetitions"])
@@ -2178,12 +2604,12 @@ class ComparatorService:
                     break
                 self._set_proposal_state_unlocked(
                     run,
-                    proposal.proposal_id,
+                    instance.instance_id,
                     STATUS_RUNNING,
                     f"Repeticion {repetition_index + 1}/{repetitions_k}",
                     repetition_index / repetitions_k,
                 )
-                state = run["proposalStates"].get(proposal.proposal_id)
+                state = run["proposalStates"].get(instance.instance_id)
                 if state:
                     state["currentRepetitionIndex"] = repetition_index + 1
                     state["completedRepetitions"] = repetition_index
@@ -2197,65 +2623,52 @@ class ComparatorService:
 
             repetition_seed = self._repetition_seed(run["config"].get("seed"), repetition_index)
             repetition_dir = base_dir / f"rep-{repetition_index + 1:03d}"
-            result = self._execute_proposal_once(run, proposal, repetition_dir, repetition_seed)
+            result = self._execute_proposal_once(run, instance, repetition_dir, repetition_seed)
             result["repetitionIndex"] = repetition_index + 1
             result["repetitionSeed"] = repetition_seed
             results.append(result)
             write_json(repetition_dir / "summary.json", result)
             with self._lock:
-                state = run["proposalStates"].get(proposal.proposal_id)
+                state = run["proposalStates"].get(instance.instance_id)
                 if state:
                     state["completedRepetitions"] = len(results)
                     state["currentRepetitionIndex"] = min(len(results) + 1, repetitions_k)
                     state["totalRepetitions"] = repetitions_k
                     state["updatedAt"] = utc_now()
 
-        aggregated = aggregate_proposal_repetitions(proposal, base_dir, results, repetitions_k)
+        aggregated = aggregate_proposal_repetitions(base_proposal, base_dir, results, repetitions_k, self._result_identity(instance))
         aggregated["completedRepetitions"] = len(results)
         return aggregated
 
     def _build_command(
         self,
         run: dict[str, Any],
-        proposal: ProposalDefinition,
+        proposal: ProposalDefinition | ProposalRunInstance,
         repository_dir: Path,
         output_base: Path,
         reference_path: Path,
         random_seed: int | None,
     ) -> list[str]:
-        proposal_config_values = (run["config"].get("proposalConfigs") or {}).get(proposal.proposal_id, {})
-        structured_args = self._cli_args_from_values(proposal, proposal_config_values.get("cliValues") or {})
-        extra_args = structured_args + split_cli_args(proposal_config_values.get("extraArgs", ""))
-        self._validate_extra_args(proposal, extra_args)
-        if proposal.kind == "binary-mopso-cd":
-            binary_extra_args = remove_cli_option(extra_args, "--bert-model")
+        instance = self._coerce_instance(proposal, run.get("config"))
+        base_proposal = instance.proposal
+        proposal_config_values = instance.proposal_config or {}
+        structured_args = self._cli_args_from_values(base_proposal, proposal_config_values.get("cliValues") or {})
+        extra_args = split_cli_args(proposal_config_values.get("extraArgs", ""))
+        self._validate_extra_args(base_proposal, extra_args)
+        if base_proposal.kind == "binary-mopso-cd":
             command = [
-                proposal_python_executable(self.root, repository_dir, proposal),
+                proposal_python_executable(self.root, repository_dir, base_proposal),
                 "-m",
                 "binary_mopso_cd",
                 "--reference-text",
                 run["config"]["referenceText"],
-                "--n",
-                str(run["config"]["n"]),
-                "--iterations",
-                str(run["config"]["generaciones"]),
-                "--runs",
-                "1",
-                "--seed",
-                str(int(random_seed if random_seed is not None else run["config"]["seed"])),
-                "--model",
-                run["config"]["model"],
-                "--bert-model",
-                self._proposal_bert_model(proposal, extra_args),
-                "--outdir-base",
-                str(output_base),
             ]
-            return command + binary_extra_args
+            return command + self._binary_managed_set_args(run, base_proposal, output_base, random_seed) + structured_args + extra_args
 
         command = [
-            proposal_python_executable(self.root, repository_dir, proposal),
+            proposal_python_executable(self.root, repository_dir, base_proposal),
             str(self.root / "baselines" / "bootstrap.py"),
-            proposal.entrypoint,
+            base_proposal.entrypoint,
             "--n",
             str(run["config"]["n"]),
             "--generaciones",
@@ -2267,20 +2680,58 @@ class ComparatorService:
             "--texto-referencia",
             str(reference_path),
         ]
-        return command + extra_args
+        return command + structured_args + extra_args
+
+    def _binary_managed_set_args(
+        self,
+        run: dict[str, Any],
+        proposal: ProposalDefinition,
+        output_base: Path,
+        random_seed: int | None,
+    ) -> list[str]:
+        model = str(run["config"]["model"])
+        seed = int(random_seed if random_seed is not None else run["config"]["seed"])
+        overrides: list[tuple[str, Any, str]] = [
+            ("experiment.n", int(run["config"]["n"]), "int"),
+            ("experiment.iterations", int(run["config"]["generaciones"]), "int"),
+            ("experiment.runs", 1, "int"),
+            ("experiment.seed", seed, "int"),
+            ("runtime.outdir_base", str(output_base.resolve()), "path"),
+            ("ollama.default_model", model, "string"),
+        ]
+        for path in self._binary_task_model_paths(proposal):
+            overrides.append((path, model, "string"))
+        args: list[str] = []
+        for path, value, value_type in overrides:
+            args.extend(["--set", f"{path}={self._yaml_cli_literal(value, value_type)}"])
+        return args
+
+    def _binary_task_model_paths(self, proposal: ProposalDefinition) -> list[str]:
+        paths = [
+            str(option.get("configPath"))
+            for option in proposal.cli_options
+            if str(option.get("configPath") or "").startswith(BINARY_TASK_MODEL_PREFIX)
+        ]
+        return sorted(path for path in paths if path)
 
     def _cli_args_from_values(self, proposal: ProposalDefinition, values: dict[str, Any]) -> list[str]:
         options = self._configurable_cli_options(proposal)
         args: list[str] = []
-        for flag, value in values.items():
-            option = options.get(flag)
+        for key, value in values.items():
+            option = options.get(key)
             if option is None:
-                raise ValueError(f"{proposal.display_name}: {flag} is not configurable.")
+                raise ValueError(f"{proposal.display_name}: {key} is not configurable.")
+            flag = str(option.get("flag") or key)
             option_type = str(option.get("type") or "string")
-            if option_type == "bool":
+            if flag == "--set":
+                config_path = str(option.get("configPath") or key)
+                args.extend(["--set", f"{config_path}={self._yaml_cli_literal(value, option_type)}"])
+            elif option_type == "bool":
                 if value:
                     args.append(flag)
             elif option_type in {"int", "float", "string", "path"}:
+                args.extend([flag, str(value)])
+            elif option_type == "yaml":
                 args.extend([flag, str(value)])
             elif option_type == "multi_select":
                 selected = [str(item).strip() for item in value if str(item).strip()]
@@ -2303,14 +2754,14 @@ class ComparatorService:
                 raise ValueError(f"{proposal.display_name}: unsupported option type for {flag}: {option_type}.")
         return args
 
-    def _proposal_bert_model(self, proposal: ProposalDefinition, extra_args: list[str]) -> str:
-        value = cli_option_value(extra_args, "--bert-model")
-        if value:
-            return value
-        for option in proposal.cli_options:
-            if option.get("flag") == "--bert-model":
-                return str(option.get("default") or POSTHOC_EMBEDDING_MODEL)
-        return POSTHOC_EMBEDDING_MODEL
+    def _yaml_cli_literal(self, value: Any, option_type: str) -> str:
+        if option_type == "bool":
+            return "true" if self._bool_cli_value(value, "yaml bool") else "false"
+        if option_type in {"int", "float"}:
+            return str(value)
+        if option_type == "yaml":
+            return str(value).strip()
+        return json.dumps(str(value), ensure_ascii=False)
 
     def _validate_extra_args(self, proposal: ProposalDefinition, extra_args: list[str]) -> None:
         managed_flags = {
@@ -2318,6 +2769,8 @@ class ComparatorService:
             for option in proposal.cli_options
             if option.get("source") in {"managed", "common"}
         }
+        if proposal.kind == "binary-mopso-cd":
+            managed_flags.discard("--set")
         managed_flags.update({"--outdir-base", "--texto-referencia", "--reference-text", "--seed", "--runs"})
         blocked = [
             item
@@ -2329,20 +2782,60 @@ class ComparatorService:
                 f"{proposal.display_name}: these CLI flags are managed by the comparator and cannot be overridden: "
                 + ", ".join(blocked)
             )
+        if proposal.kind == "binary-mopso-cd":
+            removed = [
+                item
+                for item in extra_args
+                if any(item == flag or item.startswith(f"{flag}=") for flag in BINARY_REMOVED_CLI_FLAGS)
+            ]
+            if removed:
+                raise ValueError(
+                    f"{proposal.display_name}: these CLI flags were removed by the new Binary CLI. "
+                    "Use the structured default.yaml controls instead: " + ", ".join(removed)
+                )
+            self._validate_binary_manual_set_args(extra_args)
+
+    def _validate_binary_manual_set_args(self, extra_args: list[str]) -> None:
+        blocked_paths: list[str] = []
+        index = 0
+        while index < len(extra_args):
+            item = extra_args[index]
+            target = ""
+            if item == "--set":
+                index += 1
+                if index >= len(extra_args):
+                    raise ValueError("Binary MOPSO-CD: --set requires path=value.")
+                target = extra_args[index]
+            elif item.startswith("--set="):
+                target = item[len("--set="):]
+            if target:
+                path = target.split("=", 1)[0].strip()
+                if not path or "=" not in target:
+                    raise ValueError("Binary MOPSO-CD: --set requires path=value.")
+                if path in BINARY_MANAGED_CONFIG_PATHS or path.startswith(BINARY_TASK_MODEL_PREFIX):
+                    blocked_paths.append(path)
+            index += 1
+        if blocked_paths:
+            raise ValueError(
+                "Binary MOPSO-CD: these YAML paths are managed by the comparator or by the structured UI: "
+                + ", ".join(blocked_paths)
+            )
 
     def _execute_proposal_once(
         self,
         run: dict[str, Any],
-        proposal: ProposalDefinition,
+        proposal: ProposalDefinition | ProposalRunInstance,
         proposal_dir: Path,
         random_seed: int | None,
     ) -> dict[str, Any]:
+        instance = self._coerce_instance(proposal, run.get("config"))
+        base_proposal = instance.proposal
         with self._lock:
             if run.get("cancelRequested"):
-                return self._cancelled_result(proposal, proposal_dir)
+                return self._cancelled_result(instance, proposal_dir)
             self._set_proposal_state_unlocked(
                 run,
-                proposal.proposal_id,
+                instance.instance_id,
                 STATUS_RUNNING,
                 "Preparando directorio de salida",
                 0.01,
@@ -2355,25 +2848,25 @@ class ComparatorService:
         output_base.mkdir(parents=True, exist_ok=True)
         cost_metrics_path = proposal_dir / "cost_metrics.json"
 
-        repository_dir = resolve_repository(self.root, proposal)
-        if not proposal_entrypoint_exists(self.root, proposal):
+        repository_dir = resolve_repository(self.root, base_proposal)
+        if not proposal_entrypoint_exists(self.root, base_proposal):
             return self._failed_result(
-                proposal,
+                instance,
                 proposal_dir,
                 f"Proposal entrypoint is missing at {repository_dir}.",
             )
 
         try:
-            command = self._build_command(run, proposal, repository_dir, output_base, reference_path, random_seed)
+            command = self._build_command(run, instance, repository_dir, output_base, reference_path, random_seed)
         except ValueError as error:
-            return self._failed_result(proposal, proposal_dir, str(error))
+            return self._failed_result(instance, proposal_dir, str(error))
 
-        self._append_log(run, proposal.proposal_id, "Starting baseline process.")
-        self._append_log(run, proposal.proposal_id, command_label(command))
+        self._append_log(run, instance.instance_id, "Starting baseline process.")
+        self._append_log(run, instance.instance_id, command_label(command))
         with self._lock:
             self._set_proposal_state_unlocked(
                 run,
-                proposal.proposal_id,
+                instance.instance_id,
                 STATUS_RUNNING,
                 "Proceso Python iniciado",
                 0.05,
@@ -2381,30 +2874,30 @@ class ComparatorService:
             self._write_summary_unlocked(run)
         process_cost = self._run_process(
             run,
-            proposal.proposal_id,
+            instance.instance_id,
             command,
             repository_dir,
-            proposal.preload_modules,
-            proposal.python_path_entries,
+            base_proposal.preload_modules,
+            base_proposal.python_path_entries,
             cost_metrics_path,
             random_seed,
-            export_history=proposal.supports_history_export,
+            export_history=base_proposal.supports_history_export,
         )
         return_code = int(process_cost["returnCode"])
         llm_payload = read_json_or_default(cost_metrics_path, {})
 
         if run.get("cancelRequested"):
-            cost = self._build_cost(proposal, process_cost, llm_payload, None, True)
-            return self._cancelled_result(proposal, proposal_dir, cost)
+            cost = self._build_cost(base_proposal, process_cost, llm_payload, None, True)
+            return self._cancelled_result(instance, proposal_dir, cost)
         if return_code != 0:
             message = (
                 f"Process timed out after {run['config']['timeoutMinutes']} minute(s)."
                 if return_code == 124
                 else f"Process exited with code {return_code}. Check dependencies, Ollama, and model availability."
             )
-            cost = self._build_cost(proposal, process_cost, llm_payload, None, False)
+            cost = self._build_cost(base_proposal, process_cost, llm_payload, None, False)
             return self._failed_result(
-                proposal,
+                instance,
                 proposal_dir,
                 message,
                 cost,
@@ -2412,14 +2905,14 @@ class ComparatorService:
 
         output_dir = latest_child_directory(output_base)
         if not output_dir:
-            cost = self._build_cost(proposal, process_cost, llm_payload, None, False)
-            return self._failed_result(proposal, proposal_dir, "No output directory was created.", cost)
+            cost = self._build_cost(base_proposal, process_cost, llm_payload, None, False)
+            return self._failed_result(instance, proposal_dir, "No output directory was created.", cost)
 
-        result_path = output_dir / proposal.result_file
+        result_path = output_dir / base_proposal.result_file
         if not result_path.exists():
-            cost = self._build_cost(proposal, process_cost, llm_payload, output_dir, False)
+            cost = self._build_cost(base_proposal, process_cost, llm_payload, output_dir, False)
             return self._failed_result(
-                proposal,
+                instance,
                 proposal_dir,
                 f"Expected result file was not found: {result_path.name}.",
                 cost,
@@ -2428,30 +2921,31 @@ class ComparatorService:
         try:
             extraction_started = time.perf_counter()
             rows = self._normalize_rows(
-                proposal,
+                base_proposal,
                 read_json(result_path),
                 run["config"]["topK"],
                 reference_text=run["config"]["referenceText"],
             )
-            cost = self._build_cost(proposal, process_cost, llm_payload, output_dir, False)
+            self._attach_instance_metadata(rows, instance)
+            cost = self._build_cost(base_proposal, process_cost, llm_payload, output_dir, False)
             add_cost_timing(cost, "metricExtractionSeconds", time.perf_counter() - extraction_started)
 
-            selected_rows, selection_seconds = self._select_final_rows(proposal, rows, output_dir)
+            selected_rows, selection_seconds = self._select_final_rows(base_proposal, rows, output_dir)
+            self._attach_instance_metadata(selected_rows, instance)
             if selection_seconds:
                 add_cost_timing(cost, "postProcessingWallClockSeconds", selection_seconds)
 
             metrics_started = time.perf_counter()
             self._mark_selected_rows(rows, selected_rows)
-            metrics = self._summarize_rows(proposal, rows, output_dir)
-            series = self._build_metric_series(proposal, output_dir, rows, run["config"]["referenceText"])
+            metrics = self._summarize_rows(base_proposal, rows, output_dir)
+            series = self._build_metric_series(base_proposal, output_dir, rows, run["config"]["referenceText"])
             add_cost_timing(cost, "metricExtractionSeconds", time.perf_counter() - metrics_started)
 
             plot_started = time.perf_counter()
-            charts = self._build_chart_payload(proposal, rows, selected_rows, series)
+            charts = self._build_chart_payload(base_proposal, rows, selected_rows, series)
             add_cost_timing(cost, "plotPreparationSeconds", time.perf_counter() - plot_started)
             return {
-                "proposalId": proposal.proposal_id,
-                "displayName": proposal.display_name,
+                **self._result_identity(instance),
                 "status": STATUS_COMPLETED,
                 "outputDir": str(output_dir),
                 "rows": rows[: run["config"]["topK"]],
@@ -2461,12 +2955,12 @@ class ComparatorService:
                 "charts": charts,
                 "cost": cost,
                 "command": command_label(command),
-                "outputFiles": self._output_files(proposal, output_dir),
+                "outputFiles": self._output_files(base_proposal, output_dir),
                 "error": None,
             }
         except Exception as error:
-            cost = self._build_cost(proposal, process_cost, llm_payload, output_dir, False)
-            return self._failed_result(proposal, proposal_dir, f"Could not normalize output: {error}", cost)
+            cost = self._build_cost(base_proposal, process_cost, llm_payload, output_dir, False)
+            return self._failed_result(instance, proposal_dir, f"Could not normalize output: {error}", cost)
 
     def _build_cost(
         self,
@@ -2582,8 +3076,10 @@ class ComparatorService:
 
     def _selected_projection(self, row: dict[str, Any], selection_rank: int, topsis_score: Any = None) -> dict[str, Any]:
         return {
+            "instanceId": row.get("instanceId"),
             "proposalId": row.get("proposalId"),
             "displayName": row.get("displayName"),
+            "baseDisplayName": row.get("baseDisplayName"),
             "selectionRank": selection_rank,
             "rank": row.get("rank"),
             "generatedText": row.get("generatedText"),
@@ -2964,6 +3460,7 @@ class ComparatorService:
         state["logs"] = int(state.get("logs") or 0) + 1
         state["status"] = STATUS_RUNNING
         state["updatedAt"] = utc_now()
+        base_proposal_id = str(state.get("proposalId") or proposal_id)
         progress_message = progress_log_payload(message)
 
         stage_match = STAGE_RE.match(progress_message)
@@ -2999,7 +3496,7 @@ class ComparatorService:
         if generation_match:
             generation_index = int(generation_match.group(1))
             generation_total = int(generation_match.group(2))
-            stage_total = max(int(state.get("stageTotal") or PROPOSAL_TOTALS.get(proposal_id, 1)), 1)
+            stage_total = max(int(state.get("stageTotal") or PROPOSAL_TOTALS.get(base_proposal_id, 1)), 1)
             stage_index = max(int(state.get("stageIndex") or stage_total), 1)
             base = clamp((stage_index - 1) / stage_total, 0.0, 0.98)
             state["generationIndex"] = generation_index
@@ -3007,7 +3504,7 @@ class ComparatorService:
             state["stageLabel"] = f"Generacion {generation_index}/{generation_total}"
             state["progress"] = clamp(base + (generation_index / max(generation_total, 1)) / stage_total, 0.0, 0.98)
             elapsed_seconds = log_elapsed_seconds(progress_message)
-            if proposal_id == "binary-mopso-cd" and not GENERATION_STARTED_RE.search(progress_message):
+            if base_proposal_id == "binary-mopso-cd" and not GENERATION_STARTED_RE.search(progress_message):
                 self._record_iteration_duration_unlocked(
                     run,
                     state,
@@ -3029,7 +3526,7 @@ class ComparatorService:
         percent_match = PERCENT_RE.search(progress_message)
         if percent_match:
             percent = clamp(float(percent_match.group(1)) / 100.0, 0.0, 1.0)
-            stage_total = max(int(state.get("stageTotal") or PROPOSAL_TOTALS.get(proposal_id, 1)), 1)
+            stage_total = max(int(state.get("stageTotal") or PROPOSAL_TOTALS.get(base_proposal_id, 1)), 1)
             stage_index = max(int(state.get("stageIndex") or 1), 1)
             base = clamp((stage_index - 1) / stage_total, 0.0, 0.98)
             state["progress"] = max(float(state.get("progress") or 0.0), clamp(base + percent / stage_total, 0.0, 0.98))
@@ -3159,6 +3656,7 @@ class ComparatorService:
             "remainingLabel": eta_fields["remainingLabel"],
             "etaBasisLabel": eta_fields["etaBasisLabel"],
             "etaScopeLabel": eta_fields["etaScopeLabel"],
+            "activeInstanceId": active.get("instanceId") if active else None,
             "activeProposalId": active.get("proposalId") if active else None,
             "activeProposalName": active.get("displayName") if active else None,
             "queuedProposals": queued,
@@ -3566,21 +4064,22 @@ class ComparatorService:
 
     def _failed_result(
         self,
-        proposal: ProposalDefinition,
+        proposal: ProposalDefinition | ProposalRunInstance,
         proposal_dir: Path,
         message: str,
         cost: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        instance = self._coerce_instance(proposal)
+        base_proposal = instance.proposal
         return {
-            "proposalId": proposal.proposal_id,
-            "displayName": proposal.display_name,
+            **self._result_identity(instance),
             "status": STATUS_FAILED,
             "outputDir": str(proposal_dir),
             "rows": [],
             "metrics": {
                 "totalRows": 0,
                 "completedRows": 0,
-                "objectiveNames": list(proposal.objective_names),
+                "objectiveNames": list(base_proposal.objective_names),
                 "bestObjectiveVector": [],
                 "bestObjectiveLabel": "--",
                 "comparableObjectiveNames": list(COMPARABLE_OBJECTIVE_NAMES),
@@ -3601,7 +4100,7 @@ class ComparatorService:
 
     def _cancelled_result(
         self,
-        proposal: ProposalDefinition,
+        proposal: ProposalDefinition | ProposalRunInstance,
         proposal_dir: Path,
         cost: dict[str, Any] | None = None,
     ) -> dict[str, Any]:

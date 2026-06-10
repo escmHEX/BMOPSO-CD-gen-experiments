@@ -345,7 +345,12 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
 
             self.send_json(404, {"error": "Not found."})
         except ValueError as error:
-            self.send_json(400, {"error": str(error)})
+            message = str(error)
+            payload = {"error": message}
+            if message.startswith("duplicateProposalInstances:"):
+                payload["code"] = "duplicateProposalInstances"
+                payload["error"] = message.split(":", 1)[1].strip()
+            self.send_json(400, payload)
         except Exception as error:
             self.send_json(500, {"error": str(error)})
 

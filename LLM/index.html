@@ -2044,7 +2044,7 @@ Context:
                   </span>
                 </label>
                 <fieldset class="span-2 checkbox-fieldset">
-                  <legend>Propuestas a ejecutar</legend>
+                  <legend>Catalogo de propuestas</legend>
                   <div id="comparatorProposalSelector" class="checkbox-grid"></div>
                 </fieldset>
               </div>
@@ -2083,8 +2083,8 @@ Context:
           <details class="panel comparator-config-disclosure">
             <summary class="disclosure-summary">
               <span>
-                <strong>Configuracion avanzada por propuesta</strong>
-                <small>Flags propios con controles visuales; salida, referencia, semilla y repeticiones las gestiona el comparador.</small>
+                <strong>Instancias a comparar</strong>
+                <small>Cada instancia ejecuta una propuesta base con configuracion propia; salida, referencia, semilla y repeticiones las gestiona el comparador.</small>
               </span>
               <b aria-hidden="true"></b>
             </summary>
@@ -2092,6 +2092,23 @@ Context:
               <div id="comparatorProposalConfigPanels" class="proposal-config-grid"></div>
             </div>
           </details>
+
+          <div id="comparatorInstanceModal" class="modal-backdrop" hidden>
+            <section class="diagnostic-modal comparator-instance-modal" role="dialog" aria-modal="true" aria-labelledby="comparatorInstanceModalTitle">
+              <div class="modal-header">
+                <div>
+                  <span class="eyebrow">Instancia de propuesta</span>
+                  <h2 id="comparatorInstanceModalTitle">Configurar instancia</h2>
+                  <p id="comparatorInstanceModalSubtitle">Ajusta solo parametros propios de la propuesta.</p>
+                </div>
+                <button id="cancelComparatorInstanceModalButton" class="secondary" type="button">Cancelar</button>
+              </div>
+              <div id="comparatorInstanceModalBody" class="modal-body"></div>
+              <div class="modal-actions">
+                <button id="saveComparatorInstanceModalButton" type="button">Guardar configuracion</button>
+              </div>
+            </section>
+          </div>
 
           <section class="metrics-grid" aria-label="Resumen del comparador">
             <article class="metric">

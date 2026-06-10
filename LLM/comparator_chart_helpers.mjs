@@ -61,7 +61,8 @@ export function comparatorIsGloballyNonDominated(point, comparisonPool) {
 
 export function comparatorCountByProposal(points) {
   return points.reduce((counts, point) => {
-    counts.set(point.proposalId, (counts.get(point.proposalId) || 0) + 1);
+    const id = point.instanceId || point.proposalId;
+    counts.set(id, (counts.get(id) || 0) + 1);
     return counts;
   }, new Map());
 }
@@ -157,7 +158,7 @@ export function comparatorBestCostProposalIds(proposals, metric, options = {}) {
       const rawValue = metric.value(proposal, cost);
       const value = rawValue === null || rawValue === undefined || rawValue === "" ? NaN : Number(rawValue);
       const reported = metric.isReported ? metric.isReported(proposal, cost) : true;
-      return { id: proposal.proposalId, value, reported };
+      return { id: proposal.instanceId || proposal.proposalId, value, reported };
     })
     .filter((entry) => entry.id && entry.reported && Number.isFinite(entry.value));
 

@@ -259,8 +259,10 @@ def chart_point_from_row(row: dict[str, Any], selected: bool = False) -> dict[st
     return {
         "x": comparable_vector[0],
         "y": comparable_vector[1],
+        "instanceId": row.get("instanceId") or row.get("proposalId") or "",
         "proposalId": row.get("proposalId") or "",
         "displayName": row.get("displayName") or "",
+        "baseDisplayName": row.get("baseDisplayName") or "",
         "label": row.get("generatedText") or "",
         "prompt": row.get("prompt") or "",
         "rank": row.get("selectionRank") if selected else row.get("rank"),

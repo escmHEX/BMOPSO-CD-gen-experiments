@@ -329,7 +329,63 @@ label span,
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }
 
-.checkbox-grid label,
+.proposal-catalog-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid #c8d7e5;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 12px;
+  box-shadow: 0 8px 24px rgba(19, 32, 44, 0.04);
+}
+
+.proposal-catalog-card p {
+  color: #52687c;
+  font-size: 0.84rem;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.proposal-catalog-head {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.proposal-catalog-head strong,
+.comparator-instance-card h3 {
+  color: #122338;
+}
+
+.proposal-catalog-head small {
+  display: block;
+  color: #52687c;
+  line-height: 1.35;
+  margin-top: 2px;
+}
+
+.proposal-catalog-status {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 2px solid #b8c9d9;
+  background: #ffffff;
+}
+
+.proposal-catalog-status.is-available {
+  border-color: #0f766e;
+  background: #0f766e;
+  box-shadow: inset 0 0 0 4px #e6f7f5;
+}
+
+.proposal-catalog-status.is-unavailable {
+  border-color: #c8d7e5;
+  background: #f3f6f9;
+}
+
+.checkbox-grid > label,
 .proposal-config-card {
   min-width: 0;
   border: 1px solid #c8d7e5;
@@ -337,7 +393,7 @@ label span,
   background: #ffffff;
 }
 
-.checkbox-grid label {
+.checkbox-grid > label {
   display: flex;
   gap: 10px;
   align-items: flex-start;
@@ -347,7 +403,7 @@ label span,
   transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
 }
 
-.checkbox-grid label:has(input:checked) {
+.checkbox-grid > label:has(input:checked) {
   border-color: rgba(15, 118, 110, 0.46);
   background: #eefaf8;
   box-shadow: 0 10px 28px rgba(15, 118, 110, 0.10);
@@ -500,6 +556,10 @@ label span,
   padding: 12px;
 }
 
+.proposal-git-config.compact {
+  padding: 10px;
+}
+
 .proposal-config-section-title {
   display: grid;
   gap: 2px;
@@ -526,6 +586,131 @@ label span,
   gap: 10px 12px;
 }
 
+.comparator-instance-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  padding: 14px;
+}
+
+.comparator-instance-card h3 {
+  margin: 2px 0 5px;
+  font-size: 1rem;
+}
+
+.comparator-instance-card p {
+  color: #52687c;
+  line-height: 1.35;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.instance-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.comparator-instance-empty {
+  padding: 16px;
+}
+
+.comparator-instance-modal .proposal-cli-fields {
+  max-height: min(52vh, 520px);
+  overflow: auto;
+  border: 1px solid #d2e0eb;
+  border-radius: 7px;
+  background: #f8fbfd;
+  padding: 12px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+  padding-top: 14px;
+}
+
+.proposal-config-group {
+  display: grid;
+  grid-column: 1 / -1;
+  min-height: 56px;
+  overflow: hidden;
+  border: 1px solid #d2e0eb;
+  border-radius: 7px;
+  background: #f8fbfd;
+}
+
+.proposal-config-group summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 12px;
+}
+
+.proposal-config-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.proposal-config-group summary strong {
+  color: #122338;
+  font-size: 0.9rem;
+}
+
+.proposal-config-group summary small {
+  display: block;
+  color: #52687c;
+  margin-top: 2px;
+}
+
+.proposal-config-group summary b {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #b8c9d9;
+  border-radius: 999px;
+  background: #ffffff;
+}
+
+.proposal-config-group summary b::before,
+.proposal-config-group summary b::after {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 9px;
+  height: 2px;
+  border-radius: 2px;
+  background: #0f766e;
+  transform: translate(-50%, -50%);
+}
+
+.proposal-config-group summary b::after {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+.proposal-config-group[open] summary {
+  border-bottom: 1px solid #d7e2eb;
+  background: #ffffff;
+}
+
+.proposal-config-group[open] summary b::after {
+  transform: translate(-50%, -50%) rotate(0deg);
+}
+
+.proposal-config-group-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 12px;
+  padding: 12px;
+}
+
 .cli-field,
 .cli-fieldset {
   min-width: 0;
@@ -534,6 +719,18 @@ label span,
 .cli-field {
   display: grid;
   gap: 6px;
+}
+
+.cli-yaml-field {
+  grid-column: span 2;
+}
+
+.cli-yaml-field textarea {
+  min-height: 72px;
+  resize: vertical;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .cli-field-checkbox {
@@ -1940,9 +2137,14 @@ td.metric-best {
   }
 
   .cli-assignment-row,
+  .comparator-instance-card,
   .proposal-config-summary,
   .disclosure-summary {
     grid-template-columns: 1fr;
+  }
+
+  .instance-card-actions {
+    justify-content: flex-start;
   }
 
   .proposal-config-meta,

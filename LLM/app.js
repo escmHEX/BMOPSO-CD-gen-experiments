@@ -370,6 +370,8 @@ let currentComparatorRunId = null;
 let comparatorPollFailureCount = 0;
 let latestComparatorRun = null;
 let comparatorProposals = [];
+let comparatorInstances = [];
+let comparatorInstanceModalState = null;
 let comparatorCharts = [];
 let comparatorChartSignature = "";
 let comparatorChoiceInstances = [];
@@ -698,6 +700,12 @@ const dom = {
   comparatorUpdateReposBeforeRun: document.querySelector("#comparatorUpdateReposBeforeRun"),
   comparatorProposalSelector: document.querySelector("#comparatorProposalSelector"),
   comparatorProposalConfigPanels: document.querySelector("#comparatorProposalConfigPanels"),
+  comparatorInstanceModal: document.querySelector("#comparatorInstanceModal"),
+  comparatorInstanceModalTitle: document.querySelector("#comparatorInstanceModalTitle"),
+  comparatorInstanceModalSubtitle: document.querySelector("#comparatorInstanceModalSubtitle"),
+  comparatorInstanceModalBody: document.querySelector("#comparatorInstanceModalBody"),
+  saveComparatorInstanceModalButton: document.querySelector("#saveComparatorInstanceModalButton"),
+  cancelComparatorInstanceModalButton: document.querySelector("#cancelComparatorInstanceModalButton"),
   comparatorN: document.querySelector("#comparatorN"),
   comparatorGeneraciones: document.querySelector("#comparatorGeneraciones"),
   runComparatorButton: document.querySelector("#runComparatorButton"),
@@ -1937,7 +1945,9 @@ async function requestReferenceTextsJson(options = {}) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || `HTTP ${response.status}`);
+    const error = new Error(payload.error || `HTTP ${response.status}`);
+    error.code = payload.code || "";
+    throw error;
   }
   return payload;
 }
@@ -4588,16 +4598,16 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
   ].forEach((field) => {
     if (field) field.disabled = isRunning;
   });
-  dom.comparatorProposalSelector.querySelectorAll("input").forEach((field) => {
-    field.disabled = isRunning || !field.dataset.available;
+  dom.comparatorProposalSelector.querySelectorAll("input, select, button").forEach((field) => {
+    const card = field.closest("[data-proposal-catalog-card]");
+    const unavailable = card?.dataset.available === "0";
+    field.disabled = isRunning || unavailable;
   });
   dom.comparatorProposalConfigPanels.querySelectorAll("input, select, textarea, button").forEach((field) => {
-    const card = field.closest("[data-proposal-config-card]");
-    field.disabled = isRunning || card?.dataset.available !== "1";
+    field.disabled = isRunning;
   });
   comparatorChoiceInstances.forEach((choice) => {
-    const card = choice.passedElement?.element?.closest("[data-proposal-config-card]");
-    if (isRunning || card?.dataset.available !== "1") {
+    if (isRunning) {
       choice.disable();
     } else {
       choice.enable();
@@ -4784,109 +4794,183 @@ function comparatorGitStatusText(proposal) {
   return `Local ${snapshot.branch || "--"} @ ${snapshot.shortCommit || "--"}${dirty}${remoteUrl}${expectedRemote}`;
 }
 
+function comparatorEntityId(item) {
+  return String(item?.instanceId || item?.proposalId || "");
+}
+
+function comparatorProposalById(proposalId) {
+  return comparatorProposals.find((proposal) => proposal.proposalId === proposalId) || null;
+}
+
+function comparatorDefaultInstanceName(proposalId) {
+  const proposal = comparatorProposalById(proposalId);
+  const baseName = proposal?.displayName || proposalId;
+  const count = comparatorInstances.filter((instance) => instance.proposalId === proposalId).length + 1;
+  return `${baseName} - config ${count}`;
+}
+
+function comparatorNextInstanceId(proposalId) {
+  let index = comparatorInstances.filter((instance) => instance.proposalId === proposalId).length + 1;
+  let candidate = `${proposalId}-${index}`;
+  const existing = new Set(comparatorInstances.map((instance) => instance.instanceId));
+  while (existing.has(candidate)) {
+    index += 1;
+    candidate = `${proposalId}-${index}`;
+  }
+  return candidate;
+}
+
+function comparatorDefaultInstances(proposals) {
+  return proposals
+    .filter((proposal) => proposal.available)
+    .map((proposal, index) => ({
+      instanceId: proposal.proposalId,
+      proposalId: proposal.proposalId,
+      displayName: proposal.displayName,
+      proposalConfig: { extraArgs: "", cliValues: {} },
+      orderIndex: index,
+    }));
+}
+
+function normalizeComparatorInstance(instance, index = 0) {
+  const proposal = comparatorProposalById(instance.proposalId);
+  const proposalId = proposal?.proposalId || instance.proposalId;
+  return {
+    instanceId: instance.instanceId || comparatorNextInstanceId(proposalId),
+    proposalId,
+    displayName: String(instance.displayName || comparatorDefaultInstanceName(proposalId)).trim(),
+    proposalConfig: {
+      extraArgs: "",
+      ...(instance.proposalConfig || {}),
+      cliValues: { ...((instance.proposalConfig || {}).cliValues || {}) },
+    },
+    orderIndex: index,
+  };
+}
+
+function ensureComparatorInstances() {
+  const availableIds = new Set(comparatorProposals.filter((proposal) => proposal.available).map((proposal) => proposal.proposalId));
+  comparatorInstances = comparatorInstances
+    .filter((instance) => availableIds.has(instance.proposalId))
+    .map((instance, index) => normalizeComparatorInstance(instance, index));
+  if (!comparatorInstances.length) {
+    comparatorInstances = comparatorDefaultInstances(comparatorProposals);
+  }
+}
+
 function renderComparatorProposalControls(proposals) {
   comparatorProposals = proposals || [];
   if (!dom.comparatorProposalSelector || !dom.comparatorProposalConfigPanels) return;
   disposeComparatorChoices();
+  ensureComparatorInstances();
   dom.comparatorProposalSelector.replaceChildren(
     ...comparatorProposals.map((proposal) => {
-      const label = document.createElement("label");
+      const card = document.createElement("article");
+      card.className = "proposal-catalog-card";
+      card.dataset.proposalCatalogCard = proposal.proposalId;
+      card.dataset.available = proposal.available ? "1" : "0";
       const missing = (proposal.dependencyStatus?.missing || []).join(", ");
       const availabilityDetail = proposal.available
         ? "Disponible"
         : missing
           ? `No disponible: faltan ${missing}`
           : "No disponible";
-      label.innerHTML = `
-        <input type="checkbox" value="${escapeHtml(proposal.proposalId)}" data-comparator-proposal="${escapeHtml(proposal.proposalId)}" ${proposal.available ? "data-available=\"1\" checked" : "disabled"}>
-        <span>
-          <strong>${escapeHtml(proposal.displayName)}</strong><br>
-          <small>${escapeHtml(availabilityDetail)} - ${escapeHtml((proposal.objectiveNames || []).join(", "))}</small>
-        </span>
-      `;
-      return label;
-    }),
-  );
-  dom.comparatorProposalConfigPanels.replaceChildren(
-    ...comparatorProposals.map((proposal) => {
-      const article = document.createElement("details");
-      article.className = "proposal-config-card proposal-config-subdisclosure";
-      article.dataset.proposalConfigCard = proposal.proposalId;
-      article.dataset.available = proposal.available ? "1" : "0";
-      const configurableOptions = comparatorConfigurableOptions(proposal);
-      const globalFlags = (proposal.cliOptions || [])
-        .filter((option) => option.source === "common")
-        .map((option) => option.flag)
-        .join(", ");
-      const managedFlags = (proposal.cliOptions || [])
-        .filter((option) => option.source === "managed")
-        .map((option) => option.flag)
-        .join(", ");
       const git = proposal.git || {};
       const gitStatus = comparatorGitStatusText(proposal);
-      article.innerHTML = `
-        <summary class="proposal-config-summary">
-          <span>
+      card.innerHTML = `
+        <div class="proposal-catalog-head">
+          <span class="proposal-catalog-status ${proposal.available ? "is-available" : "is-unavailable"}" aria-hidden="true"></span>
+          <div>
             <strong>${escapeHtml(proposal.displayName)}</strong>
-            <small>${escapeHtml(configurableOptions.length ? `${configurableOptions.length} controles configurables` : "Sin flags propios configurables")}</small>
-          </span>
-          <span class="proposal-config-meta">${escapeHtml(proposal.available ? "Disponible" : "No disponible")}</span>
-          <b aria-hidden="true"></b>
-        </summary>
-        <div class="proposal-config-body">
-          <div class="proposal-config-runtime">
-            <small>${escapeHtml(proposal.repositoryPath || "")}</small>
-            <small>Python: ${escapeHtml(proposal.pythonExecutable || "--")}</small>
-          </div>
-          <div class="proposal-git-config">
-            <div class="proposal-config-section-title">
-              <strong>Actualizacion Git</strong>
-              <small>${escapeHtml(gitStatus)}</small>
-            </div>
-            <div class="proposal-git-fields">
-              <label>
-                <span>Remote</span>
-                <input type="text" value="${escapeHtml(git.remote || "origin")}" data-comparator-git-remote data-proposal-id="${escapeHtml(proposal.proposalId)}" autocomplete="off">
-              </label>
-              <label>
-                <span>Branch</span>
-                <input type="text" value="${escapeHtml(git.branch || "")}" data-comparator-git-branch data-proposal-id="${escapeHtml(proposal.proposalId)}" autocomplete="off">
-              </label>
-              <label>
-                <span>Modo pull</span>
-                <select data-comparator-git-pull-mode data-proposal-id="${escapeHtml(proposal.proposalId)}">
-                  <option value="ff-only" ${git.pullMode === "ff-only" ? "selected" : ""}>Fast-forward only</option>
-                </select>
-              </label>
-            </div>
-          </div>
-          <div class="proposal-cli-fields" data-proposal-cli-fields></div>
-          <div class="proposal-config-footnotes">
-            <small>Globales: ${escapeHtml(globalFlags || "ninguna")}</small>
-            <small>Gestionadas por comparador: ${escapeHtml(managedFlags || "ninguna")}</small>
+            <small>${escapeHtml(availabilityDetail)} - ${escapeHtml((proposal.objectiveNames || []).join(", "))}</small>
           </div>
         </div>
+        <p>${escapeHtml(proposal.description || "")}</p>
+        <div class="proposal-git-config compact">
+          <div class="proposal-config-section-title">
+            <strong>Git</strong>
+            <small>${escapeHtml(gitStatus)}</small>
+          </div>
+          <div class="proposal-git-fields">
+            <label>
+              <span>Remote</span>
+              <input type="text" value="${escapeHtml(git.remote || "origin")}" data-comparator-git-remote data-proposal-id="${escapeHtml(proposal.proposalId)}" autocomplete="off">
+            </label>
+            <label>
+              <span>Branch</span>
+              <input type="text" value="${escapeHtml(git.branch || "")}" data-comparator-git-branch data-proposal-id="${escapeHtml(proposal.proposalId)}" autocomplete="off">
+            </label>
+            <label>
+              <span>Modo pull</span>
+              <select data-comparator-git-pull-mode data-proposal-id="${escapeHtml(proposal.proposalId)}">
+                <option value="ff-only" ${git.pullMode === "ff-only" ? "selected" : ""}>Fast-forward only</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <button type="button" class="secondary" data-add-comparator-instance="${escapeHtml(proposal.proposalId)}" ${proposal.available ? "" : "disabled"}>Agregar configuracion</button>
       `;
-      const fields = article.querySelector("[data-proposal-cli-fields]");
-      if (configurableOptions.length) {
-        fields.replaceChildren(...configurableOptions.map((option) => renderComparatorCliOption(proposal, option)));
-      } else {
-        fields.innerHTML = '<p class="muted-note">Esta propuesta no expone flags propios adicionales.</p>';
-      }
-      if (!proposal.available) {
-        article.querySelectorAll("input, select, textarea, button").forEach((field) => {
-          field.disabled = true;
-        });
-      }
+      return card;
+    }),
+  );
+  renderComparatorInstanceList();
+}
+
+function renderComparatorInstanceList() {
+  if (!dom.comparatorProposalConfigPanels) return;
+  if (!comparatorInstances.length) {
+    dom.comparatorProposalConfigPanels.innerHTML = `
+      <article class="proposal-config-card comparator-instance-empty">
+        <strong>Sin instancias configuradas</strong>
+        <p>Agrega una configuracion desde el catalogo de propuestas para ejecutar el comparador.</p>
+      </article>
+    `;
+    return;
+  }
+  dom.comparatorProposalConfigPanels.replaceChildren(
+    ...comparatorInstances.map((instance) => {
+      const proposal = comparatorProposalById(instance.proposalId);
+      const article = document.createElement("article");
+      article.className = "proposal-config-card comparator-instance-card";
+      article.dataset.comparatorInstanceCard = instance.instanceId;
+      article.dataset.proposalId = instance.proposalId;
+      article.innerHTML = `
+        <div>
+          <span class="eyebrow">${escapeHtml(proposal?.displayName || instance.proposalId)}</span>
+          <h3>${escapeHtml(instance.displayName || instance.instanceId)}</h3>
+          <p>${escapeHtml(comparatorInstanceConfigSummary(instance))}</p>
+        </div>
+        <div class="instance-card-actions">
+          <button type="button" class="secondary" data-edit-comparator-instance="${escapeHtml(instance.instanceId)}">Editar</button>
+          <button type="button" class="secondary" data-duplicate-comparator-instance="${escapeHtml(instance.instanceId)}">Duplicar</button>
+          <button type="button" class="danger" data-delete-comparator-instance="${escapeHtml(instance.instanceId)}">Eliminar</button>
+        </div>
+      `;
       return article;
     }),
   );
-  enhanceComparatorSelects();
 }
 
-function enhanceComparatorSelects() {
+function comparatorInstanceConfigSummary(instance) {
+  const values = instance.proposalConfig?.cliValues || {};
+  const keys = Object.keys(values);
+  if (!keys.length && !instance.proposalConfig?.extraArgs) {
+    return "Configuracion por defecto de la propuesta.";
+  }
+  const preview = keys.slice(0, 4).map((key) => `${key}=${comparatorPreviewValue(values[key])}`);
+  const remaining = keys.length > preview.length ? `; +${keys.length - preview.length} cambio(s)` : "";
+  return `${preview.join("; ")}${remaining}`;
+}
+
+function comparatorPreviewValue(value) {
+  if (Array.isArray(value)) return `[${value.join(", ")}]`;
+  if (value && typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function enhanceComparatorSelects(container = dom.comparatorProposalConfigPanels) {
   if (!window.Choices) return;
-  dom.comparatorProposalConfigPanels.querySelectorAll("select.cli-select").forEach((select) => {
+  container.querySelectorAll("select.cli-select").forEach((select) => {
     comparatorChoiceInstances.push(new window.Choices(select, {
       allowHTML: false,
       searchEnabled: false,
@@ -4900,18 +4984,76 @@ function comparatorConfigurableOptions(proposal) {
   return (proposal.cliOptions || []).filter((option) => option.source !== "managed" && option.source !== "common");
 }
 
+function comparatorOptionKey(option) {
+  return String(option.key || option.configPath || option.flag || "");
+}
+
+function comparatorOptionDescriptor(option) {
+  return option.configPath ? `${option.flag} ${option.configPath}` : String(option.flag || comparatorOptionKey(option));
+}
+
 function comparatorOptionLabel(option) {
   if (option.label) return String(option.label);
+  if (option.configPath) return String(option.configPath).split(".").at(-1).replace(/_/g, " ");
   return String(option.flag || "").replace(/^--/, "").replace(/-/g, " ");
 }
 
 function comparatorOptionInputId(proposal, option, suffix = "") {
-  const raw = `${proposal.proposalId}-${option.flag || ""}-${suffix}`;
+  const raw = `${proposal.proposalId}-${comparatorOptionKey(option)}-${suffix}`;
   return `cli-${raw.replace(/[^A-Za-z0-9_-]+/g, "-")}`;
+}
+
+function comparatorOptionHelp(option) {
+  const details = [];
+  if (option.configPath) details.push(option.configPath);
+  else if (option.flag) details.push(option.flag);
+  if (option.default !== undefined) {
+    const defaultText = typeof option.default === "string" ? option.default : JSON.stringify(option.default);
+    details.push(`default: ${defaultText}`);
+  }
+  if (option.help) details.push(option.help);
+  return details.join(" - ");
+}
+
+function renderComparatorCliFields(proposal, options) {
+  if (proposal.kind !== "binary-mopso-cd") {
+    return options.map((option) => renderComparatorCliOption(proposal, option));
+  }
+  const standalone = options.filter((option) => !option.configPath);
+  const groupedOptions = options.filter((option) => option.configPath);
+  const nodes = standalone.map((option) => renderComparatorCliOption(proposal, option));
+  const groups = new Map();
+  groupedOptions.forEach((option) => {
+    const group = option.group || String(option.configPath || "").split(".")[0] || "config";
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(option);
+  });
+  Array.from(groups.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .forEach(([group, groupOptions]) => {
+      const details = document.createElement("details");
+      details.className = "proposal-config-group";
+      details.innerHTML = `
+        <summary>
+          <span>
+            <strong>${escapeHtml(group)}</strong>
+            <small>${escapeHtml(groupOptions.length)} parametro(s) desde default.yaml</small>
+          </span>
+          <b aria-hidden="true"></b>
+        </summary>
+        <div class="proposal-config-group-body"></div>
+      `;
+      details.querySelector(".proposal-config-group-body").replaceChildren(
+        ...groupOptions.map((option) => renderComparatorCliOption(proposal, option)),
+      );
+      nodes.push(details);
+    });
+  return nodes;
 }
 
 function renderComparatorCliOption(proposal, option) {
   const type = option.type || "string";
+  if (type === "yaml") return renderComparatorYamlOption(proposal, option);
   if (type === "bool") return renderComparatorBoolOption(proposal, option);
   if (type === "multi_select") return renderComparatorMultiSelectOption(proposal, option);
   if (type === "repeatable_assignment_bool") return renderComparatorAssignmentBoolOption(proposal, option);
@@ -4924,28 +5066,63 @@ function renderComparatorScalarOption(proposal, option) {
   const wrapper = document.createElement("label");
   wrapper.className = "cli-field";
   const inputId = comparatorOptionInputId(proposal, option);
+  const optionKey = comparatorOptionKey(option);
   const isNumber = option.type === "int" || option.type === "float";
   const inputType = isNumber ? "number" : "text";
   const datalistId = option.choices?.length ? `${inputId}-choices` : "";
   const defaultValue = option.default === undefined ? "" : String(option.default);
   wrapper.innerHTML = `
     <span>${escapeHtml(comparatorOptionLabel(option))}</span>
-    <input id="${escapeHtml(inputId)}" type="${inputType}" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="${escapeHtml(option.type || "string")}" ${datalistId ? `list="${escapeHtml(datalistId)}"` : ""} ${option.min !== undefined ? `min="${escapeHtml(option.min)}"` : ""} ${option.max !== undefined ? `max="${escapeHtml(option.max)}"` : ""} ${option.step !== undefined ? `step="${escapeHtml(option.step)}"` : isNumber ? 'step="any"' : ""} placeholder="${escapeHtml(defaultValue)}">
+    <input id="${escapeHtml(inputId)}" type="${inputType}" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="${escapeHtml(option.type || "string")}" ${datalistId ? `list="${escapeHtml(datalistId)}"` : ""} ${option.min !== undefined ? `min="${escapeHtml(option.min)}"` : ""} ${option.max !== undefined ? `max="${escapeHtml(option.max)}"` : ""} ${option.step !== undefined ? `step="${escapeHtml(option.step)}"` : isNumber ? 'step="any"' : ""} placeholder="${escapeHtml(defaultValue)}">
     ${datalistId ? `<datalist id="${escapeHtml(datalistId)}">${option.choices.map((choice) => `<option value="${escapeHtml(choice)}"></option>`).join("")}</datalist>` : ""}
-    <small>${escapeHtml(option.flag)}${option.default !== undefined ? ` - default: ${option.default}` : ""}</small>
+    <small>${escapeHtml(comparatorOptionHelp(option))}</small>
+  `;
+  return wrapper;
+}
+
+function renderComparatorYamlOption(proposal, option) {
+  const wrapper = document.createElement("label");
+  wrapper.className = "cli-field cli-yaml-field";
+  const inputId = comparatorOptionInputId(proposal, option);
+  const optionKey = comparatorOptionKey(option);
+  const defaultValue = option.default === undefined ? "" : JSON.stringify(option.default);
+  wrapper.innerHTML = `
+    <span>${escapeHtml(comparatorOptionLabel(option))}</span>
+    <textarea id="${escapeHtml(inputId)}" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="yaml" placeholder="${escapeHtml(defaultValue)}"></textarea>
+    <small>${escapeHtml(comparatorOptionHelp(option))}</small>
   `;
   return wrapper;
 }
 
 function renderComparatorBoolOption(proposal, option) {
+  if (option.allowFalse) {
+    return renderComparatorBoolSelectOption(proposal, option);
+  }
   const label = document.createElement("label");
   label.className = "cli-field cli-field-checkbox";
+  const optionKey = comparatorOptionKey(option);
   label.innerHTML = `
-    <input type="checkbox" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="bool">
+    <input type="checkbox" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="bool">
     <span>
       <strong>${escapeHtml(comparatorOptionLabel(option))}</strong>
-      <small>${escapeHtml(option.flag)}</small>
+      <small>${escapeHtml(comparatorOptionHelp(option))}</small>
     </span>
+  `;
+  return label;
+}
+
+function renderComparatorBoolSelectOption(proposal, option) {
+  const label = document.createElement("label");
+  label.className = "cli-field";
+  const optionKey = comparatorOptionKey(option);
+  label.innerHTML = `
+    <span>${escapeHtml(comparatorOptionLabel(option))}</span>
+    <select class="cli-select" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="bool">
+      <option value="">Sin cambio</option>
+      <option value="true">true</option>
+      <option value="false">false</option>
+    </select>
+    <small>${escapeHtml(comparatorOptionHelp(option))}</small>
   `;
   return label;
 }
@@ -4955,19 +5132,20 @@ function renderComparatorMultiSelectOption(proposal, option) {
   fieldset.className = "cli-fieldset cli-choice-grid";
   fieldset.innerHTML = `<legend>${escapeHtml(comparatorOptionLabel(option))}</legend>`;
   const choices = Array.isArray(option.choices) ? option.choices : [];
+  const optionKey = comparatorOptionKey(option);
   fieldset.append(
     ...choices.map((choice) => {
       const label = document.createElement("label");
       label.className = "cli-field-checkbox";
       label.innerHTML = `
-        <input type="checkbox" value="${escapeHtml(choice)}" data-comparator-cli-multi data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-flag="${escapeHtml(option.flag)}">
+        <input type="checkbox" value="${escapeHtml(choice)}" data-comparator-cli-multi data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}">
         <span>${escapeHtml(choice)}</span>
       `;
       return label;
     }),
   );
   const note = document.createElement("small");
-  note.textContent = option.flag;
+  note.textContent = comparatorOptionHelp(option);
   fieldset.append(note);
   return fieldset;
 }
@@ -4980,9 +5158,10 @@ function renderComparatorAssignmentBoolOption(proposal, option) {
     ...comparatorOptionAssignments(option).map((assignment) => {
       const label = document.createElement("label");
       label.className = "cli-assignment-row";
+      const optionKey = comparatorOptionKey(option);
       label.innerHTML = `
         <span>${escapeHtml(assignment.label || assignment.name)}</span>
-        <select class="cli-select" data-comparator-cli-assignment data-assignment-kind="bool" data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-flag="${escapeHtml(option.flag)}" data-assignment-name="${escapeHtml(assignment.name)}">
+        <select class="cli-select" data-comparator-cli-assignment data-assignment-kind="bool" data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}" data-assignment-name="${escapeHtml(assignment.name)}">
           <option value="">Sin cambio</option>
           <option value="true">Activar</option>
           <option value="false">Desactivar</option>
@@ -5002,9 +5181,10 @@ function renderComparatorAssignmentOption(proposal, option) {
     ...comparatorOptionAssignments(option).map((assignment) => {
       const label = document.createElement("label");
       label.className = "cli-assignment-row";
+      const optionKey = comparatorOptionKey(option);
       label.innerHTML = `
         <span>${escapeHtml(assignment.label || assignment.name)}</span>
-        <input type="text" data-comparator-cli-assignment data-assignment-kind="string" data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-flag="${escapeHtml(option.flag)}" data-assignment-name="${escapeHtml(assignment.name)}" placeholder="Modelo opcional">
+        <input type="text" data-comparator-cli-assignment data-assignment-kind="string" data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}" data-assignment-name="${escapeHtml(assignment.name)}" placeholder="Modelo opcional">
       `;
       return label;
     }),
@@ -5016,12 +5196,13 @@ function renderComparatorRepeatableOption(proposal, option) {
   const fieldset = document.createElement("fieldset");
   fieldset.className = "cli-fieldset cli-repeat-fieldset";
   fieldset.innerHTML = `<legend>${escapeHtml(comparatorOptionLabel(option))}</legend>`;
+  const optionKey = comparatorOptionKey(option);
   for (let index = 0; index < 3; index += 1) {
     const label = document.createElement("label");
     label.className = "cli-field";
     label.innerHTML = `
       <span>Valor ${index + 1}</span>
-      <input type="text" data-comparator-cli-repeat data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-flag="${escapeHtml(option.flag)}">
+      <input type="text" data-comparator-cli-repeat data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}">
     `;
     fieldset.append(label);
   }
@@ -5033,55 +5214,262 @@ function comparatorOptionAssignments(option) {
 }
 
 function selectedComparatorProposalIds() {
-  return Array.from(dom.comparatorProposalSelector.querySelectorAll("[data-comparator-proposal]:checked"))
-    .map((input) => input.dataset.comparatorProposal)
-    .filter(Boolean);
+  return Array.from(new Set(comparatorInstances.map((instance) => instance.proposalId).filter(Boolean)));
 }
 
 function comparatorProposalConfigs() {
   const configs = {};
-  comparatorProposals.forEach((proposal) => {
-    configs[proposal.proposalId] = { cliValues: {} };
-  });
-  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-cli-value]").forEach((field) => {
-    const proposalId = field.dataset.proposalId;
-    const flag = field.dataset.cliFlag;
-    if (!proposalId || !flag) return;
-    const type = field.dataset.cliType || "string";
-    const value = type === "bool" ? field.checked : field.value.trim();
-    if (type === "bool" ? value : value !== "") {
-      configs[proposalId].cliValues[flag] = value;
-    }
-  });
-  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-cli-multi]").forEach((field) => {
-    if (!field.checked) return;
-    const proposalId = field.dataset.proposalId;
-    const flag = field.dataset.cliFlag;
-    if (!proposalId || !flag) return;
-    const values = configs[proposalId].cliValues[flag] || [];
-    values.push(field.value);
-    configs[proposalId].cliValues[flag] = values;
-  });
-  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-cli-repeat]").forEach((field) => {
-    const proposalId = field.dataset.proposalId;
-    const flag = field.dataset.cliFlag;
-    const value = field.value.trim();
-    if (!proposalId || !flag || !value) return;
-    const values = configs[proposalId].cliValues[flag] || [];
-    values.push(value);
-    configs[proposalId].cliValues[flag] = values;
-  });
-  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-cli-assignment]").forEach((field) => {
-    const proposalId = field.dataset.proposalId;
-    const flag = field.dataset.cliFlag;
-    const assignmentName = field.dataset.assignmentName;
-    const value = field.value.trim();
-    if (!proposalId || !flag || !assignmentName || value === "") return;
-    const values = configs[proposalId].cliValues[flag] || {};
-    values[assignmentName] = field.dataset.assignmentKind === "bool" ? value === "true" : value;
-    configs[proposalId].cliValues[flag] = values;
+  comparatorInstances.forEach((instance) => {
+    configs[instance.proposalId] = configs[instance.proposalId] || instance.proposalConfig || { cliValues: {} };
   });
   return configs;
+}
+
+function comparatorProposalInstancesPayload() {
+  return comparatorInstances.map((instance, index) => ({
+    instanceId: instance.instanceId,
+    proposalId: instance.proposalId,
+    displayName: instance.displayName,
+    proposalConfig: instance.proposalConfig || { extraArgs: "", cliValues: {} },
+    orderIndex: index,
+  }));
+}
+
+function collectComparatorCliValues(container) {
+  const cliValues = {};
+  container.querySelectorAll("[data-comparator-cli-value]").forEach((field) => {
+    const key = field.dataset.cliKey || field.dataset.cliFlag;
+    if (!key) return;
+    const type = field.dataset.cliType || "string";
+    let value;
+    if (type === "bool" && field.tagName === "SELECT") {
+      value = field.value;
+    } else if (type === "bool") {
+      value = field.checked;
+    } else {
+      value = field.value.trim();
+    }
+    const isBoolSelect = type === "bool" && field.tagName === "SELECT";
+    const shouldInclude = isBoolSelect ? value !== "" : type === "bool" ? value : value !== "";
+    if (shouldInclude) {
+      cliValues[key] = type === "bool" && typeof value === "string" ? value === "true" : value;
+    }
+  });
+  container.querySelectorAll("[data-comparator-cli-multi]").forEach((field) => {
+    if (!field.checked) return;
+    const key = field.dataset.cliKey || field.dataset.cliFlag;
+    if (!key) return;
+    const values = cliValues[key] || [];
+    values.push(field.value);
+    cliValues[key] = values;
+  });
+  container.querySelectorAll("[data-comparator-cli-repeat]").forEach((field) => {
+    const key = field.dataset.cliKey || field.dataset.cliFlag;
+    const value = field.value.trim();
+    if (!key || !value) return;
+    const values = cliValues[key] || [];
+    values.push(value);
+    cliValues[key] = values;
+  });
+  container.querySelectorAll("[data-comparator-cli-assignment]").forEach((field) => {
+    const key = field.dataset.cliKey || field.dataset.cliFlag;
+    const assignmentName = field.dataset.assignmentName;
+    const value = field.value.trim();
+    if (!key || !assignmentName || value === "") return;
+    const values = cliValues[key] || {};
+    values[assignmentName] = field.dataset.assignmentKind === "bool" ? value === "true" : value;
+    cliValues[key] = values;
+  });
+  return cliValues;
+}
+
+function applyComparatorCliValues(container, cliValues = {}) {
+  container.querySelectorAll("[data-comparator-cli-value]").forEach((field) => {
+    const key = field.dataset.cliKey || field.dataset.cliFlag;
+    if (!key || !(key in cliValues)) return;
+    const value = cliValues[key];
+    const type = field.dataset.cliType || "string";
+    if (type === "bool" && field.tagName === "SELECT") {
+      field.value = value === true ? "true" : value === false ? "false" : "";
+    } else if (type === "bool") {
+      field.checked = Boolean(value);
+    } else {
+      field.value = String(value);
+    }
+  });
+  container.querySelectorAll("[data-comparator-cli-multi]").forEach((field) => {
+    const key = field.dataset.cliKey || field.dataset.cliFlag;
+    const values = Array.isArray(cliValues[key]) ? cliValues[key].map(String) : [];
+    field.checked = values.includes(field.value);
+  });
+  const repeatPositions = new Map();
+  container.querySelectorAll("[data-comparator-cli-repeat]").forEach((field) => {
+    const key = field.dataset.cliKey || field.dataset.cliFlag;
+    const values = Array.isArray(cliValues[key]) ? cliValues[key] : [];
+    const position = repeatPositions.get(key) || 0;
+    field.value = values[position] === undefined ? "" : String(values[position]);
+    repeatPositions.set(key, position + 1);
+  });
+  container.querySelectorAll("[data-comparator-cli-assignment]").forEach((field) => {
+    const key = field.dataset.cliKey || field.dataset.cliFlag;
+    const assignmentName = field.dataset.assignmentName;
+    const values = cliValues[key] && typeof cliValues[key] === "object" ? cliValues[key] : {};
+    const value = values[assignmentName];
+    if (value === undefined) {
+      field.value = "";
+    } else if (field.dataset.assignmentKind === "bool") {
+      field.value = value ? "true" : "false";
+    } else {
+      field.value = String(value);
+    }
+  });
+}
+
+function openComparatorInstanceModal(proposalId, instanceId = null, duplicate = false) {
+  const proposal = comparatorProposalById(proposalId);
+  if (!proposal || !proposal.available) return;
+  disposeComparatorChoices();
+  const existing = instanceId ? comparatorInstances.find((instance) => instance.instanceId === instanceId) : null;
+  const draft = existing
+    ? normalizeComparatorInstance({
+        ...existing,
+        instanceId: duplicate ? comparatorNextInstanceId(proposalId) : existing.instanceId,
+        displayName: duplicate ? `${existing.displayName} copia` : existing.displayName,
+        proposalConfig: {
+          extraArgs: "",
+          cliValues: { ...((existing.proposalConfig || {}).cliValues || {}) },
+        },
+      })
+    : normalizeComparatorInstance({
+        instanceId: comparatorNextInstanceId(proposalId),
+        proposalId,
+        displayName: comparatorDefaultInstanceName(proposalId),
+        proposalConfig: { extraArgs: "", cliValues: {} },
+      });
+  comparatorInstanceModalState = {
+    mode: existing && !duplicate ? "edit" : "add",
+    originalInstanceId: existing && !duplicate ? existing.instanceId : null,
+    draft,
+  };
+
+  const configurableOptions = comparatorConfigurableOptions(proposal);
+  const globalFlags = (proposal.cliOptions || [])
+    .filter((option) => option.source === "common")
+    .map((option) => comparatorOptionDescriptor(option))
+    .join(", ");
+  const managedFlags = (proposal.cliOptions || [])
+    .filter((option) => option.source === "managed")
+    .map((option) => comparatorOptionDescriptor(option))
+    .join(", ");
+  dom.comparatorInstanceModalTitle.textContent = existing && !duplicate
+    ? `Editar ${draft.displayName}`
+    : `Agregar ${proposal.displayName}`;
+  dom.comparatorInstanceModalSubtitle.textContent = "Los parametros comunes N, G, semilla, K, referencia y modelo quedan fuera de esta configuracion.";
+  dom.saveComparatorInstanceModalButton.hidden = false;
+  dom.saveComparatorInstanceModalButton.disabled = false;
+  dom.saveComparatorInstanceModalButton.textContent = "Guardar configuracion";
+  dom.cancelComparatorInstanceModalButton.textContent = "Cancelar";
+  dom.comparatorInstanceModalBody.innerHTML = `
+    <label class="cli-field">
+      <span>Nombre de instancia</span>
+      <input type="text" data-comparator-instance-name value="${escapeHtml(draft.displayName)}" autocomplete="off">
+      <small>Este nombre aparece en columnas, filtros, logs y graficos.</small>
+    </label>
+    <div class="proposal-config-runtime">
+      <small>${escapeHtml(proposal.repositoryPath || "")}</small>
+      <small>Python: ${escapeHtml(proposal.pythonExecutable || "--")}</small>
+    </div>
+    <div class="proposal-cli-fields" data-instance-cli-fields></div>
+    <div class="proposal-config-footnotes">
+      <small>Globales: ${escapeHtml(globalFlags || "ninguna")}</small>
+      <small>Gestionadas por comparador: ${escapeHtml(managedFlags || "ninguna")}</small>
+    </div>
+  `;
+  const fields = dom.comparatorInstanceModalBody.querySelector("[data-instance-cli-fields]");
+  if (configurableOptions.length) {
+    fields.replaceChildren(...renderComparatorCliFields(proposal, configurableOptions));
+    applyComparatorCliValues(fields, draft.proposalConfig?.cliValues || {});
+    enhanceComparatorSelects(fields);
+  } else {
+    fields.innerHTML = '<p class="muted-note">Esta propuesta no expone flags propios adicionales.</p>';
+  }
+  dom.comparatorInstanceModal.hidden = false;
+  dom.comparatorInstanceModalBody.querySelector("[data-comparator-instance-name]")?.focus();
+}
+
+function openComparatorMessageModal(title, message) {
+  disposeComparatorChoices();
+  comparatorInstanceModalState = { mode: "message" };
+  dom.comparatorInstanceModalTitle.textContent = title;
+  dom.comparatorInstanceModalSubtitle.textContent = "";
+  dom.comparatorInstanceModalBody.innerHTML = `<div class="diagnostic-block diagnostic-error"><p>${escapeHtml(message)}</p></div>`;
+  dom.saveComparatorInstanceModalButton.hidden = true;
+  dom.cancelComparatorInstanceModalButton.textContent = "Cerrar";
+  dom.comparatorInstanceModal.hidden = false;
+  dom.cancelComparatorInstanceModalButton.focus();
+}
+
+function closeComparatorInstanceModal() {
+  comparatorInstanceModalState = null;
+  disposeComparatorChoices();
+  dom.comparatorInstanceModal.hidden = true;
+  dom.comparatorInstanceModalBody.replaceChildren();
+  dom.saveComparatorInstanceModalButton.hidden = false;
+  dom.cancelComparatorInstanceModalButton.textContent = "Cancelar";
+}
+
+function saveComparatorInstanceModal() {
+  if (!comparatorInstanceModalState || comparatorInstanceModalState.mode === "message") return;
+  const nameInput = dom.comparatorInstanceModalBody.querySelector("[data-comparator-instance-name]");
+  const displayName = String(nameInput?.value || "").trim();
+  if (!displayName) {
+    nameInput?.focus();
+    return;
+  }
+  const fields = dom.comparatorInstanceModalBody.querySelector("[data-instance-cli-fields]");
+  const draft = {
+    ...comparatorInstanceModalState.draft,
+    displayName,
+    proposalConfig: {
+      extraArgs: "",
+      cliValues: fields ? collectComparatorCliValues(fields) : {},
+    },
+  };
+  if (comparatorInstanceModalState.mode === "edit") {
+    comparatorInstances = comparatorInstances.map((instance) =>
+      instance.instanceId === comparatorInstanceModalState.originalInstanceId ? draft : instance,
+    );
+  } else {
+    comparatorInstances = [...comparatorInstances, draft];
+  }
+  renderComparatorInstanceList();
+  closeComparatorInstanceModal();
+}
+
+function deleteComparatorInstance(instanceId) {
+  comparatorInstances = comparatorInstances.filter((instance) => instance.instanceId !== instanceId);
+  renderComparatorInstanceList();
+}
+
+function findDuplicateComparatorInstances() {
+  const seen = new Map();
+  for (const instance of comparatorInstances) {
+    const canonical = JSON.stringify(instance.proposalConfig || { extraArgs: "", cliValues: {} }, (_key, value) => {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        return Object.keys(value).sort().reduce((acc, key) => {
+          acc[key] = value[key];
+          return acc;
+        }, {});
+      }
+      return value;
+    });
+    const key = `${instance.proposalId}::${canonical}`;
+    if (seen.has(key)) {
+      return { first: seen.get(key), second: instance };
+    }
+    seen.set(key, instance);
+  }
+  return null;
 }
 
 function comparatorProposalGitConfigs() {
@@ -5095,19 +5483,19 @@ function comparatorProposalGitConfigs() {
       expectedRemoteUrl: git.expectedRemoteUrl || "",
     };
   });
-  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-git-remote]").forEach((field) => {
+  dom.comparatorProposalSelector.querySelectorAll("[data-comparator-git-remote]").forEach((field) => {
     const proposalId = field.dataset.proposalId;
     if (!proposalId) return;
     configs[proposalId] = configs[proposalId] || {};
     configs[proposalId].remote = field.value.trim();
   });
-  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-git-branch]").forEach((field) => {
+  dom.comparatorProposalSelector.querySelectorAll("[data-comparator-git-branch]").forEach((field) => {
     const proposalId = field.dataset.proposalId;
     if (!proposalId) return;
     configs[proposalId] = configs[proposalId] || {};
     configs[proposalId].branch = field.value.trim();
   });
-  dom.comparatorProposalConfigPanels.querySelectorAll("[data-comparator-git-pull-mode]").forEach((field) => {
+  dom.comparatorProposalSelector.querySelectorAll("[data-comparator-git-pull-mode]").forEach((field) => {
     const proposalId = field.dataset.proposalId;
     if (!proposalId) return;
     configs[proposalId] = configs[proposalId] || {};
@@ -5127,7 +5515,15 @@ function readComparatorConfig() {
     throw new Error("Define el modelo Ollama.");
   }
   if (!selectedProposalIds.length) {
-    throw new Error("Selecciona al menos una propuesta.");
+    throw new Error("Agrega al menos una instancia de propuesta.");
+  }
+  const duplicate = findDuplicateComparatorInstances();
+  if (duplicate) {
+    const message = `No se puede ejecutar porque estas instancias no difieren en configuracion: ${duplicate.first.displayName} y ${duplicate.second.displayName}.`;
+    openComparatorMessageModal("Configuraciones duplicadas", message);
+    const error = new Error(message);
+    error.code = "duplicateProposalInstances";
+    throw error;
   }
 
   return {
@@ -5135,6 +5531,7 @@ function readComparatorConfig() {
     model,
     selectedProposalIds,
     proposalConfigs: comparatorProposalConfigs(),
+    proposalInstances: comparatorProposalInstancesPayload(),
     executionMode: dom.comparatorExecutionMode?.value || "fair_sequential",
     updateRepositoriesBeforeRun: Boolean(dom.comparatorUpdateReposBeforeRun?.checked),
     proposalGitConfigs: comparatorProposalGitConfigs(),
@@ -5185,7 +5582,7 @@ async function loadComparatorProposals() {
       .map((proposal) => `${proposal.displayName}: ${proposal.git?.remote || "origin"}/${proposal.git?.branch || "--"} (${proposal.git?.pullMode || "ff-only"})`)
       .join("; ");
     renderDefinitionList(dom.comparatorIntegrationDetails, [
-      ["Contrato", "{proposalId, displayName, rows, metrics, outputDir, status}"],
+      ["Contrato", "{instanceId, proposalId, displayName, rows, metrics, outputDir, status}"],
       ["Propuestas", proposalSummary],
       ["Git antes de ejecutar", `${payload.defaults?.updateRepositoriesBeforeRun ? "Activado" : "Desactivado"}; ${gitSummary}`],
       ["EVOLMD", "data_final_evaluada.json -> [fitness]"],
@@ -5196,7 +5593,7 @@ async function loadComparatorProposals() {
     ]);
   } catch (error) {
     renderDefinitionList(dom.comparatorIntegrationDetails, [
-      ["Contrato", "{proposalId, displayName, rows, metrics, outputDir, status}"],
+      ["Contrato", "{instanceId, proposalId, displayName, rows, metrics, outputDir, status}"],
       ["API", `No se pudo consultar el backend: ${error.message}`],
     ]);
   }
@@ -5207,7 +5604,8 @@ async function runComparator() {
   try {
     config = readComparatorConfig();
   } catch (error) {
-    setStatus(dom.comparatorStatusTone, dom.comparatorStatusTitle, dom.comparatorStatusDetail, "Configuracion incompleta", error.message, "error");
+    const title = error.code === "duplicateProposalInstances" ? "Configuraciones duplicadas" : "Configuracion incompleta";
+    setStatus(dom.comparatorStatusTone, dom.comparatorStatusTitle, dom.comparatorStatusDetail, title, error.message, "error");
     return;
   }
 
@@ -5250,6 +5648,9 @@ async function runComparator() {
     dom.comparatorConnectionDot.classList.add("is-error");
     dom.comparatorConnectionText.textContent = "Error";
     setComparatorRunning(false);
+    if (error.code === "duplicateProposalInstances") {
+      openComparatorMessageModal("Configuraciones duplicadas", error.message);
+    }
     setStatus(dom.comparatorStatusTone, dom.comparatorStatusTitle, dom.comparatorStatusDetail, "Error al iniciar", error.message, "error");
   }
 }
@@ -5408,16 +5809,16 @@ function flattenComparatorRows(run) {
 }
 
 function comparatorProposalViews(run) {
-  const finalById = new Map((run.proposals || []).map((proposal) => [proposal.proposalId, proposal]));
+  const finalById = new Map((run.proposals || []).map((proposal) => [comparatorEntityId(proposal), proposal]));
   const states = Object.values(run.proposalStates || {});
   const merged = states.map((state) => ({
     ...state,
-    ...(finalById.get(state.proposalId) || {}),
+    ...(finalById.get(comparatorEntityId(state)) || {}),
     progressState: state,
   }));
-  const knownIds = new Set(merged.map((proposal) => proposal.proposalId));
+  const knownIds = new Set(merged.map((proposal) => comparatorEntityId(proposal)));
   for (const proposal of run.proposals || []) {
-    if (!knownIds.has(proposal.proposalId)) {
+    if (!knownIds.has(comparatorEntityId(proposal))) {
       merged.push(proposal);
     }
   }
@@ -5851,7 +6252,7 @@ function comparatorCostMetricCell(proposal, metric, winners) {
   const rawValue = metric.value(proposal, cost);
   const value = rawValue === null || rawValue === undefined || rawValue === "" ? NaN : Number(rawValue);
   const reported = Number.isFinite(value) && (!metric.isReported || metric.isReported(proposal, cost));
-  const best = proposal.status === "completed" && reported && winners.has(proposal.proposalId);
+  const best = proposal.status === "completed" && reported && winners.has(comparatorEntityId(proposal));
   const label = reported ? metric.format(proposal, cost) : "No reportado";
   const className = best ? "metric-best comparator-cost-best" : "";
   return `<td class="${className}">${best ? `<strong>${escapeHtml(label)}</strong>` : escapeHtml(label)}</td>`;
@@ -5910,6 +6311,7 @@ function comparatorChartsSignature(run) {
     runId: run.runId || "",
     filters: Array.from(comparatorChartFilterIds).sort(),
     proposals: (run.proposals || []).map((proposal) => ({
+      instanceId: comparatorEntityId(proposal),
       proposalId: proposal.proposalId,
       status: proposal.status,
       pareto: ((proposal.charts || {}).pareto || []).length,
@@ -5930,7 +6332,7 @@ function comparatorChartsSignature(run) {
 }
 
 function comparatorFilterSignature(proposals) {
-  return proposals.map((proposal) => `${proposal.proposalId}:${proposal.displayName || proposal.proposalId}`).join("|");
+  return proposals.map((proposal) => `${comparatorEntityId(proposal)}:${proposal.displayName || comparatorEntityId(proposal)}`).join("|");
 }
 
 function renderComparatorChartFilters(proposals) {
@@ -5946,13 +6348,14 @@ function renderComparatorChartFilters(proposals) {
     return;
   }
   comparatorChartFilterSignature = signature;
-  comparatorChartFilterIds = new Set(proposals.map((proposal) => proposal.proposalId));
+  comparatorChartFilterIds = new Set(proposals.map((proposal) => comparatorEntityId(proposal)));
   dom.comparatorChartProposalFilters.replaceChildren(
     ...proposals.map((proposal, index) => {
+      const entityId = comparatorEntityId(proposal);
       const label = document.createElement("label");
       label.className = "chart-filter-option";
       label.innerHTML = `
-        <input type="checkbox" data-comparator-chart-filter="${escapeHtml(proposal.proposalId)}" checked>
+        <input type="checkbox" data-comparator-chart-filter="${escapeHtml(entityId)}" checked>
         <span class="chart-filter-swatch" style="background: ${chartPalette(index)}"></span>
         <span>${escapeHtml(proposal.displayName || proposal.proposalId)}</span>
       `;
@@ -5964,7 +6367,7 @@ function renderComparatorChartFilters(proposals) {
 function comparatorFilteredProposals(proposals) {
   if (!proposals.length) return [];
   if (!comparatorChartFilterIds.size) return [];
-  return proposals.filter((proposal) => comparatorChartFilterIds.has(proposal.proposalId));
+  return proposals.filter((proposal) => comparatorChartFilterIds.has(comparatorEntityId(proposal)));
 }
 
 function onComparatorChartFilterChange(event) {
@@ -6052,9 +6455,10 @@ function renderComparatorGlobalNonDominatedChart(proposals) {
   const countsByProposal = comparatorCountByProposal(globalFront);
   const series = proposals.map((proposal, index) => {
     const color = chartPalette(index);
-    const points = globalFront.filter((point) => point.proposalId === proposal.proposalId);
+    const entityId = comparatorEntityId(proposal);
+    const points = globalFront.filter((point) => (point.instanceId || point.proposalId) === entityId);
     return {
-      name: `${proposal.displayName} (${countsByProposal.get(proposal.proposalId) || 0})`,
+      name: `${proposal.displayName} (${countsByProposal.get(entityId) || 0})`,
       type: "scatter",
       symbolSize: 13,
       label: { show: false },
@@ -6248,8 +6652,10 @@ function baseScatterOption(title, series, options = {}) {
 function comparatorProposalChartPoints(proposal, chartKey) {
   return (((proposal.charts || {})[chartKey]) || []).map((point) => ({
     ...point,
+    instanceId: point.instanceId || comparatorEntityId(proposal),
     proposalId: point.proposalId || proposal.proposalId,
     displayName: point.displayName || proposal.displayName,
+    baseDisplayName: point.baseDisplayName || proposal.baseDisplayName,
   }));
 }
 
@@ -6269,8 +6675,10 @@ function comparatorChartPointData(point, color, options = {}) {
     labelText: point.label,
     prompt: point.prompt,
     rank: point.rank,
+    instanceId: point.instanceId,
     proposalId: point.proposalId,
     displayName: point.displayName,
+    baseDisplayName: point.baseDisplayName,
     sourceIndex: point.sourceIndex,
     repetitionIndex: point.repetitionIndex,
     nativeObjectiveVector: point.nativeObjectiveVector,
@@ -7044,6 +7452,9 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !dom.turbulenceCandidateModal.hidden) {
     closeTurbulenceCandidateModal();
   }
+  if (event.key === "Escape" && dom.comparatorInstanceModal && !dom.comparatorInstanceModal.hidden) {
+    closeComparatorInstanceModal();
+  }
   if (event.key === "Escape") {
     closeTurbulenceMetricPopover();
   }
@@ -7131,6 +7542,38 @@ dom.resumeComparatorButton?.addEventListener("click", resumeComparatorRun);
 dom.copyComparatorLogButton.addEventListener("click", copyComparatorLog);
 dom.comparatorChartProposalFilters?.addEventListener("change", onComparatorChartFilterChange);
 dom.comparatorExecutionMode.addEventListener("change", () => syncComparatorExecutionModeControls(false));
+dom.comparatorProposalSelector?.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) return;
+  const button = event.target.closest("[data-add-comparator-instance]");
+  if (!button) return;
+  openComparatorInstanceModal(button.dataset.addComparatorInstance);
+});
+dom.comparatorProposalConfigPanels?.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) return;
+  const editButton = event.target.closest("[data-edit-comparator-instance]");
+  if (editButton) {
+    const instance = comparatorInstances.find((item) => item.instanceId === editButton.dataset.editComparatorInstance);
+    if (instance) openComparatorInstanceModal(instance.proposalId, instance.instanceId);
+    return;
+  }
+  const duplicateButton = event.target.closest("[data-duplicate-comparator-instance]");
+  if (duplicateButton) {
+    const instance = comparatorInstances.find((item) => item.instanceId === duplicateButton.dataset.duplicateComparatorInstance);
+    if (instance) openComparatorInstanceModal(instance.proposalId, instance.instanceId, true);
+    return;
+  }
+  const deleteButton = event.target.closest("[data-delete-comparator-instance]");
+  if (deleteButton) {
+    deleteComparatorInstance(deleteButton.dataset.deleteComparatorInstance);
+  }
+});
+dom.saveComparatorInstanceModalButton?.addEventListener("click", saveComparatorInstanceModal);
+dom.cancelComparatorInstanceModalButton?.addEventListener("click", closeComparatorInstanceModal);
+dom.comparatorInstanceModal?.addEventListener("click", (event) => {
+  if (event.target === dom.comparatorInstanceModal) {
+    closeComparatorInstanceModal();
+  }
+});
 document.querySelectorAll(".comparator-tab").forEach((button) => {
   button.addEventListener("click", () => activateComparatorTab(button.dataset.comparatorTab));
 });
