@@ -45,7 +45,10 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 STAGE_RE = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s+(.+)$")
 GENERATION_RE = re.compile(r"(?:Generaci[oó]n|generation)\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
 GENERATION_STARTED_RE = re.compile(r"\bgeneration\s+\d+\s*/\s*\d+\s+started\b", re.IGNORECASE)
-GENERATION_TIME_RE = re.compile(r"Tiempo\s+Gen:\s*([0-9]+(?:[\.,][0-9]+)?)s", re.IGNORECASE)
+GENERATION_TIME_RE = re.compile(
+    r"(?:Tiempo\s+Gen:|Generation\s+\d+\s+complete\.\s+Time:)\s*([0-9]+(?:[\.,][0-9]+)?)s",
+    re.IGNORECASE,
+)
 ELAPSED_RE = re.compile(r"\belapsed=(\d{1,2}:\d{2}(?::\d{2})?)\b", re.IGNORECASE)
 PERCENT_RE = re.compile(r"(\d{1,3})%")
 TIMESTAMPED_LOG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+\|\s+[A-Z]+\s+\|\s+(.+)$")
@@ -56,7 +59,7 @@ SUPPORTED_GIT_PULL_MODES = {"ff-only"}
 EXECUTION_MODE_FAIR_SEQUENTIAL = "fair_sequential"
 EXECUTION_MODE_EXPLORATORY_PARALLEL = "exploratory_parallel"
 SUPPORTED_EXECUTION_MODES = {EXECUTION_MODE_FAIR_SEQUENTIAL, EXECUTION_MODE_EXPLORATORY_PARALLEL}
-PROPOSAL_TOTALS = {proposal_id: total for proposal_id, total in (("evolmd", 6), ("evolmd-mo", 5), ("binary-mopso-cd", 6))}
+PROPOSAL_TOTALS = {proposal_id: total for proposal_id, total in (("evolmd", 6), ("mesap", 6), ("evolmd-mo", 5), ("binary-mopso-cd", 6))}
 COMPARATOR_CONFIG_PATH = Path(os.environ.get("COMPARATOR_CONFIG_PATH", Path(__file__).with_name("comparator_config.json")))
 
 
@@ -96,7 +99,7 @@ COMPARATOR_CONFIG = load_comparator_config()
 COMPARATOR_DEFAULTS = COMPARATOR_CONFIG.get("defaults") if isinstance(COMPARATOR_CONFIG.get("defaults"), dict) else {}
 COMPARATOR_PROPOSAL_CONFIG = COMPARATOR_CONFIG.get("proposals") if isinstance(COMPARATOR_CONFIG.get("proposals"), dict) else {}
 POSTHOC_EMBEDDING_MODEL = str(COMPARATOR_DEFAULTS.get("posthocEmbeddingModel") or "all-MiniLM-L6-v2")
-DEFAULT_SELECTED_PROPOSALS = tuple(COMPARATOR_DEFAULTS.get("selectedProposalIds") or ("evolmd", "evolmd-mo", "binary-mopso-cd"))
+DEFAULT_SELECTED_PROPOSALS = tuple(COMPARATOR_DEFAULTS.get("selectedProposalIds") or ("evolmd", "mesap", "evolmd-mo", "binary-mopso-cd"))
 DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN = config_bool(COMPARATOR_DEFAULTS.get("updateRepositoriesBeforeRun"), False)
 DEFAULT_EXECUTION_MODE = str(COMPARATOR_DEFAULTS.get("executionMode") or EXECUTION_MODE_FAIR_SEQUENTIAL)
 METRIC_SCHEMA_VERSION = 2
@@ -1068,6 +1071,39 @@ PROPOSALS: tuple[ProposalDefinition, ...] = (
         git_branch=str(proposal_git_defaults("evolmd-mo").get("branch") or "main"),
         git_pull_mode=str(proposal_git_defaults("evolmd-mo").get("pullMode") or "ff-only"),
         git_expected_remote_url=str(proposal_git_defaults("evolmd-mo").get("expectedRemoteUrl") or ""),
+    ),
+    ProposalDefinition(
+        proposal_id="mesap",
+        display_name="MESAP",
+        repository_path=str(proposal_config("mesap").get("repositoryPath") or "baselines/external/mesap"),
+        description="Modelo Evolutivo Semantico Adaptativo para Prompts; GA uniobjetivo con fitness BERTScore penalizada.",
+        objective_names=("fitness",),
+        result_file="population_final.json",
+        single_objective=True,
+        kind="mesap",
+        final_selection_file="comparator_final_selection.json",
+        metrics_series_file="metrics_log.csv",
+        supports_history_export=True,
+        cli_options=(
+            {"flag": "--n", "type": "int", "source": "common"},
+            {"flag": "--generations", "type": "int", "source": "common"},
+            {"flag": "--k", "type": "int", "default": 3, "min": 1, "step": 1, "label": "K torneo"},
+            {"flag": "--elite_size", "type": "int", "default": 2, "min": 0, "step": 1, "label": "Elitismo"},
+            {"flag": "--prob_crossover", "type": "float", "default": 0.8, "min": 0, "max": 1, "step": 0.01, "label": "Prob. crossover"},
+            {"flag": "--prob_mutation", "type": "float", "default": 0.1, "min": 0, "max": 1, "step": 0.01, "label": "Prob. mutacion"},
+            {"flag": "--model", "type": "string", "source": "common"},
+            {"flag": "--bert_model", "type": "string", "default": "bert-base-uncased", "choices": ["bert-base-uncased", "roberta-large", "distilbert-base-uncased"], "allowCustom": True},
+            {"flag": "--outdir_base", "type": "path", "source": "managed"},
+            {"flag": "--reference_text", "type": "path", "source": "managed"},
+        ),
+        preload_modules=("torch",),
+        python_executable=str(proposal_config("mesap").get("pythonExecutable") or ""),
+        python_path_entries=tuple_from_config(proposal_config("mesap").get("pythonPathEntries")),
+        required_modules=tuple_from_config(proposal_config("mesap").get("requiredModules")),
+        git_remote=str(proposal_git_defaults("mesap").get("remote") or "origin"),
+        git_branch=str(proposal_git_defaults("mesap").get("branch") or "main"),
+        git_pull_mode=str(proposal_git_defaults("mesap").get("pullMode") or "ff-only"),
+        git_expected_remote_url=str(proposal_git_defaults("mesap").get("expectedRemoteUrl") or ""),
     ),
     ProposalDefinition(
         proposal_id="binary-mopso-cd",
@@ -2665,6 +2701,24 @@ class ComparatorService:
             ]
             return command + self._binary_managed_set_args(run, base_proposal, output_base, random_seed) + structured_args + extra_args
 
+        if base_proposal.kind == "mesap":
+            command = [
+                proposal_python_executable(self.root, repository_dir, base_proposal),
+                str(self.root / "baselines" / "bootstrap.py"),
+                base_proposal.entrypoint,
+                "--n",
+                str(run["config"]["n"]),
+                "--generations",
+                str(run["config"]["generaciones"]),
+                "--model",
+                run["config"]["model"],
+                "--outdir_base",
+                str(output_base),
+                "--reference_text",
+                str(reference_path),
+            ]
+            return command + structured_args + extra_args
+
         command = [
             proposal_python_executable(self.root, repository_dir, base_proposal),
             str(self.root / "baselines" / "bootstrap.py"),
@@ -2987,8 +3041,8 @@ class ComparatorService:
             selected = self._normalize_selected_rows(proposal, selected_from_file, rows)
             return selected, 0.0
 
-        if proposal.kind in {"evolmd", "evolmd-mo"}:
-            selected = self._entropy_topsis_mmr_selection(rows, proposal.kind == "evolmd")
+        if proposal.kind in {"evolmd", "mesap", "evolmd-mo"}:
+            selected = self._entropy_topsis_mmr_selection(rows, proposal.single_objective)
             if write_if_missing:
                 write_json(output_dir / "comparator_final_selection.json", selected)
             return selected, time.perf_counter() - started
@@ -3813,7 +3867,7 @@ class ComparatorService:
             if isinstance(row, dict)
         ]
         if proposal.single_objective:
-            self._attach_evolmd_posthoc_diagnostics(rows, reference_text or "")
+            self._attach_evolmd_posthoc_diagnostics(rows, reference_text or "", proposal.display_name)
 
         mark_non_dominated(rows)
         if proposal.single_objective:
@@ -3844,7 +3898,7 @@ class ComparatorService:
             return self._normalize_evolmd_row(proposal, row, index)
         return self._normalize_evolmd_mo_row(proposal, row, index)
 
-    def _attach_evolmd_posthoc_diagnostics(self, rows: list[dict[str, Any]], reference_text: str) -> None:
+    def _attach_evolmd_posthoc_diagnostics(self, rows: list[dict[str, Any]], reference_text: str, display_name: str = "EVOLMD") -> None:
         valid_rows = [row for row in rows if row.get("status") == "ok"]
         scores = calculate_posthoc_semantic_scores(
             [row.get("generatedText") or "" for row in valid_rows],
@@ -3867,7 +3921,7 @@ class ComparatorService:
                 "semanticFidelity": fidelity_score,
                 "semanticDiversity": diversity_score,
                 "semanticDiversityModel": POSTHOC_EMBEDDING_MODEL,
-                "note": "Diagnostic only; EVOLMD selection remains single-objective with native BERTScore fitness.",
+                "note": f"Diagnostic only; {display_name} selection remains single-objective with native fitness.",
             }
         mark_posthoc_non_dominated(valid_rows)
 
@@ -4036,7 +4090,7 @@ class ComparatorService:
             metrics["spread"] = spread
             metrics["spreadLabel"] = f"{spread:.6f}" if spread is not None else "No aplica"
             metrics["moConvention"] = (
-                "Comparative diagnostics only; EVOLMD optimized native BERTScore fitness as a single objective. "
+                f"Comparative diagnostics only; {proposal.display_name} optimized native fitness as a single objective. "
                 "Comparable vector uses SBERT fidelity and semantic diversity post-hoc, normalized as "
                 "[(f1 + 1) / 2, f2 / 2]. HV reference point [0, 0]; spread uses the comparable diagnostic front."
             )

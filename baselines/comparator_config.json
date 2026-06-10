@@ -1,6 +1,6 @@
 {
   "defaults": {
-    "selectedProposalIds": ["evolmd", "evolmd-mo", "binary-mopso-cd"],
+    "selectedProposalIds": ["evolmd", "mesap", "evolmd-mo", "binary-mopso-cd"],
     "model": "llama3",
     "posthocEmbeddingModel": "all-MiniLM-L6-v2",
     "topK": 10,
@@ -36,6 +36,18 @@
         "branch": "main",
         "pullMode": "ff-only",
         "expectedRemoteUrl": "https://github.com/escmHEX/EVOLMD-MO.git"
+      }
+    },
+    "mesap": {
+      "repositoryPath": "baselines/external/mesap",
+      "pythonExecutable": "",
+      "pythonPathEntries": [],
+      "requiredModules": ["torch", "bert_score", "ollama", "pydantic", "httpx", "tqdm"],
+      "git": {
+        "remote": "origin",
+        "branch": "main",
+        "pullMode": "ff-only",
+        "expectedRemoteUrl": "https://github.com/escmHEX/Modelo-Evolutivo-Semantico-Adaptativo-para-Prompts.git"
       }
     },
     "binary-mopso-cd": {

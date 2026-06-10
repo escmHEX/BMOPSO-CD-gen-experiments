@@ -1,5 +1,7 @@
 sentence-transformers==5.5.1
 torch==2.9.0
+bert-score==0.3.13
+ollama==0.6.0
 numpy==2.3.4
 scikit-learn==1.9.0
 spacy==3.8.14

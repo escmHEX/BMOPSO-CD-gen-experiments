@@ -4,3 +4,7 @@
 [submodule "baselines/external/evolmd-mo"]
 	path = baselines/external/evolmd-mo
 	url = https://github.com/escmHEX/EVOLMD-MO.git
+[submodule "baselines/external/mesap"]
+	path = baselines/external/mesap
+	url = https://github.com/escmHEX/Modelo-Evolutivo-Semantico-Adaptativo-para-Prompts.git
+	branch = main

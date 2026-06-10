@@ -802,6 +802,7 @@ const ABBREVIATION_TOOLTIPS = Object.freeze({
   "bd pso": "Base de datos de individuos PSO.",
   "distilbert": "Modelo DistilBERT usado por la estrategia correspondiente.",
   "evolmd post-hoc": "Metricas diagnosticas calculadas despues de la ejecucion nativa de EVOLMD.",
+  "uniobjetivo post-hoc": "Metricas diagnosticas calculadas despues de ejecutar propuestas uniobjetivo como EVOLMD o MESAP.",
   "f.o": "Funcion objetivo.",
   "f.o.": "Funcion objetivo.",
   "f.o. comun": "Funcion objetivo comun usada para comparar estrategias.",
@@ -5586,7 +5587,8 @@ async function loadComparatorProposals() {
       ["Propuestas", proposalSummary],
       ["Git antes de ejecutar", `${payload.defaults?.updateRepositoriesBeforeRun ? "Activado" : "Desactivado"}; ${gitSummary}`],
       ["EVOLMD", "data_final_evaluada.json -> [fitness]"],
-      ["EVOLMD post-hoc", "Vector diagnostico SBERT [fidelity_sbert_posthoc, semantic_diversity_posthoc]; HV/spread no alteran la seleccion nativa."],
+      ["MESAP", "population_final.json -> [fitness]"],
+      ["Uniobjetivo post-hoc", "EVOLMD y MESAP usan vector diagnostico SBERT [fidelity_sbert_posthoc, semantic_diversity_posthoc]; HV/spread no alteran la seleccion nativa."],
       ["EVOLMD-MO", "pareto_front.json -> [fidelity_sbert, diversity_individual]"],
       ["Binary MOPSO-CD", "pareto_front.json -> [objectives.f1, objectives.f2]; seleccion desde final_selection_hybrid.json"],
       ["MO comparable", "Graficos, HV y spread usan [(f1 + 1) / 2, f2 / 2] con referencia [0,0]."],
@@ -5943,7 +5945,7 @@ function comparatorRepetitionProgressLabel(progressState, config) {
 function comparatorProposalSummaryTooltip(label, metrics = {}) {
   const key = String(label || "").trim().toLocaleLowerCase("es-CL");
   const diagnosticSuffix = metrics.postHocDiagnostic
-    ? " En EVOLMD se calcula como diagnostico post-hoc; no fue optimizado por el algoritmo."
+    ? " En propuestas uniobjetivo se calcula como diagnostico post-hoc; no fue optimizado por el algoritmo."
     : "";
   if (key === "parametros") {
     return "Parametros comunes enviados por CLI: N es poblacion; G es generaciones o iteraciones.";
@@ -5952,7 +5954,7 @@ function comparatorProposalSummaryTooltip(label, metrics = {}) {
     return "Soluciones finales normalizadas correctamente sobre el total del archivo final; no corresponde a generaciones.";
   }
   if (key === "mejor f.o.") {
-    return "Vector nativo de la solucion rank 1. En MO: no dominadas primero y luego mayor suma de objetivos nativos; en EVOLMD: mayor fitness.";
+    return "Vector nativo de la solucion rank 1. En MO: no dominadas primero y luego mayor suma de objetivos nativos; en uniobjetivo: mayor fitness.";
   }
   if (key === "mejor comp.") {
     return "Vector comparable normalizado de la solucion con mayor suma f1_n + f2_n. Ambos objetivos se maximizan; no reemplaza el analisis Pareto.";
@@ -5967,7 +5969,7 @@ function comparatorProposalSummaryTooltip(label, metrics = {}) {
     return `Uniformidad del frente no dominado en el espacio comparable normalizado. Menor es mejor; valores altos indican distancias mas irregulares.${diagnosticSuffix}`;
   }
   if (key === "vector post-hoc") {
-    return "Vector diagnostico SBERT/diversidad calculado despues de ejecutar EVOLMD; se usa para comparar, no para decidir dentro de EVOLMD.";
+    return "Vector diagnostico SBERT/diversidad calculado despues de ejecutar una propuesta uniobjetivo; se usa para comparar, no para decidir dentro del algoritmo.";
   }
   if (key === "algoritmo") {
     return "Tiempo wall-clock del proceso Python de la propuesta; no incluye metricas ni graficos del comparador.";

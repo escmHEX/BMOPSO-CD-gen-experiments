@@ -329,6 +329,11 @@ label span,
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }
 
+#comparatorProposalSelector.checkbox-grid {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  align-items: start;
+}
+
 .proposal-catalog-card {
   display: grid;
   gap: 12px;
@@ -558,6 +563,10 @@ label span,
 
 .proposal-git-config.compact {
   padding: 10px;
+}
+
+.proposal-git-config.compact .proposal-git-fields {
+  grid-template-columns: 1fr;
 }
 
 .proposal-config-section-title {

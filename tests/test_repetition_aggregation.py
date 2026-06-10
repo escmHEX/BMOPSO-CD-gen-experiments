@@ -139,6 +139,29 @@ class RepetitionAggregationTests(unittest.TestCase):
                 }
             )
 
+    def test_comparator_config_rejects_duplicate_mesap_instances(self):
+        service = ComparatorService(Path("."))
+        with self.assertRaisesRegex(ValueError, "duplicateProposalInstances"):
+            service._read_config(
+                {
+                    "referenceText": "reference",
+                    "proposalInstances": [
+                        {
+                            "instanceId": "mesap-a",
+                            "proposalId": "mesap",
+                            "displayName": "MESAP A",
+                            "proposalConfig": {"cliValues": {"--k": "4"}},
+                        },
+                        {
+                            "instanceId": "mesap-b",
+                            "proposalId": "mesap",
+                            "displayName": "MESAP B",
+                            "proposalConfig": {"cliValues": {"--k": "4"}},
+                        },
+                    ],
+                }
+            )
+
     def test_comparator_config_allows_same_config_for_different_proposals(self):
         service = ComparatorService(Path("."))
         parsed = service._read_config(
@@ -622,6 +645,61 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertNotIn("--prob-crossover", command)
         self.assertNotIn("--prob-mutacion", command)
 
+    def test_mesap_proposal_is_declared_from_fork(self):
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "mesap")
+
+        self.assertEqual(proposal.display_name, "MESAP")
+        self.assertEqual(proposal.repository_path, "baselines/external/mesap")
+        self.assertEqual(proposal.result_file, "population_final.json")
+        self.assertEqual(proposal.metrics_series_file, "metrics_log.csv")
+        self.assertTrue(proposal.single_objective)
+        self.assertEqual(
+            proposal.git_expected_remote_url,
+            "https://github.com/escmHEX/Modelo-Evolutivo-Semantico-Adaptativo-para-Prompts.git",
+        )
+
+    def test_mesap_command_builds_real_cli_flags(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "mesap")
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["mesap"],
+                "proposalConfigs": {
+                    "mesap": {
+                        "cliValues": {
+                            "--k": "5",
+                            "--elite_size": "3",
+                            "--prob_crossover": "0.7",
+                            "--prob_mutation": "0.05",
+                            "--bert_model": "roberta-large",
+                        }
+                    }
+                },
+            }
+        )
+        command = service._build_command(
+            {"config": config},
+            proposal,
+            Path("."),
+            Path("out"),
+            Path("reference.txt"),
+            777,
+        )
+
+        self.assertIn("--generations", command)
+        self.assertIn("--outdir_base", command)
+        self.assertIn("--reference_text", command)
+        self.assertNotIn("--generaciones", command)
+        self.assertNotIn("--outdir-base", command)
+        self.assertNotIn("--texto-referencia", command)
+        self.assertEqual(command[command.index("--generations") + 1], "3")
+        self.assertEqual(command[command.index("--k") + 1], "5")
+        self.assertEqual(command[command.index("--elite_size") + 1], "3")
+        self.assertEqual(command[command.index("--prob_crossover") + 1], "0.7")
+        self.assertEqual(command[command.index("--prob_mutation") + 1], "0.05")
+        self.assertEqual(command[command.index("--bert_model") + 1], "roberta-large")
+
     def test_comparator_rejects_structured_managed_or_unknown_cli_values(self):
         service = ComparatorService(Path("."))
         for flag in ("experiment.seed", "--missing"):
@@ -978,6 +1056,37 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(rows[0]["comparableObjectiveVector"], [0.85, 0.2])
         self.assertTrue(rows[0]["nonDominated"])
 
+    def test_mesap_rows_normalize_from_population_final_with_posthoc_metrics(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "mesap")
+
+        with patch.object(
+            comparator_module,
+            "calculate_posthoc_semantic_scores",
+            return_value=[{"semanticFidelity": 0.6, "semanticDiversity": 1.0}],
+        ):
+            rows = service._normalize_rows(
+                proposal,
+                [
+                    {
+                        "generated_data": "Generated",
+                        "prompt": "Prompt",
+                        "fitness": 0.73,
+                        "role": "role",
+                        "topic": "topic",
+                    }
+                ],
+                top_k=5,
+                reference_text="reference",
+            )
+
+        self.assertEqual(rows[0]["proposalId"], "mesap")
+        self.assertEqual(rows[0]["objectiveVector"], [0.73])
+        self.assertEqual(rows[0]["objectiveNames"], ["fitness"])
+        self.assertEqual(rows[0]["diagnosticObjectiveVector"], [0.6, 1.0])
+        self.assertEqual(rows[0]["comparableObjectiveVector"], [0.8, 0.5])
+        self.assertTrue(rows[0]["postHocNonDominated"])
+
     def test_single_objective_summary_reports_posthoc_non_dominated_count(self):
         service = ComparatorService(Path("."))
         proposal = next(item for item in PROPOSALS if item.proposal_id == "evolmd")
@@ -1179,6 +1288,43 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertIsNotNone(series[0]["hypervolume"])
         self.assertAlmostEqual(series[0]["globalInertia"], 0.3689031219)
         self.assertAlmostEqual(series[0]["globalEntropy"], 0.6886581024)
+        self.assertEqual(series[0]["source"], "population_history")
+
+    def test_mesap_history_series_uses_population_history_for_posthoc_metrics(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "population_history.jsonl").write_text(
+                json.dumps(
+                    {
+                        "generation": 1,
+                        "population": [
+                            {
+                                "generated_data": "Generated",
+                                "prompt": "Prompt",
+                                "fitness": 0.73,
+                                "role": "role",
+                                "topic": "topic",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(Path("."))
+            proposal = next(item for item in PROPOSALS if item.proposal_id == "mesap")
+
+            with patch.object(
+                comparator_module,
+                "calculate_posthoc_semantic_scores",
+                return_value=[{"semanticFidelity": 0.6, "semanticDiversity": 1.0}],
+            ):
+                series = service._build_metric_series(proposal, output_dir, [], "reference")
+
+        self.assertEqual(len(series), 1)
+        self.assertEqual(series[0]["generation"], 1)
+        self.assertAlmostEqual(series[0]["hypervolume"], 0.4)
+        self.assertEqual(series[0]["nonDominatedRows"], 1)
+        self.assertIsNone(series[0]["spread"])
         self.assertEqual(series[0]["source"], "population_history")
 
     def test_legacy_series_without_global_diagnostics_keeps_missing_values(self):
