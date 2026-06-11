@@ -1734,6 +1734,48 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertTrue(cost["hasTokenReport"])
         self.assertTrue(cost["hasOllamaDurationReport"])
 
+    def test_process_failure_message_uses_python_exception_log_detail(self):
+        service = ComparatorService(Path("."))
+        run = {
+            "config": {"timeoutMinutes": 60},
+            "logs": [
+                {"proposalId": "binary-mopso-cd", "message": "2026-06-11 01:19:42 | ERROR | run 1/1 failed"},
+                {"proposalId": "binary-mopso-cd", "message": "Traceback (most recent call last):"},
+                {
+                    "proposalId": "binary-mopso-cd",
+                    "message": "RuntimeError: Initial semantic pools are insufficient: product=0, required=180",
+                },
+            ],
+        }
+
+        message = service._process_failure_message(run, "binary-mopso-cd", 1, False)
+
+        self.assertEqual(
+            message,
+            "Process exited with code 1. RuntimeError: Initial semantic pools are insufficient: product=0, required=180",
+        )
+
+    def test_binary_failed_costs_can_read_existing_output_dir(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_base = Path(temp_dir) / "exec"
+            output_dir = output_base / "2026-06-11_01-17-48"
+            output_dir.mkdir(parents=True)
+            (output_dir / "llm_calls.jsonl").write_text(
+                '{"elapsed_seconds": 1.5, "promptEvalCount": 2, "evalCount": 3, "total_duration": 4000000000}\n',
+                encoding="utf-8",
+            )
+
+            cost = comparator_module.build_binary_cost_metrics(
+                {"processWallClockSeconds": 2.0, "returnCode": 1},
+                output_dir,
+                False,
+            )
+
+        self.assertEqual(cost["returnCode"], 1)
+        self.assertEqual(cost["llmCalls"], 1)
+        self.assertEqual(cost["totalTokens"], 5)
+        self.assertAlmostEqual(cost["ollamaTotalDurationSeconds"], 4.0)
+
     def test_turbulence_aggregates_rates_and_final_deltas(self):
         config = {
             "strategies": ["llm"],

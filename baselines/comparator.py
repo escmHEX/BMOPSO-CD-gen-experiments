@@ -52,6 +52,9 @@ GENERATION_TIME_RE = re.compile(
 ELAPSED_RE = re.compile(r"\belapsed=(\d{1,2}:\d{2}(?::\d{2})?)\b", re.IGNORECASE)
 PERCENT_RE = re.compile(r"(\d{1,3})%")
 TIMESTAMPED_LOG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+\|\s+[A-Z]+\s+\|\s+(.+)$")
+PYTHON_EXCEPTION_LOG_RE = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception)|KeyboardInterrupt|SystemExit):\s+.+$"
+)
 GIT_REMOTE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -2949,15 +2952,17 @@ class ComparatorService:
             cost = self._build_cost(base_proposal, process_cost, llm_payload, None, True)
             return self._cancelled_result(instance, proposal_dir, cost)
         if return_code != 0:
-            message = (
-                f"Process timed out after {run['config']['timeoutMinutes']} minute(s)."
-                if return_code == 124
-                else f"Process exited with code {return_code}. Check dependencies, Ollama, and model availability."
+            output_dir = latest_child_directory(output_base)
+            message = self._process_failure_message(
+                run,
+                instance.instance_id,
+                return_code,
+                bool(process_cost.get("timedOut")),
             )
-            cost = self._build_cost(base_proposal, process_cost, llm_payload, None, False)
+            cost = self._build_cost(base_proposal, process_cost, llm_payload, output_dir, False)
             return self._failed_result(
                 instance,
-                proposal_dir,
+                output_dir or proposal_dir,
                 message,
                 cost,
             )
@@ -3032,6 +3037,52 @@ class ComparatorService:
         if proposal.kind == "binary-mopso-cd":
             return build_binary_cost_metrics(process_cost, output_dir, cancelled)
         return build_cost_metrics(process_cost, llm_payload, output_dir, cancelled)
+
+    def _process_failure_message(
+        self,
+        run: dict[str, Any],
+        instance_id: str,
+        return_code: int,
+        timed_out: bool,
+    ) -> str:
+        if timed_out or return_code == 124:
+            base = f"Process timed out after {run['config']['timeoutMinutes']} minute(s)."
+        else:
+            base = f"Process exited with code {return_code}."
+        detail = self._latest_failure_log_detail(run, instance_id)
+        if detail:
+            return f"{base} {detail}"
+        if not timed_out and return_code != 124:
+            return f"{base} Check dependencies, Ollama, and model availability."
+        return base
+
+    def _latest_failure_log_detail(self, run: dict[str, Any], instance_id: str) -> str | None:
+        with self._lock:
+            messages = [
+                str(entry.get("message") or "")
+                for entry in run.get("logs", [])
+                if entry.get("proposalId") == instance_id
+            ]
+        fallback: str | None = None
+        for message in reversed(messages):
+            detail = self._log_detail_text(message)
+            if not detail:
+                continue
+            if PYTHON_EXCEPTION_LOG_RE.match(detail):
+                return detail
+            lowered = detail.lower()
+            if fallback is None and any(marker in lowered for marker in ("error", "exception", "failed")):
+                fallback = detail
+        return fallback
+
+    def _log_detail_text(self, message: str) -> str:
+        text = clean_log_message(message)
+        if not text:
+            return ""
+        match = TIMESTAMPED_LOG_RE.match(text)
+        if match:
+            text = match.group(1)
+        return text.strip()
 
     def _select_final_rows(
         self,
