@@ -599,6 +599,50 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(values["mopso.alpha"], "1.25")
         self.assertEqual(values["mopso.archive_multiplier"], "0.5")
 
+    def test_binary_cli_metadata_matches_real_config_casts_for_core_groups(self):
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        options_by_key = {
+            str(option.get("key") or option.get("configPath") or option.get("flag")): option
+            for option in proposal.cli_options
+        }
+        expected_types = {
+            "mopso.alpha": "float",
+            "mopso.archive_multiplier": "float",
+            "mopso.c1": "float",
+            "mopso.c2": "float",
+            "mopso.dmax": "int",
+            "mopso.k_retry": "int",
+            "mopso.kcand": "int",
+            "mopso.leader_tournament_size": "int",
+            "mopso.omega_max": "float",
+            "mopso.omega_min": "float",
+            "mopso.p_anchor_enabled": "bool",
+            "mopso.p_anchor_max": "float",
+            "mopso.p_anchor_min": "float",
+            "mopso.p_tur_max": "float",
+            "mopso.p_tur_min": "float",
+            "mopso.tau_dup": "float",
+            "mopso.tau_tur_max": "float",
+            "mopso.tau_tur_min": "float",
+            "mopso.utility_weights.f1": "float",
+            "mopso.utility_weights.f2": "float",
+            "mopso.vmax": "float",
+            "parallelism.enabled": "bool",
+            "parallelism.initial_text_generation_max_concurrent": "int",
+            "parallelism.particle_update_max_concurrent": "int",
+            "selection.enabled": "bool",
+            "selection.epsilon": "float",
+            "selection.k": "int",
+            "selection.lambda_mmr": "float",
+            "selection.tau_max": "float",
+            "selection.tau_min": "float",
+        }
+
+        for key, expected_type in expected_types.items():
+            with self.subTest(key=key):
+                self.assertIn(key, options_by_key)
+                self.assertEqual(options_by_key[key]["type"], expected_type)
+
     def test_evolmd_ga_flags_are_proposal_specific_cli_values(self):
         service = ComparatorService(Path("."))
         parsed = service._read_config(
@@ -621,6 +665,76 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(values["--k"], "5")
         self.assertEqual(values["--prob-crossover"], "0.7")
         self.assertEqual(values["--prob-mutacion"], "0.05")
+
+    def test_manual_proposal_cli_metadata_does_not_invent_ranges(self):
+        flags_by_proposal = {
+            "evolmd": ("--k", "--prob-crossover", "--prob-mutacion", "--num-elitismo"),
+            "evolmd-mo": ("--k", "--prob-crossover", "--prob-mutacion", "--num-elitismo"),
+            "mesap": ("--k", "--elite_size", "--prob_crossover", "--prob_mutation"),
+        }
+
+        for proposal_id, flags in flags_by_proposal.items():
+            proposal = next(item for item in PROPOSALS if item.proposal_id == proposal_id)
+            options_by_flag = {str(option.get("flag")): option for option in proposal.cli_options}
+            for flag in flags:
+                with self.subTest(proposal_id=proposal_id, flag=flag):
+                    self.assertIn(flag, options_by_flag)
+                    self.assertNotIn("min", options_by_flag[flag])
+                    self.assertNotIn("max", options_by_flag[flag])
+
+    def test_manual_proposal_cli_values_accept_argparse_compatible_ranges(self):
+        service = ComparatorService(Path("."))
+        cases = {
+            "evolmd": {
+                "--k": "0",
+                "--prob-crossover": "1.2",
+                "--prob-mutacion": "-0.1",
+                "--num-elitismo": "-1",
+            },
+            "evolmd-mo": {
+                "--k": "0",
+                "--prob-crossover": "1.2",
+                "--prob-mutacion": "-0.1",
+                "--num-elitismo": "-1",
+            },
+            "mesap": {
+                "--k": "0",
+                "--elite_size": "-1",
+                "--prob_crossover": "1.2",
+                "--prob_mutation": "-0.1",
+            },
+        }
+
+        for proposal_id, cli_values in cases.items():
+            with self.subTest(proposal_id=proposal_id):
+                parsed = service._read_config(
+                    {
+                        "referenceText": "reference",
+                        "selectedProposalIds": [proposal_id],
+                        "proposalConfigs": {proposal_id: {"cliValues": cli_values}},
+                    }
+                )
+                self.assertEqual(parsed["proposalConfigs"][proposal_id]["cliValues"], cli_values)
+
+    def test_cli_values_still_reject_wrong_types(self):
+        service = ComparatorService(Path("."))
+        cases = (
+            ("binary-mopso-cd", {"mopso.alpha": "abc"}),
+            ("evolmd", {"--k": "abc"}),
+            ("evolmd-mo", {"--prob-crossover": "abc"}),
+            ("mesap", {"--prob_mutation": "abc"}),
+        )
+
+        for proposal_id, cli_values in cases:
+            with self.subTest(proposal_id=proposal_id):
+                with self.assertRaises(ValueError):
+                    service._read_config(
+                        {
+                            "referenceText": "reference",
+                            "selectedProposalIds": [proposal_id],
+                            "proposalConfigs": {proposal_id: {"cliValues": cli_values}},
+                        }
+                    )
 
     def test_evolmd_command_builds_proposal_specific_ga_flags(self):
         service = ComparatorService(Path("."))
