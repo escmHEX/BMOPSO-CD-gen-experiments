@@ -573,9 +573,31 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertIn("router.task_models.synthetic_text_generation", options_by_key)
         self.assertIn("selection.lambda_mmr", options_by_key)
         self.assertEqual(options_by_key["mopso.archive_multiplier"]["flag"], "--set")
+        self.assertEqual(options_by_key["mopso.archive_multiplier"]["type"], "float")
+        self.assertEqual(options_by_key["mopso.alpha"]["type"], "float")
         self.assertEqual(options_by_key["router.heuristics.word_replacement_candidates"]["type"], "bool")
         self.assertTrue(options_by_key["router.heuristics.word_replacement_candidates"]["allowFalse"])
         self.assertEqual(options_by_key["experiment.n"]["source"], "managed")
+
+    def test_binary_mopso_float_overrides_accept_decimal_values(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {
+                    "binary-mopso-cd": {
+                        "cliValues": {
+                            "mopso.alpha": "1.25",
+                            "mopso.archive_multiplier": "0.5",
+                        }
+                    }
+                },
+            }
+        )
+        values = parsed["proposalConfigs"]["binary-mopso-cd"]["cliValues"]
+        self.assertEqual(values["mopso.alpha"], "1.25")
+        self.assertEqual(values["mopso.archive_multiplier"], "0.5")
 
     def test_evolmd_ga_flags_are_proposal_specific_cli_values(self):
         service = ComparatorService(Path("."))

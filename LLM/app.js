@@ -5016,6 +5016,29 @@ function enhanceComparatorSelects(container = dom.comparatorProposalConfigPanels
   });
 }
 
+function syncComparatorConfigGroupLayout(group) {
+  const body = group?.querySelector?.(".proposal-config-group-body");
+  if (!body) return;
+  if (!group.open) {
+    group.style.setProperty("--proposal-config-group-body-reserve", "0px");
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    group.style.setProperty("--proposal-config-group-body-reserve", `${body.scrollHeight}px`);
+  });
+}
+
+function syncComparatorConfigGroupLayouts(container = dom.comparatorInstanceModalBody) {
+  container?.querySelectorAll?.(".proposal-config-group").forEach((group) => syncComparatorConfigGroupLayout(group));
+}
+
+function bindComparatorConfigGroupLayouts(container) {
+  container.querySelectorAll(".proposal-config-group").forEach((group) => {
+    syncComparatorConfigGroupLayout(group);
+    group.addEventListener("toggle", () => syncComparatorConfigGroupLayout(group));
+  });
+}
+
 function comparatorConfigurableOptions(proposal) {
   return (proposal.cliOptions || []).filter((option) => option.source !== "managed" && option.source !== "common");
 }
@@ -5426,6 +5449,7 @@ function openComparatorInstanceModal(proposalId, instanceId = null, duplicate = 
     fields.replaceChildren(...renderComparatorCliFields(proposal, configurableOptions));
     applyComparatorCliValues(fields, draft.proposalConfig?.cliValues || {});
     enhanceComparatorSelects(fields);
+    bindComparatorConfigGroupLayouts(fields);
   } else {
     fields.innerHTML = '<p class="muted-note">Esta propuesta no expone flags propios adicionales.</p>';
   }
@@ -7627,7 +7651,10 @@ dom.comparatorInstanceModal?.addEventListener("click", (event) => {
 document.querySelectorAll(".comparator-tab").forEach((button) => {
   button.addEventListener("click", () => activateComparatorTab(button.dataset.comparatorTab));
 });
-window.addEventListener("resize", () => comparatorCharts.forEach((chart) => chart.resize()));
+window.addEventListener("resize", () => {
+  comparatorCharts.forEach((chart) => chart.resize());
+  syncComparatorConfigGroupLayouts();
+});
 dom.solutionLlmModelSelect.addEventListener("change", () => {
   if (dom.solutionLlmModelSelect.value) {
     dom.solutionLlmModelManual.value = dom.solutionLlmModelSelect.value;

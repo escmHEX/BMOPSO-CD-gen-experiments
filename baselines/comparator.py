@@ -144,6 +144,11 @@ BINARY_PATH_OPTION_TYPES = {
     "models.ppdb.index_path": "path",
     "logging.file": "path",
 }
+BINARY_FORCED_OPTION_TYPES = {
+    **BINARY_PATH_OPTION_TYPES,
+    "mopso.archive_multiplier": "float",
+    "mopso.alpha": "float",
+}
 BINARY_PATH_CHOICES = {
     "logging.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     "models.sbert.default": ["all-MiniLM-L6-v2", "gte-small"],
@@ -193,8 +198,8 @@ def binary_option_group(path: str) -> str:
 
 
 def binary_option_type(path: str, value: Any) -> str:
-    if path in BINARY_PATH_OPTION_TYPES:
-        return BINARY_PATH_OPTION_TYPES[path]
+    if path in BINARY_FORCED_OPTION_TYPES:
+        return BINARY_FORCED_OPTION_TYPES[path]
     if isinstance(value, bool):
         return "bool"
     if isinstance(value, int) and not isinstance(value, bool):

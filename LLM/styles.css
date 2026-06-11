@@ -661,10 +661,11 @@ label span,
 }
 
 .proposal-config-group {
-  display: grid;
+  display: block;
   grid-column: 1 / -1;
   min-height: 56px;
   overflow: hidden;
+  padding-bottom: var(--proposal-config-group-body-reserve, 0);
   border: 1px solid #d2e0eb;
   border-radius: 7px;
   background: #f8fbfd;
@@ -730,10 +731,14 @@ label span,
 }
 
 .proposal-config-group-body {
-  display: grid;
+  display: none;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px 12px;
   padding: 12px;
+}
+
+.proposal-config-group[open] > .proposal-config-group-body {
+  display: grid;
 }
 
 .cli-field,
