@@ -1991,11 +1991,13 @@ Context:
                 <label class="span-2">
                   <span>Texto de referencia guardado</span>
                   <select id="comparatorReferencePreset"></select>
+                  <small class="field-note">Permite reutilizar un texto de referencia previamente guardado para no copiarlo manualmente.</small>
                 </label>
                 <div class="span-2 reference-library-actions">
                   <label>
                     <span>Nombre para guardar</span>
                     <input id="comparatorReferenceSaveLabel" type="text" placeholder="Opcional; si queda vacio se usa el inicio del texto">
+                    <small class="field-note">Etiqueta opcional para guardar el texto actual en la biblioteca local.</small>
                   </label>
                   <button id="saveComparatorReferenceButton" class="secondary" type="button">Guardar texto actual</button>
                   <span id="comparatorReferenceLibraryStatus">BD de referencias no cargada.</span>
@@ -2003,22 +2005,33 @@ Context:
                 <label class="span-2">
                   <span>Texto de referencia</span>
                   <textarea id="comparatorReferenceText" rows="5">Our action center has been updated with more information about restaurant shutdowns and disaster financing options for SMBs.</textarea>
+                  <small class="field-note">Texto base contra el que se evalua fidelidad semantica y se construyen prompts de las propuestas.</small>
                 </label>
                 <label>
                   <span>Modelo Ollama</span>
-                  <input id="comparatorModel" type="text" value="llama3" autocomplete="off">
+                  <select id="comparatorModel">
+                    <option value="llama3" selected>llama3</option>
+                    <option value="llama3.1:8b">llama3.1:8b</option>
+                    <option value="qwen3.5:2b">qwen3.5:2b</option>
+                    <option value="__custom__">Personalizado...</option>
+                  </select>
+                  <input id="comparatorModelCustom" type="text" autocomplete="off" placeholder="Nombre exacto del modelo Ollama" hidden>
+                  <small class="field-note">Modelo LLM local usado por las propuestas; el nombre debe existir en Ollama si eliges personalizado.</small>
                 </label>
                 <label>
                   <span>Top K tabla</span>
                   <input id="comparatorTopK" type="number" min="1" max="200" value="10">
+                  <small class="field-note">Cantidad maxima de soluciones por propuesta que se muestran en la tabla comparativa.</small>
                 </label>
                 <label>
                   <span>Semilla</span>
                   <input id="comparatorSeed" type="number" min="0" max="2147483647" value="42">
+                  <small class="field-note">Semilla base para reproducibilidad; en K repeticiones el comparador deriva semillas por repeticion.</small>
                 </label>
                 <label>
                   <span>K repeticiones</span>
                   <input id="comparatorRepetitions" type="number" min="1" max="30" value="1">
+                  <small class="field-note">Cantidad de corridas estocasticas independientes por instancia de propuesta.</small>
                 </label>
                 <label>
                   <span>Modo de ejecucion</span>
@@ -2031,10 +2044,12 @@ Context:
                 <label>
                   <span>Propuestas paralelas</span>
                   <input id="comparatorProposalParallelism" type="number" min="1" max="8" value="1">
+                  <small class="field-note">Solo aplica en modo exploratorio; el modo justo fuerza ejecucion secuencial para no sesgar costos.</small>
                 </label>
                 <label>
                   <span>Timeout por propuesta (min)</span>
-                  <input id="comparatorTimeoutMinutes" type="number" min="1" max="1440" value="60">
+                  <input id="comparatorTimeoutMinutes" type="number" min="2400" max="10080" value="2400">
+                  <small class="field-note">Limite maximo por proceso Python de cada propuesta; por defecto se deja amplio para corridas largas.</small>
                 </label>
                 <label class="span-2 toggle-field">
                   <input id="comparatorUpdateReposBeforeRun" type="checkbox" checked>
@@ -2071,10 +2086,12 @@ Context:
                 <label>
                   <span>N individuos</span>
                   <input id="comparatorN" type="number" min="1" max="500" value="10">
+                  <small class="field-note">Tamano de poblacion o enjambre usado como parametro comun para las propuestas.</small>
                 </label>
                 <label>
                   <span>Generaciones / iteraciones</span>
                   <input id="comparatorGeneraciones" type="number" min="0" max="500" value="3">
+                  <small class="field-note">Cantidad de pasos del optimizador; se mantiene comun para comparabilidad.</small>
                 </label>
               </div>
             </article>
@@ -2220,24 +2237,29 @@ Context:
             <section class="grid three-columns">
               <article class="panel">
                 <div class="panel-title"><h2>HV por iteracion</h2></div>
+                <p class="chart-help">Mayor HV es mejor: mide area dominada respecto a [0,0] en el espacio comparable.</p>
                 <div id="comparatorHvChart" class="chart-surface small-chart"></div>
               </article>
               <article class="panel">
                 <div class="panel-title"><h2>No dominadas</h2></div>
+                <p class="chart-help">Mayor cantidad es mejor: indica cuantas soluciones Pareto conserva cada iteracion.</p>
                 <div id="comparatorNonDominatedChart" class="chart-surface small-chart"></div>
               </article>
               <article class="panel">
                 <div class="panel-title"><h2>Spread</h2></div>
+                <p class="chart-help">Menor suele ser mejor: indica un frente mas uniforme y menos disperso irregularmente.</p>
                 <div id="comparatorSpreadChart" class="chart-surface small-chart"></div>
               </article>
             </section>
             <section class="grid two-columns">
               <article class="panel">
                 <div class="panel-title"><h2>Inercia global por iteracion</h2></div>
+                <p class="chart-help">Mayor inercia indica mayor dispersion global de embeddings en la poblacion.</p>
                 <div id="comparatorGlobalInertiaChart" class="chart-surface small-chart"></div>
               </article>
               <article class="panel">
                 <div class="panel-title"><h2>Entropia global por iteracion</h2></div>
+                <p class="chart-help">Mayor entropia indica mayor variedad conceptual o semantica observada.</p>
                 <div id="comparatorGlobalEntropyChart" class="chart-surface small-chart"></div>
               </article>
             </section>

@@ -166,7 +166,7 @@ test("diagnostic iteration metrics use higher-is-better metadata", () => {
     higherIsBetter: true,
   });
   assert.deepEqual(comparatorMetricMetadata("globalEntropy"), {
-    description: "Mayor entropia indica mayor variedad conceptual global.",
+    description: "Mayor entropia indica mayor variedad conceptual o semantica.",
     higherIsBetter: true,
   });
 });

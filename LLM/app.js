@@ -691,6 +691,7 @@ const dom = {
   comparatorReferenceLibraryStatus: document.querySelector("#comparatorReferenceLibraryStatus"),
   comparatorReferenceText: document.querySelector("#comparatorReferenceText"),
   comparatorModel: document.querySelector("#comparatorModel"),
+  comparatorModelCustom: document.querySelector("#comparatorModelCustom"),
   comparatorTopK: document.querySelector("#comparatorTopK"),
   comparatorSeed: document.querySelector("#comparatorSeed"),
   comparatorRepetitions: document.querySelector("#comparatorRepetitions"),
@@ -4588,6 +4589,7 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
     dom.saveComparatorReferenceButton,
     dom.comparatorReferenceText,
     dom.comparatorModel,
+    dom.comparatorModelCustom,
     dom.comparatorTopK,
     dom.comparatorSeed,
     dom.comparatorRepetitions,
@@ -5213,6 +5215,7 @@ function renderComparatorCustomSelectOption(proposal, option) {
   select.addEventListener("change", () => {
     customInput.hidden = select.value !== "__custom__";
     if (customInput.hidden) customInput.value = "";
+    syncComparatorConfigGroupLayout(wrapper.closest(".proposal-config-group"));
   });
   return wrapper;
 }
@@ -5801,15 +5804,60 @@ function comparatorProposalGitConfigs() {
   return configs;
 }
 
+function syncComparatorModelCustomField() {
+  if (!dom.comparatorModel || !dom.comparatorModelCustom) return;
+  const custom = dom.comparatorModel.value === "__custom__";
+  dom.comparatorModelCustom.hidden = !custom;
+  dom.comparatorModelCustom.required = custom;
+  if (!custom) {
+    dom.comparatorModelCustom.value = "";
+  }
+}
+
+function readComparatorModelValue(options = {}) {
+  const allowEmpty = Boolean(options.allowEmpty);
+  if (!dom.comparatorModel) return "";
+  const value = dom.comparatorModel.value === "__custom__"
+    ? (dom.comparatorModelCustom?.value || "").trim()
+    : dom.comparatorModel.value.trim();
+  if (!value && !allowEmpty) {
+    throw new Error("Define el modelo Ollama.");
+  }
+  return value;
+}
+
+function setComparatorModelOptions(options = [], defaultModel = "llama3") {
+  if (!dom.comparatorModel) return;
+  const current = readComparatorModelValue({ allowEmpty: true }) || defaultModel;
+  const values = Array.from(new Set([defaultModel, ...options, "llama3"].filter(Boolean).map(String)));
+  const customOption = document.createElement("option");
+  customOption.value = "__custom__";
+  customOption.textContent = "Personalizado...";
+  dom.comparatorModel.replaceChildren(
+    ...values.map((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      return option;
+    }),
+    customOption,
+  );
+  if (values.includes(current)) {
+    dom.comparatorModel.value = current;
+    if (dom.comparatorModelCustom) dom.comparatorModelCustom.value = "";
+  } else {
+    dom.comparatorModel.value = "__custom__";
+    if (dom.comparatorModelCustom) dom.comparatorModelCustom.value = current;
+  }
+  syncComparatorModelCustomField();
+}
+
 function readComparatorConfig() {
   const referenceText = dom.comparatorReferenceText.value.trim();
-  const model = dom.comparatorModel.value.trim();
+  const model = readComparatorModelValue();
   const selectedProposalIds = selectedComparatorProposalIds();
   if (!referenceText) {
     throw new Error("Define el texto de referencia.");
-  }
-  if (!model) {
-    throw new Error("Define el modelo Ollama.");
   }
   if (!selectedProposalIds.length) {
     throw new Error("Agrega al menos una instancia de propuesta.");
@@ -5838,7 +5886,7 @@ function readComparatorConfig() {
     n: Math.floor(readClampedNumber(dom.comparatorN, "N individuos", 1, 500)),
     generaciones: Math.floor(readClampedNumber(dom.comparatorGeneraciones, "Generaciones", 0, 500)),
     proposalParallelism: Math.floor(readClampedNumber(dom.comparatorProposalParallelism, "Propuestas paralelas", 1, 8)),
-    timeoutMinutes: Math.floor(readClampedNumber(dom.comparatorTimeoutMinutes, "Timeout por propuesta", 1, 1440)),
+    timeoutMinutes: Math.floor(readClampedNumber(dom.comparatorTimeoutMinutes, "Timeout por propuesta", 2400, 10080)),
   };
 }
 
@@ -5866,6 +5914,10 @@ async function loadComparatorProposals() {
     if (dom.comparatorExecutionMode && payload.defaults?.executionMode) {
       dom.comparatorExecutionMode.value = payload.defaults.executionMode;
       syncComparatorExecutionModeControls(false);
+    }
+    setComparatorModelOptions(payload.defaults?.ollamaModelOptions || [], payload.defaults?.model || "llama3");
+    if (dom.comparatorTimeoutMinutes && payload.defaults?.timeoutMinutes !== undefined) {
+      dom.comparatorTimeoutMinutes.value = String(payload.defaults.timeoutMinutes);
     }
     renderComparatorProposalControls(payload.proposals || []);
     const proposalSummary = payload.proposals
@@ -6402,7 +6454,8 @@ function renderComparatorCostExplanation(run) {
   dom.comparatorCostExplanation.innerHTML = `
     <p><strong>${escapeHtml(comparable ? "Costos comparables" : "Costos no comparables")}</strong>: ${escapeHtml(comparisonDetail)}</p>
     <p>Modo: ${escapeHtml(policy.label || run.config?.executionMode || "--")}; paralelismo efectivo ${escapeHtml(String(effective))} de ${escapeHtml(String(requested))} solicitado(s); wall-clock total de corrida ${escapeHtml(runCost.runWallClockLabel || "--")}.</p>
-    <p>Menor es mejor en las metricas de costo. Algoritmo es el runtime interno reportado por cada propuesta; Proceso Python es el wall-clock del proceso; Total propuesta suma proceso y post-proceso del comparador. Post-procesamiento, extraccion de metricas y preparacion visual no se suman al costo real del algoritmo.</p>
+    <p>La tabla se concentra en costos utiles para comparar ejecuciones: wall-clock, llamadas LLM, tokens y tiempos reportados por Ollama. Menor es mejor salvo que una metrica no sea reportada.</p>
+    <p>Post-procesamiento, extraccion de metricas y preparacion visual siguen separados internamente, pero no se muestran como costo principal ni se suman al costo real del algoritmo.</p>
     <p>Tokens y duracion Ollama solo se comparan cuando todas las propuestas completadas reportan esa metrica con fuente real; si no, se muestra No reportado y no se destaca ganador.</p>
   `;
 }
@@ -6411,44 +6464,20 @@ function comparatorCostMetricDefinitions() {
   const secondsMetric = (key, labelKey) => ({
     value: (_proposal, cost) => cost[key],
     format: (_proposal, cost) => cost[labelKey] || "--",
-    isReported: (_proposal, cost) => Number.isFinite(Number(cost[key])),
+    isReported: (_proposal, cost) => cost[key] !== null && cost[key] !== undefined && Number.isFinite(Number(cost[key])),
   });
   return [
     {
-      id: "algorithm",
-      label: "Algoritmo",
-      detail: "Runtime interno reportado por la propuesta.",
-      ...secondsMetric("algorithmRuntimeSeconds", "algorithmRuntimeLabel"),
-    },
-    {
       id: "process",
-      label: "Proceso Python",
-      detail: "Wall-clock del proceso Python ejecutado por el backend.",
+      label: "Wall-clock proceso",
+      detail: "Tiempo real del proceso Python ejecutado por el backend.",
       ...secondsMetric("processWallClockSeconds", "processWallClockLabel"),
     },
     {
-      id: "proposalTotal",
-      label: "Total propuesta",
-      detail: "Proceso Python mas post-procesamiento del comparador.",
-      ...secondsMetric("proposalTotalWallClockSeconds", "proposalTotalWallClockLabel"),
-    },
-    {
-      id: "post",
-      label: "Post-procesamiento",
-      detail: "Seleccion o ranking externo del comparador; no carga al algoritmo.",
-      ...secondsMetric("postProcessingWallClockSeconds", "postProcessingWallClockLabel"),
-    },
-    {
-      id: "metrics",
-      label: "Extraccion metricas",
-      detail: "Normalizacion y metricas web posteriores; no carga al algoritmo.",
-      ...secondsMetric("metricExtractionSeconds", "metricExtractionLabel"),
-    },
-    {
-      id: "plots",
-      label: "Preparacion visual",
-      detail: "Armado de datos para tablas y graficos; no carga al algoritmo.",
-      ...secondsMetric("plotPreparationSeconds", "plotPreparationLabel"),
+      id: "algorithm",
+      label: "Runtime algoritmo",
+      detail: "Tiempo interno reportado por la propuesta cuando existe.",
+      ...secondsMetric("algorithmRuntimeSeconds", "algorithmRuntimeLabel"),
     },
     {
       id: "llmCalls",
@@ -7840,6 +7869,7 @@ dom.resumeComparatorButton?.addEventListener("click", resumeComparatorRun);
 dom.copyComparatorLogButton.addEventListener("click", copyComparatorLog);
 dom.comparatorChartProposalFilters?.addEventListener("change", onComparatorChartFilterChange);
 dom.comparatorExecutionMode.addEventListener("change", () => syncComparatorExecutionModeControls(false));
+dom.comparatorModel?.addEventListener("change", syncComparatorModelCustomField);
 dom.comparatorProposalSelector?.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) return;
   const removeButton = event.target.closest("[data-remove-comparator-proposal]");

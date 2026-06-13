@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -106,8 +107,11 @@ POSTHOC_EMBEDDING_MODEL = str(COMPARATOR_DEFAULTS.get("posthocEmbeddingModel") o
 DEFAULT_SELECTED_PROPOSALS = tuple(COMPARATOR_DEFAULTS.get("selectedProposalIds") or ("evolmd", "mesap", "evolmd-mo", "binary-mopso-cd"))
 DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN = config_bool(COMPARATOR_DEFAULTS.get("updateRepositoriesBeforeRun"), False)
 DEFAULT_EXECUTION_MODE = str(COMPARATOR_DEFAULTS.get("executionMode") or EXECUTION_MODE_FAIR_SEQUENTIAL)
+COMPARATOR_TIMEOUT_MINUTES_MIN = 2400
+COMPARATOR_TIMEOUT_MINUTES_MAX = 10080
 METRIC_SCHEMA_VERSION = 2
 METRIC_COORDINATE_SPACE = "comparable_normalized"
+POSTHOC_DIAGNOSTIC_KMEANS_CLUSTERS = 3
 MODULE_ROOT = Path(__file__).resolve().parents[1]
 BINARY_PROPOSAL_ID = "binary-mopso-cd"
 BINARY_TASK_MODEL_PREFIX = "router.task_models."
@@ -155,6 +159,14 @@ BINARY_FORCED_OPTION_TYPES = {
 }
 BINARY_STANDARD_COMPONENTS = ("role", "topic", "action")
 BINARY_OLLAMA_MODEL_CHOICES = ("llama3", "llama3.1:8b", "qwen3.5:2b")
+COMPARATOR_OLLAMA_MODEL_CHOICES = tuple(
+    dict.fromkeys(
+        [
+            str(COMPARATOR_DEFAULTS.get("model") or "llama3"),
+            *BINARY_OLLAMA_MODEL_CHOICES,
+        ]
+    )
+)
 BINARY_GUIDED_LIST_OPTIONS = {
     "experiment.frozen_components": {
         "type": "component_multi_select",
@@ -1446,6 +1458,7 @@ class ComparatorService:
         self.runs_root = root / "runs" / "comparator"
         self._runs: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
+        self._posthoc_spacy_model: Any | None = None
 
     def list_proposals(self) -> list[dict[str, Any]]:
         proposals = []
@@ -1495,6 +1508,14 @@ class ComparatorService:
 
     def public_defaults(self) -> dict[str, Any]:
         return {
+            "model": str(COMPARATOR_DEFAULTS.get("model") or "llama3"),
+            "ollamaModelOptions": list(COMPARATOR_OLLAMA_MODEL_CHOICES),
+            "timeoutMinutes": self._int_between(
+                COMPARATOR_DEFAULTS.get("timeoutMinutes", COMPARATOR_TIMEOUT_MINUTES_MIN),
+                "timeoutMinutes",
+                COMPARATOR_TIMEOUT_MINUTES_MIN,
+                COMPARATOR_TIMEOUT_MINUTES_MAX,
+            ),
             "updateRepositoriesBeforeRun": DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN,
             "executionMode": DEFAULT_EXECUTION_MODE,
             "metricSchemaVersion": METRIC_SCHEMA_VERSION,
@@ -1876,7 +1897,12 @@ class ComparatorService:
                     else "Costos no comparables: las propuestas comparten Ollama/CPU/GPU."
                 ),
             },
-            "timeoutMinutes": self._int_between(payload.get("timeoutMinutes", COMPARATOR_DEFAULTS.get("timeoutMinutes", 60)), "timeoutMinutes", 1, 1440),
+            "timeoutMinutes": self._int_between(
+                payload.get("timeoutMinutes", COMPARATOR_DEFAULTS.get("timeoutMinutes", COMPARATOR_TIMEOUT_MINUTES_MIN)),
+                "timeoutMinutes",
+                COMPARATOR_TIMEOUT_MINUTES_MIN,
+                COMPARATOR_TIMEOUT_MINUTES_MAX,
+            ),
             "selectedProposalIds": selected,
             "proposalConfigs": proposal_configs,
             "proposalInstances": proposal_instances,
@@ -3456,21 +3482,157 @@ class ComparatorService:
         final_rows: list[dict[str, Any]],
         reference_text: str,
     ) -> list[dict[str, Any]]:
+        history = self._read_population_history(output_dir)
+        diagnostic_series = self._read_diagnostic_metric_series(proposal, output_dir, history)
+        base_series: list[dict[str, Any]] = []
         if proposal.kind == "binary-mopso-cd":
             archive_series = self._read_binary_archive_metric_series(proposal, output_dir)
             if archive_series:
-                return archive_series
+                return self._merge_series_diagnostics(archive_series, diagnostic_series)
             series = self._read_binary_metric_series(output_dir)
             if series:
-                return series
-        history = self._read_population_history(output_dir)
+                return self._merge_series_diagnostics(series, diagnostic_series)
         csv_series = self._read_legacy_metric_series(proposal, output_dir)
         if history:
             history_series = [self._history_entry_metrics(proposal, entry, reference_text) for entry in history]
-            return self._merge_series_diagnostics(history_series, csv_series)
+            return self._merge_series_diagnostics(history_series, diagnostic_series or csv_series)
         if csv_series:
-            return csv_series
-        return [self._final_series_point(proposal, final_rows)]
+            base_series = csv_series
+        else:
+            base_series = [self._final_series_point(proposal, final_rows)]
+        return self._merge_series_diagnostics(base_series, diagnostic_series)
+
+    def _read_diagnostic_metric_series(
+        self,
+        proposal: ProposalDefinition,
+        output_dir: Path,
+        history: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        native = self._read_native_diagnostic_metric_series(proposal, output_dir)
+        if self._series_has_diagnostics(native):
+            return native
+        return self._build_posthoc_diagnostic_series(proposal, history or [])
+
+    def _series_has_diagnostics(self, series: list[dict[str, Any]]) -> bool:
+        return any(
+            point.get("globalInertia") is not None or point.get("globalEntropy") is not None
+            for point in series
+        )
+
+    def _read_native_diagnostic_metric_series(
+        self,
+        proposal: ProposalDefinition,
+        output_dir: Path,
+    ) -> list[dict[str, Any]]:
+        if proposal.kind == "binary-mopso-cd":
+            return self._read_binary_monitor_metric_series(output_dir)
+        if proposal.metrics_series_file:
+            return self._read_legacy_metric_series(proposal, output_dir)
+        return []
+
+    def _read_binary_monitor_metric_series(self, output_dir: Path) -> list[dict[str, Any]]:
+        rows = self._read_csv_dicts(output_dir / "monitor_metrics.csv")
+        series: list[dict[str, Any]] = []
+        for item in rows:
+            generation = item.get("generation") or item.get("Generacion")
+            if generation is None:
+                continue
+            series.append(
+                {
+                    "generation": int(finite_float(generation)),
+                    "hypervolume": None,
+                    "nonDominatedRows": None,
+                    "spread": None,
+                    "globalInertia": finite_float(item.get("kmeans_inertia"), None),
+                    "globalEntropy": finite_float(item.get("entity_entropy"), None),
+                    "source": "binary_monitor",
+                }
+            )
+        return [item for item in series if item["generation"] > 0]
+
+    def _build_posthoc_diagnostic_series(
+        self,
+        proposal: ProposalDefinition,
+        history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not history:
+            return []
+        series: list[dict[str, Any]] = []
+        for entry in history:
+            population = entry.get("population") if isinstance(entry.get("population"), list) else []
+            if not population:
+                continue
+            texts = self._history_population_texts(proposal, population)
+            diagnostic = self._posthoc_population_diagnostics(texts)
+            if not diagnostic:
+                continue
+            series.append(
+                {
+                    "generation": int(finite_float(entry.get("generation"))),
+                    "hypervolume": None,
+                    "nonDominatedRows": None,
+                    "spread": None,
+                    **diagnostic,
+                    "source": "posthoc_diagnostic_history",
+                }
+            )
+        return [item for item in series if item["generation"] > 0]
+
+    def _history_population_texts(self, proposal: ProposalDefinition, population: list[dict[str, Any]]) -> list[str]:
+        texts: list[str] = []
+        for index, row in enumerate(population, start=1):
+            if not isinstance(row, dict):
+                continue
+            try:
+                normalized = self._normalize_any_row(proposal, row, index)
+            except Exception:
+                continue
+            text = str(normalized.get("generatedText") or "").strip()
+            if normalized.get("status") == "ok" and text:
+                texts.append(text)
+        return texts
+
+    def _posthoc_population_diagnostics(self, generated_texts: list[str]) -> dict[str, float] | None:
+        texts = [text.strip() for text in generated_texts if text and text.strip()]
+        if not texts:
+            return None
+        try:
+            import numpy as np
+
+            embeddings, _ = shared_sbert_service().encode_texts(POSTHOC_EMBEDDING_MODEL, texts)
+            embedding_array = np.asarray(embeddings, dtype=float)
+            inertia = 0.0
+            if len(embedding_array) >= 2:
+                from sklearn.cluster import KMeans
+
+                clusters = min(POSTHOC_DIAGNOSTIC_KMEANS_CLUSTERS, len(embedding_array))
+                inertia = float(KMeans(n_clusters=clusters, n_init="auto", random_state=0).fit(embedding_array).inertia_)
+            return {
+                "globalInertia": finite_float(inertia, 0.0),
+                "globalEntropy": self._posthoc_entity_entropy(texts),
+            }
+        except Exception:
+            return None
+
+    def _posthoc_entity_entropy(self, generated_texts: list[str]) -> float:
+        try:
+            import numpy as np
+
+            if self._posthoc_spacy_model is None:
+                import spacy
+
+                self._posthoc_spacy_model = spacy.load("en_core_web_sm")
+            nlp = self._posthoc_spacy_model
+            labels: list[str] = []
+            for doc in nlp.pipe(generated_texts):
+                labels.extend(entity.label_ for entity in doc.ents)
+            if not labels:
+                return 0.0
+            counts = Counter(labels)
+            total = sum(counts.values())
+            return finite_float(-sum((count / total) * np.log(count / total) for count in counts.values()))
+        except Exception:
+            return 0.0
 
     def _read_binary_archive_metric_series(
         self,

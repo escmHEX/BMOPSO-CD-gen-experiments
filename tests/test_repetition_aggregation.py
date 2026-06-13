@@ -75,6 +75,18 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(parsed["repetitionsK"], 4)
         self.assertIn("binary-mopso-cd", parsed["selectedProposalIds"])
 
+    def test_comparator_config_timeout_defaults_to_2400_minutes(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config({"referenceText": "reference"})
+
+        self.assertEqual(parsed["timeoutMinutes"], 2400)
+
+    def test_comparator_config_rejects_timeout_below_2400_minutes(self):
+        service = ComparatorService(Path("."))
+
+        with self.assertRaises(ValueError):
+            service._read_config({"referenceText": "reference", "timeoutMinutes": 120})
+
     def test_comparator_config_accepts_single_selected_proposal(self):
         service = ComparatorService(Path("."))
         parsed = service._read_config(
@@ -1435,6 +1447,113 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertIsNotNone(series[0]["hypervolume"])
         self.assertAlmostEqual(series[0]["globalInertia"], 0.3689031219)
         self.assertAlmostEqual(series[0]["globalEntropy"], 0.6886581024)
+        self.assertEqual(series[0]["source"], "population_history")
+
+    def test_binary_monitor_series_reads_inertia_and_entropy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "monitor_metrics.csv").write_text(
+                "\n".join(
+                    [
+                        "generation,kmeans_inertia,entity_entropy,monitor_overhead_seconds",
+                        "1,0.125,0.693,0.01",
+                        "2,0.250,0.810,0.02",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(Path("."))
+
+            series = service._read_binary_monitor_metric_series(output_dir)
+
+        self.assertEqual(len(series), 2)
+        self.assertEqual(series[0]["generation"], 1)
+        self.assertAlmostEqual(series[0]["globalInertia"], 0.125)
+        self.assertAlmostEqual(series[0]["globalEntropy"], 0.693)
+        self.assertEqual(series[0]["source"], "binary_monitor")
+
+    def test_binary_archive_series_merges_monitor_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "archive_history.jsonl").write_text(
+                json.dumps(
+                    {
+                        "generation": 1,
+                        "archive": [
+                            {
+                                "generated_text": "Generated A",
+                                "prompt": "Prompt A",
+                                "objectives": {"f1": 0.0, "f2": 1.0},
+                            }
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (output_dir / "monitor_metrics.csv").write_text(
+                "generation,kmeans_inertia,entity_entropy\n1,0.125,0.693\n",
+                encoding="utf-8",
+            )
+            service = ComparatorService(Path("."))
+            proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+
+            series = service._build_metric_series(proposal, output_dir, [], "reference")
+
+        self.assertEqual(len(series), 1)
+        self.assertIsNotNone(series[0]["hypervolume"])
+        self.assertAlmostEqual(series[0]["globalInertia"], 0.125)
+        self.assertAlmostEqual(series[0]["globalEntropy"], 0.693)
+        self.assertEqual(series[0]["source"], "archive_history")
+
+    def test_history_series_uses_posthoc_diagnostics_when_native_diagnostics_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "population_history.jsonl").write_text(
+                json.dumps(
+                    {
+                        "generation": 1,
+                        "population": [
+                            {
+                                "generated_data": "Generated A",
+                                "prompt": "Prompt A",
+                                "fitness": 0.7,
+                            },
+                            {
+                                "generated_data": "Generated B",
+                                "prompt": "Prompt B",
+                                "fitness": 0.6,
+                            },
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (output_dir / "metrics_log.csv").write_text(
+                "generation,best_fitness\n1,0.7\n",
+                encoding="utf-8",
+            )
+            service = ComparatorService(Path("."))
+            proposal = next(item for item in PROPOSALS if item.proposal_id == "mesap")
+
+            with patch.object(
+                service,
+                "_posthoc_population_diagnostics",
+                return_value={"globalInertia": 0.33, "globalEntropy": 0.44},
+            ), patch.object(
+                comparator_module,
+                "calculate_posthoc_semantic_scores",
+                return_value=[
+                    {"semanticFidelity": 0.6, "semanticDiversity": 1.0},
+                    {"semanticFidelity": 0.5, "semanticDiversity": 1.2},
+                ],
+            ):
+                series = service._build_metric_series(proposal, output_dir, [], "reference")
+
+        self.assertEqual(len(series), 1)
+        self.assertAlmostEqual(series[0]["globalInertia"], 0.33)
+        self.assertAlmostEqual(series[0]["globalEntropy"], 0.44)
         self.assertEqual(series[0]["source"], "population_history")
 
     def test_mesap_history_series_uses_population_history_for_posthoc_metrics(self):

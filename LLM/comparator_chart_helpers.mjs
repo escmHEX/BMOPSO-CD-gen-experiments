@@ -124,18 +124,18 @@ export function comparatorHypervolumeArea(points) {
 
 export function comparatorMetricMetadata(metricKey) {
   if (metricKey === "spread") {
-    return { description: "Menor spread es mejor.", higherIsBetter: false };
+    return { description: "Menor spread suele indicar un frente mas uniforme.", higherIsBetter: false };
   }
   if (metricKey === "nonDominatedRows") {
-    return { description: "Mayor cantidad de soluciones no dominadas es mejor.", higherIsBetter: true };
+    return { description: "Mayor cantidad de soluciones Pareto disponibles es mejor.", higherIsBetter: true };
   }
   if (metricKey === "globalInertia") {
     return { description: "Mayor inercia indica mayor dispersion global de embeddings.", higherIsBetter: true };
   }
   if (metricKey === "globalEntropy") {
-    return { description: "Mayor entropia indica mayor variedad conceptual global.", higherIsBetter: true };
+    return { description: "Mayor entropia indica mayor variedad conceptual o semantica.", higherIsBetter: true };
   }
-  return { description: "Mayor HV es mejor.", higherIsBetter: true };
+  return { description: "Mayor HV es mejor: mas area dominada respecto a [0,0].", higherIsBetter: true };
 }
 
 export function comparatorMetricExtremes(values, higherIsBetter) {

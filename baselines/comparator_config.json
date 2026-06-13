@@ -10,7 +10,7 @@
     "repetitionsK": 1,
     "proposalParallelism": 1,
     "executionMode": "fair_sequential",
-    "timeoutMinutes": 60,
+    "timeoutMinutes": 2400,
     "updateRepositoriesBeforeRun": true
   },
   "proposals": {
