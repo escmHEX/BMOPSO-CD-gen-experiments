@@ -544,10 +544,11 @@ class RepetitionAggregationTests(unittest.TestCase):
                 "proposalConfigs": {
                     "binary-mopso-cd": {
                         "cliValues": {
-                            "experiment.frozen_components": '["role","topic"]',
+                            "experiment.frozen_components": ["role", "topic"],
                             "monitor.enabled": True,
                             "router.heuristics.word_replacement_candidates": False,
                             "router.task_models.synthetic_text_generation": "llama3.1:8b",
+                            "semantic_components.order": ["topic", "role", "action"],
                             "models.sbert.default": "gte-small",
                         }
                     }
@@ -555,10 +556,11 @@ class RepetitionAggregationTests(unittest.TestCase):
             }
         )
         values = parsed["proposalConfigs"]["binary-mopso-cd"]["cliValues"]
-        self.assertEqual(values["experiment.frozen_components"], '["role","topic"]')
+        self.assertEqual(values["experiment.frozen_components"], ["role", "topic"])
         self.assertTrue(values["monitor.enabled"])
         self.assertFalse(values["router.heuristics.word_replacement_candidates"])
         self.assertEqual(values["router.task_models.synthetic_text_generation"], "llama3.1:8b")
+        self.assertEqual(values["semantic_components.order"], ["topic", "role", "action"])
         self.assertEqual(values["models.sbert.default"], "gte-small")
 
     def test_binary_cli_options_are_generated_from_default_yaml(self):
@@ -578,6 +580,13 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(options_by_key["router.heuristics.word_replacement_candidates"]["type"], "bool")
         self.assertTrue(options_by_key["router.heuristics.word_replacement_candidates"]["allowFalse"])
         self.assertEqual(options_by_key["experiment.n"]["source"], "managed")
+        self.assertEqual(options_by_key["experiment.frozen_components"]["type"], "component_multi_select")
+        self.assertEqual(options_by_key["semantic_components.order"]["type"], "ordered_multi_select")
+        self.assertEqual(options_by_key["semantic_components.expansion_order"]["type"], "ordered_multi_select")
+        self.assertEqual(options_by_key["logging.level"]["ui"], "select")
+        self.assertFalse(options_by_key["logging.level"]["allowCustom"])
+        self.assertIn("llama3.1:8b", options_by_key["router.task_models.synthetic_text_generation"]["choices"])
+        self.assertTrue(options_by_key["router.task_models.synthetic_text_generation"]["allowCustom"])
 
     def test_binary_mopso_float_overrides_accept_decimal_values(self):
         service = ComparatorService(Path("."))
@@ -925,7 +934,8 @@ class RepetitionAggregationTests(unittest.TestCase):
                         "cliValues": {
                             "--config": "configs/test.yaml",
                             "models.sbert.default": "gte-small",
-                            "experiment.frozen_components": '["role","topic"]',
+                            "experiment.frozen_components": ["role", "topic"],
+                            "semantic_components.order": ["topic", "role", "action"],
                             "monitor.enabled": True,
                             "router.heuristics.word_replacement_candidates": False,
                             "router.task_models.synthetic_text_generation": "llama3.1:8b",
@@ -955,6 +965,7 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(set_values["ollama.default_model"], '"llama3"')
         self.assertEqual(set_values["models.sbert.default"], '"gte-small"')
         self.assertEqual(set_values["experiment.frozen_components"], '["role","topic"]')
+        self.assertEqual(set_values["semantic_components.order"], '["topic","role","action"]')
         self.assertEqual(set_values["monitor.enabled"], "true")
         self.assertEqual(set_values["router.heuristics.word_replacement_candidates"], "false")
         self.assertEqual(set_values["router.task_models.semantic_anchor_extraction"], '"llama3"')

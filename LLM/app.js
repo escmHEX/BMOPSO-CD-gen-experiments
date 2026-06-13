@@ -5007,6 +5007,7 @@ function comparatorPreviewValue(value) {
 function enhanceComparatorSelects(container = dom.comparatorProposalConfigPanels) {
   if (!window.Choices) return;
   container.querySelectorAll("select.cli-select").forEach((select) => {
+    if (select.closest(".comparator-instance-modal")) return;
     comparatorChoiceInstances.push(new window.Choices(select, {
       allowHTML: false,
       searchEnabled: false,
@@ -5018,13 +5019,16 @@ function enhanceComparatorSelects(container = dom.comparatorProposalConfigPanels
 
 function syncComparatorConfigGroupLayout(group) {
   const body = group?.querySelector?.(".proposal-config-group-body");
-  if (!body) return;
+  const summary = group?.querySelector?.("summary");
+  group?.style?.removeProperty?.("--proposal-config-group-body-reserve");
+  if (!group || !body || !summary) return;
   if (!group.open) {
-    group.style.setProperty("--proposal-config-group-body-reserve", "0px");
+    group.style.removeProperty("height");
     return;
   }
   window.requestAnimationFrame(() => {
-    group.style.setProperty("--proposal-config-group-body-reserve", `${body.scrollHeight}px`);
+    const summaryHeight = summary.getBoundingClientRect().height;
+    group.style.height = `${Math.ceil(summaryHeight + body.scrollHeight)}px`;
   });
 }
 
@@ -5074,6 +5078,27 @@ function comparatorOptionHelp(option) {
   return details.join(" - ");
 }
 
+function comparatorOptionValueHelp(option) {
+  if (option.valueHelp) return String(option.valueHelp);
+  if (option.type === "bool") return "Selecciona true o false. Sin cambio conserva el valor por defecto de la propuesta.";
+  if (option.type === "int") return "Valor entero. La propuesta validara sus restricciones propias al ejecutar.";
+  if (option.type === "float") return "Valor numerico real. La propuesta validara sus restricciones propias al ejecutar.";
+  if (option.type === "path") return "Ruta de archivo o directorio aceptada por la propuesta.";
+  if (Array.isArray(option.choices) && option.choices.length && !option.allowCustom) {
+    return `Valores permitidos: ${option.choices.join(", ")}.`;
+  }
+  if (Array.isArray(option.choices) && option.choices.length) {
+    return `Puedes usar un valor conocido (${option.choices.join(", ")}) o escribir uno compatible.`;
+  }
+  if (option.type === "yaml") return "Valor YAML avanzado. Usa este campo solo si necesitas una estructura que no puede expresarse con controles guiados.";
+  return "Override opcional. Si lo dejas vacio, se conserva el default de la propuesta.";
+}
+
+function renderComparatorCliHelp(option) {
+  const help = comparatorOptionValueHelp(option);
+  return help ? `<p class="cli-field-help">${escapeHtml(help)}</p>` : "";
+}
+
 function renderComparatorCliFields(proposal, options) {
   if (proposal.kind !== "binary-mopso-cd") {
     return options.map((option) => renderComparatorCliOption(proposal, option));
@@ -5114,10 +5139,18 @@ function renderComparatorCliOption(proposal, option) {
   const type = option.type || "string";
   if (type === "yaml") return renderComparatorYamlOption(proposal, option);
   if (type === "bool") return renderComparatorBoolOption(proposal, option);
+  if (type === "component_multi_select") return renderComparatorComponentMultiSelectOption(proposal, option);
+  if (type === "ordered_multi_select") return renderComparatorOrderedMultiSelectOption(proposal, option);
   if (type === "multi_select") return renderComparatorMultiSelectOption(proposal, option);
   if (type === "repeatable_assignment_bool") return renderComparatorAssignmentBoolOption(proposal, option);
   if (type === "repeatable_assignment") return renderComparatorAssignmentOption(proposal, option);
   if (type === "repeatable") return renderComparatorRepeatableOption(proposal, option);
+  if (Array.isArray(option.choices) && option.choices.length && option.allowCustom) {
+    return renderComparatorCustomSelectOption(proposal, option);
+  }
+  if (option.ui === "select" || (Array.isArray(option.choices) && option.choices.length && option.allowCustom === false)) {
+    return renderComparatorSelectOption(proposal, option);
+  }
   return renderComparatorScalarOption(proposal, option);
 }
 
@@ -5132,10 +5165,55 @@ function renderComparatorScalarOption(proposal, option) {
   const defaultValue = option.default === undefined ? "" : String(option.default);
   wrapper.innerHTML = `
     <span>${escapeHtml(comparatorOptionLabel(option))}</span>
+    ${renderComparatorCliHelp(option)}
     <input id="${escapeHtml(inputId)}" type="${inputType}" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="${escapeHtml(option.type || "string")}" ${datalistId ? `list="${escapeHtml(datalistId)}"` : ""} ${option.min !== undefined ? `min="${escapeHtml(option.min)}"` : ""} ${option.max !== undefined ? `max="${escapeHtml(option.max)}"` : ""} ${option.step !== undefined ? `step="${escapeHtml(option.step)}"` : isNumber ? 'step="any"' : ""} placeholder="${escapeHtml(defaultValue)}">
     ${datalistId ? `<datalist id="${escapeHtml(datalistId)}">${option.choices.map((choice) => `<option value="${escapeHtml(choice)}"></option>`).join("")}</datalist>` : ""}
     <small>${escapeHtml(comparatorOptionHelp(option))}</small>
   `;
+  return wrapper;
+}
+
+function renderComparatorSelectOption(proposal, option) {
+  const wrapper = document.createElement("label");
+  wrapper.className = "cli-field";
+  const inputId = comparatorOptionInputId(proposal, option);
+  const optionKey = comparatorOptionKey(option);
+  const choices = Array.isArray(option.choices) ? option.choices : [];
+  wrapper.innerHTML = `
+    <span>${escapeHtml(comparatorOptionLabel(option))}</span>
+    ${renderComparatorCliHelp(option)}
+    <select id="${escapeHtml(inputId)}" class="cli-select" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="${escapeHtml(option.type || "string")}">
+      <option value="">Sin cambio</option>
+      ${choices.map((choice) => `<option value="${escapeHtml(choice)}">${escapeHtml(choice)}</option>`).join("")}
+    </select>
+    <small>${escapeHtml(comparatorOptionHelp(option))}</small>
+  `;
+  return wrapper;
+}
+
+function renderComparatorCustomSelectOption(proposal, option) {
+  const wrapper = document.createElement("label");
+  wrapper.className = "cli-field cli-combo-field";
+  const inputId = comparatorOptionInputId(proposal, option);
+  const optionKey = comparatorOptionKey(option);
+  const choices = Array.isArray(option.choices) ? option.choices : [];
+  wrapper.innerHTML = `
+    <span>${escapeHtml(comparatorOptionLabel(option))}</span>
+    ${renderComparatorCliHelp(option)}
+    <select id="${escapeHtml(inputId)}" class="cli-select" data-comparator-cli-combo data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="${escapeHtml(option.type || "string")}">
+      <option value="">Sin cambio</option>
+      ${choices.map((choice) => `<option value="${escapeHtml(choice)}">${escapeHtml(choice)}</option>`).join("")}
+      <option value="__custom__">Personalizado...</option>
+    </select>
+    <input type="text" data-comparator-cli-combo-custom data-cli-key="${escapeHtml(optionKey)}" placeholder="Escribe un valor compatible" hidden>
+    <small>${escapeHtml(comparatorOptionHelp(option))}</small>
+  `;
+  const select = wrapper.querySelector("[data-comparator-cli-combo]");
+  const customInput = wrapper.querySelector("[data-comparator-cli-combo-custom]");
+  select.addEventListener("change", () => {
+    customInput.hidden = select.value !== "__custom__";
+    if (customInput.hidden) customInput.value = "";
+  });
   return wrapper;
 }
 
@@ -5147,6 +5225,7 @@ function renderComparatorYamlOption(proposal, option) {
   const defaultValue = option.default === undefined ? "" : JSON.stringify(option.default);
   wrapper.innerHTML = `
     <span>${escapeHtml(comparatorOptionLabel(option))}</span>
+    ${renderComparatorCliHelp(option)}
     <textarea id="${escapeHtml(inputId)}" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="yaml" placeholder="${escapeHtml(defaultValue)}"></textarea>
     <small>${escapeHtml(comparatorOptionHelp(option))}</small>
   `;
@@ -5164,6 +5243,7 @@ function renderComparatorBoolOption(proposal, option) {
     <input type="checkbox" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="bool">
     <span>
       <strong>${escapeHtml(comparatorOptionLabel(option))}</strong>
+      <em>${escapeHtml(comparatorOptionValueHelp(option))}</em>
       <small>${escapeHtml(comparatorOptionHelp(option))}</small>
     </span>
   `;
@@ -5176,6 +5256,7 @@ function renderComparatorBoolSelectOption(proposal, option) {
   const optionKey = comparatorOptionKey(option);
   label.innerHTML = `
     <span>${escapeHtml(comparatorOptionLabel(option))}</span>
+    ${renderComparatorCliHelp(option)}
     <select class="cli-select" data-comparator-cli-value data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}" data-cli-type="bool">
       <option value="">Sin cambio</option>
       <option value="true">true</option>
@@ -5189,7 +5270,7 @@ function renderComparatorBoolSelectOption(proposal, option) {
 function renderComparatorMultiSelectOption(proposal, option) {
   const fieldset = document.createElement("fieldset");
   fieldset.className = "cli-fieldset cli-choice-grid";
-  fieldset.innerHTML = `<legend>${escapeHtml(comparatorOptionLabel(option))}</legend>`;
+  fieldset.innerHTML = `<legend>${escapeHtml(comparatorOptionLabel(option))}</legend>${renderComparatorCliHelp(option)}`;
   const choices = Array.isArray(option.choices) ? option.choices : [];
   const optionKey = comparatorOptionKey(option);
   fieldset.append(
@@ -5203,9 +5284,63 @@ function renderComparatorMultiSelectOption(proposal, option) {
       return label;
     }),
   );
+  if (option.allowCustom) {
+    const custom = document.createElement("label");
+    custom.className = "cli-field cli-advanced-list-field";
+    custom.innerHTML = `
+      <span>Valores personalizados opcionales</span>
+      <input type="text" data-comparator-cli-multi-custom data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" placeholder="Separados por coma">
+      <small>Se agregan a la seleccion guiada. La propuesta Python validara si son coherentes con su configuracion.</small>
+    `;
+    fieldset.append(custom);
+  }
   const note = document.createElement("small");
   note.textContent = comparatorOptionHelp(option);
   fieldset.append(note);
+  return fieldset;
+}
+
+function renderComparatorComponentMultiSelectOption(proposal, option) {
+  const fieldset = renderComparatorMultiSelectOption(proposal, { ...option, allowCustom: false });
+  fieldset.classList.add("cli-component-fieldset");
+  return fieldset;
+}
+
+function renderComparatorOrderedMultiSelectOption(proposal, option) {
+  const fieldset = document.createElement("fieldset");
+  fieldset.className = "cli-fieldset cli-ordered-fieldset";
+  const choices = Array.isArray(option.choices) ? option.choices.map(String) : [];
+  const defaults = Array.isArray(option.default) ? option.default.map(String) : choices;
+  const optionKey = comparatorOptionKey(option);
+  fieldset.innerHTML = `
+    <legend>${escapeHtml(comparatorOptionLabel(option))}</legend>
+    ${renderComparatorCliHelp(option)}
+    <div class="cli-ordered-rows"></div>
+    <label class="cli-field cli-advanced-list-field">
+      <span>Componentes personalizados opcionales</span>
+      <input type="text" data-comparator-cli-ordered-custom data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" placeholder="ej: audience, tone">
+      <small>Separados por coma. Se agregan despues de los componentes seleccionados y Binary validara si son coherentes con la configuracion.</small>
+    </label>
+    <small>${escapeHtml(comparatorOptionHelp(option))}</small>
+  `;
+  const rows = fieldset.querySelector(".cli-ordered-rows");
+  rows.replaceChildren(
+    ...choices.map((choice, index) => {
+      const row = document.createElement("label");
+      row.className = "cli-ordered-row";
+      const defaultPosition = defaults.indexOf(choice);
+      const selected = defaultPosition >= 0;
+      row.innerHTML = `
+        <input type="checkbox" value="${escapeHtml(choice)}" ${selected ? "checked" : ""} data-comparator-cli-ordered data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" data-cli-flag="${escapeHtml(option.flag)}">
+        <span>${escapeHtml(choice)}</span>
+        <select class="cli-select" data-comparator-cli-ordered-rank data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(optionKey)}" aria-label="Orden de ${escapeHtml(choice)}">
+          ${choices.map((_, rankIndex) => `<option value="${rankIndex + 1}" ${rankIndex === (selected ? defaultPosition : index) ? "selected" : ""}>${rankIndex + 1}</option>`).join("")}
+        </select>
+      `;
+      return row;
+    }),
+  );
+  fieldset.dataset.defaultOrderedValue = JSON.stringify(defaults);
   return fieldset;
 }
 
@@ -5314,6 +5449,13 @@ function collectComparatorCliValues(container) {
       cliValues[key] = type === "bool" && typeof value === "string" ? value === "true" : value;
     }
   });
+  container.querySelectorAll("[data-comparator-cli-combo]").forEach((field) => {
+    const key = field.dataset.cliKey || field.dataset.cliFlag;
+    if (!key || !field.value) return;
+    const customInput = field.closest(".cli-combo-field")?.querySelector("[data-comparator-cli-combo-custom]");
+    const value = field.value === "__custom__" ? customInput?.value?.trim() : field.value;
+    if (value) cliValues[key] = value;
+  });
   container.querySelectorAll("[data-comparator-cli-multi]").forEach((field) => {
     if (!field.checked) return;
     const key = field.dataset.cliKey || field.dataset.cliFlag;
@@ -5321,6 +5463,48 @@ function collectComparatorCliValues(container) {
     const values = cliValues[key] || [];
     values.push(field.value);
     cliValues[key] = values;
+  });
+  container.querySelectorAll("[data-comparator-cli-multi-custom]").forEach((field) => {
+    const key = field.dataset.cliKey || field.dataset.cliFlag;
+    if (!key) return;
+    const custom = field.value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (!custom.length) return;
+    cliValues[key] = Array.from(new Set([...(cliValues[key] || []), ...custom]));
+  });
+  container.querySelectorAll(".cli-ordered-fieldset").forEach((fieldset) => {
+    const checked = Array.from(fieldset.querySelectorAll("[data-comparator-cli-ordered]:checked"));
+    if (!checked.length && !fieldset.querySelector("[data-comparator-cli-ordered-custom]")) return;
+    const key = checked[0]?.dataset.cliKey || fieldset.querySelector("[data-comparator-cli-ordered-custom]")?.dataset.cliKey;
+    if (!key) return;
+    const ranked = checked
+      .map((field, index) => {
+        const rankControl = field.closest(".cli-ordered-row")?.querySelector("[data-comparator-cli-ordered-rank]");
+        const fallbackRank = index + 1;
+        return {
+          value: field.value,
+          rank: Number.parseInt(rankControl?.value || `${fallbackRank}`, 10) || fallbackRank,
+          index,
+        };
+      })
+      .sort((left, right) => left.rank - right.rank || left.index - right.index)
+      .map((item) => item.value);
+    const custom = (fieldset.querySelector("[data-comparator-cli-ordered-custom]")?.value || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const ordered = Array.from(new Set([...ranked, ...custom]));
+    let defaults = [];
+    try {
+      defaults = JSON.parse(fieldset.dataset.defaultOrderedValue || "[]").map(String);
+    } catch {
+      defaults = [];
+    }
+    if (ordered.length !== defaults.length || ordered.some((value, index) => value !== defaults[index])) {
+      cliValues[key] = ordered;
+    }
   });
   container.querySelectorAll("[data-comparator-cli-repeat]").forEach((field) => {
     const key = field.dataset.cliKey || field.dataset.cliFlag;
@@ -5356,10 +5540,55 @@ function applyComparatorCliValues(container, cliValues = {}) {
       field.value = String(value);
     }
   });
+  container.querySelectorAll("[data-comparator-cli-combo]").forEach((field) => {
+    const key = field.dataset.cliKey || field.dataset.cliFlag;
+    if (!key || !(key in cliValues)) return;
+    const value = String(cliValues[key]);
+    const option = Array.from(field.options).find((item) => item.value === value);
+    const customInput = field.closest(".cli-combo-field")?.querySelector("[data-comparator-cli-combo-custom]");
+    if (option) {
+      field.value = value;
+      if (customInput) {
+        customInput.hidden = true;
+        customInput.value = "";
+      }
+    } else {
+      field.value = "__custom__";
+      if (customInput) {
+        customInput.hidden = false;
+        customInput.value = value;
+      }
+    }
+  });
   container.querySelectorAll("[data-comparator-cli-multi]").forEach((field) => {
     const key = field.dataset.cliKey || field.dataset.cliFlag;
     const values = Array.isArray(cliValues[key]) ? cliValues[key].map(String) : [];
     field.checked = values.includes(field.value);
+  });
+  container.querySelectorAll("[data-comparator-cli-multi-custom]").forEach((field) => {
+    const key = field.dataset.cliKey || field.dataset.cliFlag;
+    if (!key || !Array.isArray(cliValues[key])) return;
+    const standard = new Set(
+      Array.from(container.querySelectorAll(`[data-comparator-cli-multi][data-cli-key="${key}"]`)).map((item) => item.value),
+    );
+    field.value = cliValues[key].map(String).filter((value) => !standard.has(value)).join(", ");
+  });
+  container.querySelectorAll(".cli-ordered-fieldset").forEach((fieldset) => {
+    const first = fieldset.querySelector("[data-comparator-cli-ordered]");
+    const customInput = fieldset.querySelector("[data-comparator-cli-ordered-custom]");
+    const key = first?.dataset.cliKey || customInput?.dataset.cliKey;
+    if (!key || !(key in cliValues) || !Array.isArray(cliValues[key])) return;
+    const values = cliValues[key].map(String);
+    const standard = new Set(Array.from(fieldset.querySelectorAll("[data-comparator-cli-ordered]")).map((field) => field.value));
+    fieldset.querySelectorAll("[data-comparator-cli-ordered]").forEach((field) => {
+      const position = values.indexOf(field.value);
+      field.checked = position >= 0;
+      const rankControl = field.closest(".cli-ordered-row")?.querySelector("[data-comparator-cli-ordered-rank]");
+      if (rankControl && position >= 0) rankControl.value = String(position + 1);
+    });
+    if (customInput) {
+      customInput.value = values.filter((value) => !standard.has(value)).join(", ");
+    }
   });
   const repeatPositions = new Map();
   container.querySelectorAll("[data-comparator-cli-repeat]").forEach((field) => {

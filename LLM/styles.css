@@ -607,8 +607,8 @@ label span,
 
 .proposal-cli-fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 10px 12px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
 }
 
 .comparator-instance-card {
@@ -648,7 +648,8 @@ label span,
   border: 1px solid #d2e0eb;
   border-radius: 7px;
   background: #f8fbfd;
-  padding: 12px;
+  padding: 12px 12px 18px;
+  scroll-padding-bottom: 24px;
 }
 
 .modal-actions {
@@ -664,8 +665,7 @@ label span,
   display: block;
   grid-column: 1 / -1;
   min-height: 56px;
-  overflow: hidden;
-  padding-bottom: var(--proposal-config-group-body-reserve, 0);
+  overflow: visible;
   border: 1px solid #d2e0eb;
   border-radius: 7px;
   background: #f8fbfd;
@@ -732,9 +732,9 @@ label span,
 
 .proposal-config-group-body {
   display: none;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 10px 12px;
-  padding: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px 12px;
+  padding: 14px 12px 16px;
 }
 
 .proposal-config-group[open] > .proposal-config-group-body {
@@ -749,6 +749,14 @@ label span,
 .cli-field {
   display: grid;
   gap: 6px;
+  align-content: start;
+}
+
+.proposal-cli-fields input,
+.proposal-cli-fields select,
+.proposal-cli-fields textarea {
+  width: 100%;
+  min-width: 0;
 }
 
 .cli-yaml-field {
@@ -761,6 +769,36 @@ label span,
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 0.82rem;
   line-height: 1.35;
+}
+
+.cli-field > span,
+.cli-field-checkbox strong,
+.cli-fieldset legend {
+  overflow-wrap: anywhere;
+}
+
+.cli-field-help {
+  margin: 0;
+  color: #42576c;
+  font-size: 0.82rem;
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+
+.cli-field small,
+.cli-fieldset small {
+  color: #52687c;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.cli-field-checkbox em {
+  display: block;
+  color: #42576c;
+  font-size: 0.82rem;
+  font-style: normal;
+  line-height: 1.35;
+  margin: 2px 0;
 }
 
 .cli-field-checkbox {
@@ -824,11 +862,12 @@ input[type="checkbox"]:disabled {
 }
 
 .cli-choice-grid {
-  grid-template-columns: repeat(auto-fit, minmax(118px, max-content));
+  grid-template-columns: repeat(auto-fit, minmax(126px, max-content));
   align-items: center;
 }
 
 .cli-choice-grid legend,
+.cli-choice-grid .cli-field-help,
 .cli-choice-grid small {
   grid-column: 1 / -1;
 }
@@ -1028,6 +1067,42 @@ input[type="checkbox"]:disabled {
 .chart-surface {
   width: 100%;
   min-height: 400px;
+}
+
+.cli-ordered-fieldset {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cli-ordered-fieldset .cli-field-help,
+.cli-ordered-fieldset small {
+  grid-column: 1 / -1;
+}
+
+.cli-ordered-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.cli-ordered-row {
+  display: grid;
+  grid-template-columns: 20px minmax(90px, 1fr) minmax(72px, 92px);
+  gap: 9px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid #c8d7e5;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 8px 10px;
+}
+
+.cli-ordered-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cli-advanced-list-field {
+  border-top: 1px solid #d7e2eb;
+  padding-top: 10px;
 }
 
 .pareto-chart-stack {

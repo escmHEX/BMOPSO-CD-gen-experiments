@@ -7,6 +7,7 @@ import queue
 import re
 import csv
 import ctypes
+import ast
 import shlex
 import signal
 import subprocess
@@ -152,9 +153,123 @@ BINARY_FORCED_OPTION_TYPES = {
     "mopso.archive_multiplier": "float",
     "mopso.alpha": "float",
 }
+BINARY_STANDARD_COMPONENTS = ("role", "topic", "action")
+BINARY_OLLAMA_MODEL_CHOICES = ("llama3", "llama3.1:8b", "qwen3.5:2b")
+BINARY_GUIDED_LIST_OPTIONS = {
+    "experiment.frozen_components": {
+        "type": "component_multi_select",
+        "choices": BINARY_STANDARD_COMPONENTS,
+        "allowCustom": False,
+        "valueHelp": "Selecciona componentes semanticas que no podran modificarse durante MOPSO-CD. Deben pertenecer a las componentes activas y Binary no permite congelarlas todas.",
+    },
+    "semantic_components.order": {
+        "type": "ordered_multi_select",
+        "choices": BINARY_STANDARD_COMPONENTS,
+        "allowCustom": True,
+        "valueHelp": "Define las componentes activas y su orden semantico. El orden tambien determina experiment.components dentro de Binary si difiere.",
+    },
+    "semantic_components.expansion_order": {
+        "type": "ordered_multi_select",
+        "choices": BINARY_STANDARD_COMPONENTS,
+        "allowCustom": True,
+        "valueHelp": "Define en que orden se expanden los pools semanticos. Puedes usar el mismo conjunto que el orden semantico o una permutacion.",
+    },
+}
 BINARY_PATH_CHOICES = {
     "logging.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     "models.sbert.default": ["all-MiniLM-L6-v2", "gte-small"],
+    "models.distilbert.model": ["distilbert-base-uncased"],
+    "models.spacy.model": ["en_core_web_sm"],
+    "ollama.alternative_model": BINARY_OLLAMA_MODEL_CHOICES,
+}
+BINARY_SELECT_OPTION_PATHS = {
+    "logging.level",
+}
+BINARY_VALUE_HELP = {
+    "models.sbert.default": "Modelo SBERT usado para embeddings y metricas semanticas. Puedes elegir un alias conocido o escribir un modelo compatible.",
+    "ollama.default_model": "Gestionado por el modelo comun del comparador; las tareas del router usan ese modelo salvo override explicito.",
+    "logging.level": "Nivel minimo de logs emitidos por Binary. DEBUG es mas verboso; INFO es el nivel usual.",
+    "parallelism.enabled": "Activa paralelismo interno de Binary. Para comparaciones de costo justas, recuerda usar modo secuencial del comparador.",
+    "selection.enabled": "Activa el modulo de seleccion final de Binary.",
+    "selection.k": "Cantidad de soluciones seleccionadas al final. Binary exige un entero positivo.",
+    "selection.lambda_mmr": "Peso MMR entre relevancia y diversidad. Binary valida el intervalo [0, 1].",
+    "selection.tau_min": "Umbral inferior usado por el modulo de seleccion; Binary valida tau_min <= tau_max.",
+    "selection.tau_max": "Umbral superior usado por el modulo de seleccion; Binary valida tau_min <= tau_max.",
+    "mopso.dmax": "Maximo de componentes que puede modificar una particula. Binary exige que sea mayor que 0 y no supere las componentes activas.",
+    "mopso.alpha": "Parametro real positivo de la funcion de transferencia.",
+    "mopso.archive_multiplier": "Multiplicador real positivo del tamano de archivo externo respecto de N.",
+    "mopso.k_retry": "Binary valida que este valor permanezca en 0.",
+    "mopso.p_anchor_enabled": "Activa probabilidad de anclaje durante actualizaciones discretas.",
+    "mopso.p_anchor_min": "Probabilidad minima de anclaje. Binary valida p_anchor_min <= p_anchor_max y p_anchor_max <= 1.",
+    "mopso.p_anchor_max": "Probabilidad maxima de anclaje. Binary valida p_anchor_min <= p_anchor_max y p_anchor_max <= 1.",
+    "mopso.p_tur_min": "Probabilidad minima de turbulencia. Binary valida p_tur_min <= p_tur_max.",
+    "mopso.p_tur_max": "Probabilidad maxima de turbulencia. Binary valida p_tur_min <= p_tur_max.",
+    "mopso.tau_tur_min": "Umbral minimo para turbulencia. Binary valida tau_tur_min <= tau_tur_max.",
+    "mopso.tau_tur_max": "Umbral maximo para turbulencia. Binary valida tau_tur_min <= tau_tur_max.",
+    "generated_text_validation.tau_gen_min": "Fidelidad minima aceptada para texto generado; Binary valida que este entre -1 y 1.",
+    "checkpoint.enabled": "Activa escritura de checkpoints.",
+    "checkpoint.interval": "Frecuencia de checkpoints cuando estan activos. Binary exige entero positivo.",
+    "models.ppdb.enabled": "Activa candidatos PPDB. Si esta activo, Binary requiere index_path.",
+    "models.ppdb.index_path": "Ruta del indice SQLite de PPDB.",
+    "models.ppdb.source_path": "Ruta fuente de PPDB para crear/usar indice.",
+    "models.distilbert.top_k_multiplier": "Multiplicador de top-k para candidatos DistilBERT. Binary exige valor positivo.",
+    "initialization.candidate_multiplier": "Multiplicador de candidatos por componente durante inicializacion. Binary exige valor positivo.",
+    "initialization.min_product_multiplier": "Minimo relativo del producto de pools iniciales. Binary exige valor positivo.",
+    "initialization.prompt_reduction_multiplier": "Factor para reducir prompts candidatos. Binary exige valor positivo.",
+    "runtime.eager_load_models": "Si esta activo, Binary carga modelos semanticos al inicio.",
+}
+BINARY_PATH_LABELS = {
+    "experiment.domain": "Dominio",
+    "experiment.components": "Componentes activas",
+    "experiment.frozen_components": "Componentes congeladas",
+    "runtime.resume_from": "Reanudar desde",
+    "runtime.embedding_cache_file": "Cache de embeddings",
+    "runtime.eager_load_models": "Carga anticipada de modelos",
+    "parallelism.enabled": "Paralelismo interno",
+    "parallelism.particle_update_max_concurrent": "Concurrencia por particulas",
+    "parallelism.initial_text_generation_max_concurrent": "Concurrencia poblacion inicial",
+    "checkpoint.enabled": "Checkpoints",
+    "checkpoint.interval": "Intervalo de checkpoint",
+    "checkpoint.directory": "Directorio de checkpoints",
+    "logging.enabled": "Logging activo",
+    "logging.console": "Logs en consola",
+    "logging.file": "Archivo de logs",
+    "logging.level": "Nivel de logs",
+    "models.sbert.default": "Modelo SBERT",
+    "models.distilbert.model": "Modelo DistilBERT",
+    "models.spacy.model": "Modelo spaCy",
+    "models.wordnet.enabled": "WordNet",
+    "models.ppdb.enabled": "PPDB",
+    "models.ppdb.source_path": "Ruta fuente PPDB",
+    "models.ppdb.index_path": "Indice PPDB",
+    "ollama.host": "Host Ollama",
+    "ollama.timeout_seconds": "Timeout Ollama",
+    "ollama.alternative_model": "Modelo alternativo",
+    "ollama.stream": "Streaming Ollama",
+    "ollama.think": "Modo think",
+    "semantic_components.order": "Orden de componentes",
+    "semantic_components.expansion_order": "Orden de expansion",
+    "initialization.candidate_multiplier": "Multiplicador de candidatos",
+    "initialization.min_product_multiplier": "Producto minimo de pools",
+    "initialization.prompt_reduction_multiplier": "Reduccion de prompts",
+    "initialization.generated_sentences_min": "Minimo de frases generadas",
+    "initialization.generated_sentences_max": "Maximo de frases generadas",
+    "generated_text_validation.tau_gen_min": "Tau minimo de texto generado",
+    "mopso.archive_multiplier": "Multiplicador de archivo",
+    "mopso.leader_tournament_size": "Torneo de lider",
+    "mopso.dmax": "D maximo",
+    "mopso.kcand": "Candidatos por cambio",
+    "mopso.omega_max": "Omega maximo",
+    "mopso.omega_min": "Omega minimo",
+    "mopso.p_anchor_enabled": "Anclaje activo",
+    "mopso.k_retry": "Reintentos",
+    "selection.enabled": "Seleccion final activa",
+    "selection.k": "Cantidad seleccionada",
+    "selection.lambda_mmr": "Lambda MMR",
+    "selection.tau_min": "Tau minimo",
+    "selection.tau_max": "Tau maximo",
+    "monitor.enabled": "Monitor activo",
+    "monitor.kmeans_clusters": "Clusters KMeans",
 }
 BINARY_PATH_HELP = {
     "experiment.n": "Gestionado por el campo comun N del comparador.",
@@ -193,6 +308,11 @@ def flatten_mapping_leaves(value: Any, prefix: str = "") -> list[tuple[str, Any]
 
 
 def binary_option_label(path: str) -> str:
+    if path in BINARY_PATH_LABELS:
+        return BINARY_PATH_LABELS[path]
+    if path.startswith(BINARY_TASK_MODEL_PREFIX):
+        task_name = path.removeprefix(BINARY_TASK_MODEL_PREFIX).replace("_", " ")
+        return f"Modelo tarea: {task_name}"
     return path.split(".")[-1].replace("_", " ")
 
 
@@ -201,6 +321,9 @@ def binary_option_group(path: str) -> str:
 
 
 def binary_option_type(path: str, value: Any) -> str:
+    guided = BINARY_GUIDED_LIST_OPTIONS.get(path)
+    if guided:
+        return str(guided["type"])
     if path in BINARY_FORCED_OPTION_TYPES:
         return BINARY_FORCED_OPTION_TYPES[path]
     if isinstance(value, bool):
@@ -219,16 +342,72 @@ def binary_default_config_path() -> Path:
 
 
 def load_binary_default_config(path: Path) -> dict[str, Any]:
-    try:
-        import yaml
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("PyYAML is required by the comparator backend to read Binary default.yaml.") from exc
     if not path.exists():
         raise FileNotFoundError(f"Binary default.yaml was not found at {path}.")
-    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    text = path.read_text(encoding="utf-8")
+    try:
+        import yaml
+
+        payload = yaml.safe_load(text) or {}
+    except ModuleNotFoundError:
+        payload = parse_simple_yaml_mapping(text)
     if not isinstance(payload, dict):
         raise ValueError(f"Binary default.yaml root must be a mapping: {path}.")
     return payload
+
+
+def parse_simple_yaml_mapping(text: str) -> dict[str, Any]:
+    root: dict[str, Any] = {}
+    stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        stripped = raw_line.strip()
+        if ":" not in stripped or stripped.startswith("-"):
+            raise ValueError(f"Unsupported YAML syntax at line {line_number}.")
+        key, raw_value = stripped.split(":", 1)
+        key = key.strip()
+        value_text = raw_value.strip()
+        while stack and indent <= stack[-1][0]:
+            stack.pop()
+        if not stack:
+            raise ValueError(f"Invalid YAML indentation at line {line_number}.")
+        parent = stack[-1][1]
+        if not value_text:
+            child: dict[str, Any] = {}
+            parent[key] = child
+            stack.append((indent, child))
+        else:
+            parent[key] = parse_simple_yaml_scalar(value_text)
+    return root
+
+
+def parse_simple_yaml_scalar(value: str) -> Any:
+    text = value.strip()
+    lowered = text.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    if lowered in {"null", "none", "~"}:
+        return None
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            return ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            return [item.strip().strip("\"'") for item in text[1:-1].split(",") if item.strip()]
+    if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
+        try:
+            return ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            return text[1:-1]
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
 
 
 def build_binary_cli_options() -> tuple[tuple[dict[str, Any], ...], str | None]:
@@ -257,13 +436,22 @@ def build_binary_cli_options() -> tuple[tuple[dict[str, Any], ...], str | None]:
             "group": binary_option_group(path),
             "label": binary_option_label(path),
             "help": BINARY_PATH_HELP.get(path, "Se envia a Binary como override YAML con --set path=value."),
+            "valueHelp": BINARY_VALUE_HELP.get(path),
         }
+        guided = BINARY_GUIDED_LIST_OPTIONS.get(path)
+        if guided:
+            option.update(guided)
+        if path in BINARY_SELECT_OPTION_PATHS:
+            option["ui"] = "select"
         if path in BINARY_MANAGED_CONFIG_PATHS:
             option["source"] = "managed"
         if option_type == "bool":
             option["allowFalse"] = True
-        if path in BINARY_PATH_CHOICES:
+        if path in BINARY_PATH_CHOICES and "choices" not in option:
             option["choices"] = BINARY_PATH_CHOICES[path]
+            option["allowCustom"] = path not in BINARY_SELECT_OPTION_PATHS
+        if path.startswith(BINARY_TASK_MODEL_PREFIX):
+            option["choices"] = BINARY_OLLAMA_MODEL_CHOICES
             option["allowCustom"] = True
         base_options.append(option)
     return tuple(base_options), None
@@ -1880,6 +2068,18 @@ class ComparatorService:
         return effective
 
     def _cli_value_matches_default(self, value: Any, default: Any) -> bool:
+        if isinstance(default, list):
+            if isinstance(value, list):
+                return [str(item) for item in value] == [str(item) for item in default]
+            try:
+                import yaml
+
+                parsed = yaml.safe_load(str(value))
+            except Exception:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed] == [str(item) for item in default]
+            return False
         if isinstance(default, bool):
             return isinstance(value, bool) and value is default
         if isinstance(default, (int, float)) and not isinstance(default, bool):
@@ -1998,13 +2198,9 @@ class ComparatorService:
                 text = str(raw_value or "").strip()
                 if text:
                     normalized[key_text] = text
-            elif option_type == "multi_select":
-                if not isinstance(raw_value, list):
-                    raise ValueError(f"{proposal.display_name}.{key_text} must be a list.")
-                selected = [str(item).strip() for item in raw_value if str(item).strip()]
-                for item in selected:
-                    self._validate_cli_choice(option, item, f"{proposal.display_name}.{key_text}")
-                if selected:
+            elif option_type in {"multi_select", "component_multi_select", "ordered_multi_select"}:
+                selected = self._normalize_cli_list_value(proposal, option, raw_value, key_text)
+                if selected or option_type == "ordered_multi_select":
                     normalized[key_text] = selected
             elif option_type == "repeatable":
                 if not isinstance(raw_value, list):
@@ -2023,6 +2219,39 @@ class ComparatorService:
             else:
                 raise ValueError(f"{proposal.display_name}.{key_text} has unsupported option type: {option_type}.")
         return normalized
+
+    def _normalize_cli_list_value(
+        self,
+        proposal: ProposalDefinition,
+        option: dict[str, Any],
+        raw_value: Any,
+        key_text: str,
+    ) -> list[str]:
+        if isinstance(raw_value, list):
+            raw_items = raw_value
+        elif isinstance(raw_value, str):
+            text = raw_value.strip()
+            if not text:
+                return []
+            try:
+                import yaml
+
+                parsed = yaml.safe_load(text)
+            except Exception:
+                parsed = None
+            raw_items = parsed if isinstance(parsed, list) else [item.strip() for item in text.split(",")]
+        else:
+            raise ValueError(f"{proposal.display_name}.{key_text} must be a list.")
+        selected: list[str] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            text = str(item).strip()
+            if not text or text in seen:
+                continue
+            self._validate_cli_choice(option, text, f"{proposal.display_name}.{key_text}")
+            selected.append(text)
+            seen.add(text)
+        return selected
 
     def _normalize_assignment_values(
         self,
@@ -2795,7 +3024,7 @@ class ComparatorService:
                 args.extend([flag, str(value)])
             elif option_type == "yaml":
                 args.extend([flag, str(value)])
-            elif option_type == "multi_select":
+            elif option_type in {"multi_select", "component_multi_select", "ordered_multi_select"}:
                 selected = [str(item).strip() for item in value if str(item).strip()]
                 if selected:
                     args.extend([flag, ",".join(selected)])
@@ -2821,7 +3050,9 @@ class ComparatorService:
             return "true" if self._bool_cli_value(value, "yaml bool") else "false"
         if option_type in {"int", "float"}:
             return str(value)
-        if option_type == "yaml":
+        if option_type in {"yaml", "component_multi_select", "ordered_multi_select", "multi_select"}:
+            if isinstance(value, (list, dict)):
+                return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
             return str(value).strip()
         return json.dumps(str(value), ensure_ascii=False)
 
