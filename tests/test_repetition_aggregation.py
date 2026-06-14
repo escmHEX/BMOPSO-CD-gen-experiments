@@ -556,7 +556,7 @@ class RepetitionAggregationTests(unittest.TestCase):
                 "proposalConfigs": {
                     "binary-mopso-cd": {
                         "cliValues": {
-                            "experiment.frozen_components": ["role", "topic"],
+                            "experiment.frozen_components": ["role", "topic", "action"],
                             "monitor.enabled": True,
                             "router.heuristics.word_replacement_candidates": False,
                             "router.task_models.synthetic_text_generation": "llama3.1:8b",
@@ -568,7 +568,7 @@ class RepetitionAggregationTests(unittest.TestCase):
             }
         )
         values = parsed["proposalConfigs"]["binary-mopso-cd"]["cliValues"]
-        self.assertEqual(values["experiment.frozen_components"], ["role", "topic"])
+        self.assertEqual(values["experiment.frozen_components"], ["role", "topic", "action"])
         self.assertTrue(values["monitor.enabled"])
         self.assertFalse(values["router.heuristics.word_replacement_candidates"])
         self.assertEqual(values["router.task_models.synthetic_text_generation"], "llama3.1:8b")
@@ -593,6 +593,8 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertTrue(options_by_key["router.heuristics.word_replacement_candidates"]["allowFalse"])
         self.assertEqual(options_by_key["experiment.n"]["source"], "managed")
         self.assertEqual(options_by_key["experiment.frozen_components"]["type"], "component_multi_select")
+        self.assertIn("poblacion inicial", options_by_key["experiment.frozen_components"]["valueHelp"])
+        self.assertNotIn("no permite", options_by_key["experiment.frozen_components"]["valueHelp"])
         self.assertEqual(options_by_key["semantic_components.order"]["type"], "ordered_multi_select")
         self.assertEqual(options_by_key["semantic_components.expansion_order"]["type"], "ordered_multi_select")
         self.assertEqual(options_by_key["logging.level"]["ui"], "select")
@@ -946,9 +948,14 @@ class RepetitionAggregationTests(unittest.TestCase):
                         "cliValues": {
                             "--config": "configs/test.yaml",
                             "models.sbert.default": "gte-small",
-                            "experiment.frozen_components": ["role", "topic"],
+                            "experiment.frozen_components": ["role", "topic", "action"],
                             "semantic_components.order": ["topic", "role", "action"],
                             "monitor.enabled": True,
+                            "router.heuristics.semantic_anchor_extraction": False,
+                            "router.heuristics.central_anchor_selection": False,
+                            "router.heuristics.semantic_pool_generation": False,
+                            "router.heuristics.semantic_pool_expansion": False,
+                            "router.heuristics.semantic_component_influence_candidates": False,
                             "router.heuristics.word_replacement_candidates": False,
                             "router.task_models.synthetic_text_generation": "llama3.1:8b",
                         }
@@ -976,10 +983,18 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(set_values["runtime.outdir_base"], json.dumps(str(Path("out").resolve()), ensure_ascii=False))
         self.assertEqual(set_values["ollama.default_model"], '"llama3"')
         self.assertEqual(set_values["models.sbert.default"], '"gte-small"')
-        self.assertEqual(set_values["experiment.frozen_components"], '["role","topic"]')
+        self.assertEqual(set_values["experiment.frozen_components"], '["role","topic","action"]')
         self.assertEqual(set_values["semantic_components.order"], '["topic","role","action"]')
         self.assertEqual(set_values["monitor.enabled"], "true")
-        self.assertEqual(set_values["router.heuristics.word_replacement_candidates"], "false")
+        for key in (
+            "router.heuristics.semantic_anchor_extraction",
+            "router.heuristics.central_anchor_selection",
+            "router.heuristics.semantic_pool_generation",
+            "router.heuristics.semantic_pool_expansion",
+            "router.heuristics.semantic_component_influence_candidates",
+            "router.heuristics.word_replacement_candidates",
+        ):
+            self.assertEqual(set_values[key], "false")
         self.assertEqual(set_values["router.task_models.semantic_anchor_extraction"], '"llama3"')
         self.assertEqual(set_values["router.task_models.synthetic_text_generation"], '"llama3.1:8b"')
 
@@ -1181,8 +1196,19 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(aggregated["metrics"]["bestObjectiveLabel"], "[0.700000]")
         self.assertEqual(aggregated["metrics"]["nonDominatedRows"], 3.0)
         self.assertEqual(aggregated["metrics"]["postHocNonDominatedRows"], 3.0)
-        self.assertEqual(aggregated["cost"]["llmCalls"], 5)
+        self.assertAlmostEqual(aggregated["cost"]["llmCalls"], 2.5)
+        self.assertEqual(aggregated["cost"]["llmCallsTotal"], 5)
+        self.assertAlmostEqual(aggregated["cost"]["llmClientWallClockSeconds"], 1.5)
+        self.assertAlmostEqual(aggregated["cost"]["llmClientWallClockSecondsTotal"], 3.0)
+        self.assertAlmostEqual(aggregated["cost"]["llmAverageCallSeconds"], 0.6)
+        self.assertAlmostEqual(aggregated["cost"]["totalTokens"], 25.0)
+        self.assertEqual(aggregated["cost"]["totalTokensTotal"], 50)
         self.assertEqual(aggregated["rows"][0]["repetitionSeed"], 10)
+
+        summary = comparator_module.summarize_costs([{"cost": aggregated["cost"]}], run_elapsed_seconds=9.0)
+        self.assertEqual(summary["llmCalls"], 5)
+        self.assertEqual(summary["totalTokens"], 50)
+        self.assertAlmostEqual(summary["llmClientWallClockSeconds"], 3.0)
 
     def test_aggregate_series_averages_by_generation(self):
         series = aggregate_series([

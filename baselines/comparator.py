@@ -172,7 +172,7 @@ BINARY_GUIDED_LIST_OPTIONS = {
         "type": "component_multi_select",
         "choices": BINARY_STANDARD_COMPONENTS,
         "allowCustom": False,
-        "valueHelp": "Selecciona componentes semanticas que no podran modificarse durante MOPSO-CD. Deben pertenecer a las componentes activas y Binary no permite congelarlas todas.",
+        "valueHelp": "Selecciona componentes semanticas que no podran modificarse durante MOPSO-CD. Puedes congelarlas todas; en ese caso Binary evalua y devuelve la poblacion inicial.",
     },
     "semantic_components.order": {
         "type": "ordered_multi_select",
@@ -877,23 +877,26 @@ def add_cost_timing(cost: dict[str, Any], key: str, seconds: float) -> None:
 
 def summarize_costs(proposals: list[dict[str, Any]], run_elapsed_seconds: float) -> dict[str, Any]:
     costs = [proposal.get("cost") or empty_cost_metrics() for proposal in proposals]
-    llm_calls = sum(int(cost.get("llmCalls") or 0) for cost in costs)
-    llm_client_seconds = sum(finite_float(cost.get("llmClientWallClockSeconds")) for cost in costs)
-    process_seconds_sum = sum(finite_float(cost.get("processWallClockSeconds")) for cost in costs)
-    post_seconds_sum = sum(finite_float(cost.get("postProcessingWallClockSeconds")) for cost in costs)
-    metric_seconds_sum = sum(finite_float(cost.get("metricExtractionSeconds")) for cost in costs)
-    plot_seconds_sum = sum(finite_float(cost.get("plotPreparationSeconds")) for cost in costs)
-    proposal_total_seconds_sum = sum(finite_float(cost.get("proposalTotalWallClockSeconds"), finite_float(cost.get("processWallClockSeconds"))) for cost in costs)
+    llm_calls = sum(int(cost_total_metric(cost, "llmCalls")) for cost in costs)
+    llm_client_seconds = sum(cost_total_metric(cost, "llmClientWallClockSeconds") for cost in costs)
+    process_seconds_sum = sum(cost_total_metric(cost, "processWallClockSeconds") for cost in costs)
+    post_seconds_sum = sum(cost_total_metric(cost, "postProcessingWallClockSeconds") for cost in costs)
+    metric_seconds_sum = sum(cost_total_metric(cost, "metricExtractionSeconds") for cost in costs)
+    plot_seconds_sum = sum(cost_total_metric(cost, "plotPreparationSeconds") for cost in costs)
+    proposal_total_seconds_sum = sum(cost_total_metric(cost, "proposalTotalWallClockSeconds", "processWallClockSeconds") for cost in costs)
     algorithm_seconds_sum = sum(
-        finite_float(cost.get("algorithmRuntimeSeconds"))
+        value
         for cost in costs
-        if cost.get("algorithmRuntimeSeconds") is not None
+        for value in [cost_total_metric_if_present(cost, "algorithmRuntimeSeconds")]
+        if value is not None
     )
-    prompt_tokens = sum(int(cost.get("promptEvalCount") or 0) for cost in costs)
-    completion_tokens = sum(int(cost.get("evalCount") or 0) for cost in costs)
+    prompt_tokens = sum(int(cost_total_metric(cost, "promptEvalCount")) for cost in costs)
+    completion_tokens = sum(int(cost_total_metric(cost, "evalCount")) for cost in costs)
+    total_tokens = sum(int(cost_total_metric(cost, "totalTokens")) for cost in costs)
     has_token_report = any(bool(cost.get("hasTokenReport")) for cost in costs)
     has_ollama_duration_report = any(bool(cost.get("hasOllamaDurationReport")) for cost in costs)
     average_call_seconds = llm_client_seconds / llm_calls if llm_calls > 0 else None
+    ollama_seconds = sum(cost_total_metric(cost, "ollamaTotalDurationSeconds") for cost in costs)
     return {
         "runWallClockSeconds": run_elapsed_seconds,
         "runWallClockLabel": label_from_seconds(run_elapsed_seconds),
@@ -916,11 +919,11 @@ def summarize_costs(proposals: list[dict[str, Any]], run_elapsed_seconds: float)
         "llmClientWallClockLabel": label_from_seconds(llm_client_seconds),
         "llmAverageCallSeconds": average_call_seconds,
         "llmAverageCallLabel": label_from_seconds(average_call_seconds),
-        "ollamaTotalDurationSeconds": sum(finite_float(cost.get("ollamaTotalDurationSeconds")) for cost in costs),
-        "ollamaTotalDurationLabel": label_from_seconds(sum(finite_float(cost.get("ollamaTotalDurationSeconds")) for cost in costs)),
+        "ollamaTotalDurationSeconds": ollama_seconds,
+        "ollamaTotalDurationLabel": label_from_seconds(ollama_seconds),
         "promptEvalCount": prompt_tokens,
         "evalCount": completion_tokens,
-        "totalTokens": prompt_tokens + completion_tokens,
+        "totalTokens": total_tokens,
         "hasTokenReport": has_token_report,
         "hasOllamaDurationReport": has_ollama_duration_report,
     }
@@ -952,61 +955,118 @@ def aggregate_runtime_breakdowns(costs: list[dict[str, Any]]) -> dict[str, float
     return totals
 
 
+def average_runtime_breakdowns(totals: dict[str, float], count: int) -> dict[str, float]:
+    if count <= 0:
+        return {}
+    return {key: value / count for key, value in totals.items()}
+
+
+def cost_total_metric(cost: dict[str, Any], key: str, fallback_key: str | None = None) -> float:
+    total_key = f"{key}Total"
+    if cost.get(total_key) is not None:
+        return finite_float(cost.get(total_key))
+    if cost.get(key) is not None:
+        return finite_float(cost.get(key))
+    if fallback_key:
+        return cost_total_metric(cost, fallback_key)
+    return 0.0
+
+
+def cost_total_metric_if_present(cost: dict[str, Any], key: str) -> float | None:
+    if cost.get(f"{key}Total") is not None or cost.get(key) is not None:
+        return cost_total_metric(cost, key)
+    return None
+
+
 def aggregate_comparator_costs(results: list[dict[str, Any]]) -> dict[str, Any]:
     costs = [result.get("cost") or empty_cost_metrics() for result in results]
     if not costs:
         return empty_cost_metrics()
 
-    llm_calls = sum(int(finite_float(cost.get("llmCalls"))) for cost in costs)
-    llm_client_seconds = sum(finite_float(cost.get("llmClientWallClockSeconds")) for cost in costs)
+    count = len(costs)
+    llm_calls_total = sum(int(finite_float(cost.get("llmCalls"))) for cost in costs)
+    llm_success_total = sum(int(finite_float(cost.get("llmSuccessfulCalls"))) for cost in costs)
+    llm_failed_total = sum(int(finite_float(cost.get("llmFailedCalls"))) for cost in costs)
+    llm_client_seconds_total = sum(finite_float(cost.get("llmClientWallClockSeconds")) for cost in costs)
     algorithm_values = [
         finite_float(cost.get("algorithmRuntimeSeconds"))
         for cost in costs
         if cost.get("algorithmRuntimeSeconds") is not None
     ]
-    process_seconds = sum(finite_float(cost.get("processWallClockSeconds")) for cost in costs)
-    post_seconds = sum(finite_float(cost.get("postProcessingWallClockSeconds")) for cost in costs)
-    metric_seconds = sum(finite_float(cost.get("metricExtractionSeconds")) for cost in costs)
-    plot_seconds = sum(finite_float(cost.get("plotPreparationSeconds")) for cost in costs)
-    proposal_total_seconds = sum(
+    algorithm_total = sum(algorithm_values) if algorithm_values else None
+    algorithm_average = (algorithm_total / len(algorithm_values)) if algorithm_values and algorithm_total is not None else None
+    process_seconds_total = sum(finite_float(cost.get("processWallClockSeconds")) for cost in costs)
+    post_seconds_total = sum(finite_float(cost.get("postProcessingWallClockSeconds")) for cost in costs)
+    metric_seconds_total = sum(finite_float(cost.get("metricExtractionSeconds")) for cost in costs)
+    plot_seconds_total = sum(finite_float(cost.get("plotPreparationSeconds")) for cost in costs)
+    proposal_total_seconds_total = sum(
         finite_float(cost.get("proposalTotalWallClockSeconds"), finite_float(cost.get("processWallClockSeconds")))
         for cost in costs
     )
-    ollama_seconds = sum(finite_float(cost.get("ollamaTotalDurationSeconds")) for cost in costs)
+    ollama_seconds_total = sum(finite_float(cost.get("ollamaTotalDurationSeconds")) for cost in costs)
+    prompt_eval_total = sum(int(finite_float(cost.get("promptEvalCount"))) for cost in costs)
+    eval_total = sum(int(finite_float(cost.get("evalCount"))) for cost in costs)
+    token_total = sum(int(finite_float(cost.get("totalTokens"))) for cost in costs)
     has_token_report = any(bool(cost.get("hasTokenReport")) for cost in costs)
     has_ollama_duration_report = any(bool(cost.get("hasOllamaDurationReport")) for cost in costs)
-    average_call_seconds = llm_client_seconds / llm_calls if llm_calls > 0 else None
+    average_call_seconds = llm_client_seconds_total / llm_calls_total if llm_calls_total > 0 else None
+    runtime_breakdown_total = aggregate_runtime_breakdowns(costs)
     return {
-        "processWallClockSeconds": process_seconds,
-        "processWallClockLabel": label_from_seconds(process_seconds),
-        "proposalTotalWallClockSeconds": proposal_total_seconds,
-        "proposalTotalWallClockLabel": label_from_seconds(proposal_total_seconds),
-        "postProcessingWallClockSeconds": post_seconds,
-        "postProcessingWallClockLabel": label_from_seconds(post_seconds),
-        "metricExtractionSeconds": metric_seconds,
-        "metricExtractionLabel": label_from_seconds(metric_seconds),
-        "plotPreparationSeconds": plot_seconds,
-        "plotPreparationLabel": label_from_seconds(plot_seconds),
-        "algorithmRuntimeSeconds": sum(algorithm_values) if algorithm_values else None,
-        "algorithmRuntimeLabel": label_from_seconds(sum(algorithm_values) if algorithm_values else None),
-        "llmCalls": llm_calls,
-        "llmSuccessfulCalls": sum(int(finite_float(cost.get("llmSuccessfulCalls"))) for cost in costs),
-        "llmFailedCalls": sum(int(finite_float(cost.get("llmFailedCalls"))) for cost in costs),
-        "llmClientWallClockSeconds": llm_client_seconds,
-        "llmClientWallClockLabel": label_from_seconds(llm_client_seconds),
+        "costAggregation": "per_repetition_average",
+        "costAggregationRepetitions": count,
+        "processWallClockSeconds": process_seconds_total / count,
+        "processWallClockLabel": label_from_seconds(process_seconds_total / count),
+        "processWallClockSecondsTotal": process_seconds_total,
+        "processWallClockTotalLabel": label_from_seconds(process_seconds_total),
+        "proposalTotalWallClockSeconds": proposal_total_seconds_total / count,
+        "proposalTotalWallClockLabel": label_from_seconds(proposal_total_seconds_total / count),
+        "proposalTotalWallClockSecondsTotal": proposal_total_seconds_total,
+        "proposalTotalWallClockTotalLabel": label_from_seconds(proposal_total_seconds_total),
+        "postProcessingWallClockSeconds": post_seconds_total / count,
+        "postProcessingWallClockLabel": label_from_seconds(post_seconds_total / count),
+        "postProcessingWallClockSecondsTotal": post_seconds_total,
+        "postProcessingWallClockTotalLabel": label_from_seconds(post_seconds_total),
+        "metricExtractionSeconds": metric_seconds_total / count,
+        "metricExtractionLabel": label_from_seconds(metric_seconds_total / count),
+        "metricExtractionSecondsTotal": metric_seconds_total,
+        "metricExtractionTotalLabel": label_from_seconds(metric_seconds_total),
+        "plotPreparationSeconds": plot_seconds_total / count,
+        "plotPreparationLabel": label_from_seconds(plot_seconds_total / count),
+        "plotPreparationSecondsTotal": plot_seconds_total,
+        "plotPreparationTotalLabel": label_from_seconds(plot_seconds_total),
+        "algorithmRuntimeSeconds": algorithm_average,
+        "algorithmRuntimeLabel": label_from_seconds(algorithm_average),
+        "algorithmRuntimeSecondsTotal": algorithm_total,
+        "algorithmRuntimeTotalLabel": label_from_seconds(algorithm_total),
+        "llmCalls": llm_calls_total / count,
+        "llmCallsTotal": llm_calls_total,
+        "llmSuccessfulCalls": llm_success_total / count,
+        "llmSuccessfulCallsTotal": llm_success_total,
+        "llmFailedCalls": llm_failed_total / count,
+        "llmFailedCallsTotal": llm_failed_total,
+        "llmClientWallClockSeconds": llm_client_seconds_total / count,
+        "llmClientWallClockLabel": label_from_seconds(llm_client_seconds_total / count),
+        "llmClientWallClockSecondsTotal": llm_client_seconds_total,
+        "llmClientWallClockTotalLabel": label_from_seconds(llm_client_seconds_total),
         "llmAverageCallSeconds": average_call_seconds,
         "llmAverageCallLabel": label_from_seconds(average_call_seconds),
-        "ollamaTotalDurationSeconds": ollama_seconds,
-        "ollamaTotalDurationLabel": label_from_seconds(ollama_seconds),
-        "promptEvalCount": sum(int(finite_float(cost.get("promptEvalCount"))) for cost in costs),
-        "evalCount": sum(int(finite_float(cost.get("evalCount"))) for cost in costs),
-        "totalTokens": sum(int(finite_float(cost.get("totalTokens"))) for cost in costs),
+        "ollamaTotalDurationSeconds": ollama_seconds_total / count,
+        "ollamaTotalDurationLabel": label_from_seconds(ollama_seconds_total / count),
+        "ollamaTotalDurationSecondsTotal": ollama_seconds_total,
+        "ollamaTotalDurationTotalLabel": label_from_seconds(ollama_seconds_total),
+        "promptEvalCount": prompt_eval_total / count,
+        "promptEvalCountTotal": prompt_eval_total,
+        "evalCount": eval_total / count,
+        "evalCountTotal": eval_total,
+        "totalTokens": token_total / count,
+        "totalTokensTotal": token_total,
         "hasTokenReport": has_token_report,
         "hasOllamaDurationReport": has_ollama_duration_report,
         "returnCode": next((cost.get("returnCode") for cost in reversed(costs) if cost.get("returnCode") is not None), None),
         "timedOut": any(bool(cost.get("timedOut")) for cost in costs),
         "cancelled": any(bool(cost.get("cancelled")) for cost in costs),
-        "runtimeBreakdown": aggregate_runtime_breakdowns(costs),
+        "runtimeBreakdown": average_runtime_breakdowns(runtime_breakdown_total, count),
+        "runtimeBreakdownTotal": runtime_breakdown_total,
         "metricsPaths": [cost.get("metricsPath") for cost in costs if cost.get("metricsPath")],
     }
 

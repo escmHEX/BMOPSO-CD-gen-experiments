@@ -753,6 +753,16 @@ label span,
   min-width: 0;
 }
 
+.cli-field-disabled {
+  opacity: 0.68;
+}
+
+.cli-field-disabled select,
+.cli-field-disabled input,
+.cli-field-disabled textarea {
+  cursor: not-allowed;
+}
+
 .cli-field {
   display: grid;
   gap: 6px;

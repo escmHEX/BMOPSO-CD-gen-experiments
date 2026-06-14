@@ -110,6 +110,34 @@ Los costos de ejecución se devuelven en `costSummary` a nivel de corrida y en `
 
 Para EVOLMD-MO se usa maximización, fidelidad normalizada con `(fidelity + 1) / 2`, diversidad acotada a `[0, 1]`, punto de referencia HV `[0, 0]` y spread como desviación normalizada entre distancias consecutivas del frente no dominado. Para EVOLMD, HV/spread son diagnósticos post-hoc sobre `[fitness, semantic_diversity_posthoc]`, con ambos valores acotados a `[0, 1]`.
 
+### Agregación de K ejecuciones del comparador
+
+Cuando `repetitionsK` es mayor que 1, el comparador ejecuta K repeticiones externas de cada propuesta con semillas derivadas como `seed + indice_repeticion`. En Binary MOPSO-CD, `experiment.runs` se fuerza a 1 y K lo gestiona el comparador, por lo que cada repetición queda aislada en su propio proceso y carpeta `rep-XXX`.
+
+Las métricas de calidad finales de `proposal.metrics` no toman la última repetición. Se agregan con ponderación uniforme: cada repetición completada pesa 1. Si una repetición no reporta un valor opcional, ese valor se omite del promedio; si ninguna repetición lo reporta, queda como `No aplica`.
+
+- `totalRows` y `completedRows`: promedio aritmético de los conteos finales por repetición completada.
+- `nonDominatedRows`: promedio aritmético de la cantidad de soluciones no dominadas de cada repetición completada. No es la última ejecución ni la unión de todos los frentes. En propuestas uniobjetivo, este valor corresponde al conteo no dominado post-hoc calculado sobre el vector diagnóstico comparable.
+- `hypervolume`: promedio aritmético del HV calculado dentro de cada repetición completada sobre su propio frente no dominado comparable normalizado. No se recalcula HV sobre un frente combinado entre repeticiones.
+- `spread`: promedio aritmético del spread calculado dentro de cada repetición completada. Si una repetición no tiene suficientes puntos de frente para calcular spread, esa repetición no aporta a ese promedio.
+- `bestObjectiveVector`, `bestComparableObjectiveVector` y `bestDiagnosticObjectiveVector`: promedio componente a componente de los vectores reportados por las repeticiones completadas. No se selecciona el mejor vector global ni el de la última repetición.
+- `series`: las curvas por generación agrupan puntos con el mismo número de generación y promedian `hypervolume`, `nonDominatedRows`, `spread`, `globalInertia` y `globalEntropy` entre repeticiones completadas. Los valores ausentes se ignoran por métrica.
+- `rows` y `selectedRows`: no se promedian. Se concatenan las filas normalizadas de las repeticiones completadas y se conserva `repetitionIndex`/`repetitionSeed` para trazabilidad.
+
+Las métricas de costo finales de `proposal.cost`, que son las usadas para el análisis comparativo de costo, también se promedian por repetición completada. Esto representa el costo esperado de una ejecución estocástica de la propuesta, que es lo comparable cuando K se usa para mitigar variación. El costo total de la campaña experimental se conserva en campos con sufijo `Total` y en `costSummary`.
+
+- Tiempos promedio por repetición: `processWallClockSeconds`, `proposalTotalWallClockSeconds`, `postProcessingWallClockSeconds`, `metricExtractionSeconds`, `plotPreparationSeconds`, `algorithmRuntimeSeconds`, `llmClientWallClockSeconds` y `ollamaTotalDurationSeconds`.
+- Conteos promedio por repetición: `llmCalls`, `llmSuccessfulCalls`, `llmFailedCalls`, `promptEvalCount`, `evalCount` y `totalTokens`. Pueden quedar con decimales porque son medias sobre K.
+- Totales observados para auditoría: los mismos campos acumulados quedan disponibles con sufijo `Total`, por ejemplo `llmCallsTotal`, `totalTokensTotal`, `processWallClockSecondsTotal` y `llmClientWallClockSecondsTotal`.
+- `llmAverageCallSeconds`: se recalcula como `llmClientWallClockSecondsTotal / llmCallsTotal`, por lo que es un promedio por llamada sobre todas las repeticiones, no un promedio simple de los promedios por repetición.
+- `runtimeBreakdown`: queda promediado por clave en `runtimeBreakdown`; el acumulado queda en `runtimeBreakdownTotal`.
+- `hasTokenReport` y `hasOllamaDurationReport`: quedan activos si al menos una repetición completada reportó esa fuente real.
+- `timedOut` y `cancelled`: quedan activos si alguna repetición agregada tuvo ese estado.
+- `returnCode`: conserva el último código de retorno no nulo entre las repeticiones agregadas.
+- `metricsPaths`: guarda las rutas de métricas por repetición para auditoría.
+
+Si al menos una repetición completa correctamente, las métricas finales de calidad y costo de la propuesta se calculan sobre las repeticiones completadas. Las repeticiones fallidas quedan disponibles en `repetitions` y se informa el faltante en `error`. Si ninguna repetición completa, no hay métricas de calidad agregadas y el costo se promedia sobre los intentos fallidos o cancelados disponibles, conservando también sus totales.
+
 Antes de ejecutar una comparación real, configura en `baselines/comparator_config.json` el `pythonExecutable` correcto para cada propuesta o sus `pythonPathEntries`. La API `GET /api/comparator/proposals` reporta dependencias faltantes por propuesta antes de permitir seleccionarlas. Mantén Ollama corriendo con el modelo elegido.
 
 ## Simulación de iteración PSO

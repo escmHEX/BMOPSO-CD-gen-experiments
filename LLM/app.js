@@ -788,6 +788,15 @@ const COMPARATOR_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"
 const COMPARATOR_MAX_TRANSIENT_POLL_FAILURES = 5;
 const COMPARATOR_LOG_CHUNK_LIMIT = 5000;
 const COMPARATOR_LAST_RUN_ID_STORAGE_KEY = "comparator:lastRunId";
+const BINARY_ROUTER_HEURISTIC_KEYS = [
+  "router.heuristics.semantic_anchor_extraction",
+  "router.heuristics.central_anchor_selection",
+  "router.heuristics.semantic_pool_generation",
+  "router.heuristics.semantic_pool_expansion",
+  "router.heuristics.semantic_component_influence_candidates",
+  "router.heuristics.word_replacement_candidates",
+];
+const BINARY_ROUTER_HEURISTIC_KEY_SET = new Set(BINARY_ROUTER_HEURISTIC_KEYS);
 const INITIAL_POPULATION_API = "/api/initial-population";
 const INITIAL_POPULATION_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const INITIAL_POPULATION_COMPARISON_API = "/api/initial-population-comparison";
@@ -4991,19 +5000,87 @@ function renderComparatorInstanceList() {
 
 function comparatorInstanceConfigSummary(instance) {
   const values = instance.proposalConfig?.cliValues || {};
-  const keys = Object.keys(values);
-  if (!keys.length && !instance.proposalConfig?.extraArgs) {
+  let keys = Object.keys(values);
+  const summaryParts = [];
+  if (instance.proposalId === "binary-mopso-cd" && comparatorUsesNoRoutingPreset(values)) {
+    summaryParts.push("Sin enrutamiento");
+    keys = keys.filter((key) => !BINARY_ROUTER_HEURISTIC_KEY_SET.has(key));
+  }
+  if (!summaryParts.length && !keys.length && !instance.proposalConfig?.extraArgs) {
     return "Configuracion por defecto de la propuesta.";
   }
   const preview = keys.slice(0, 4).map((key) => `${key}=${comparatorPreviewValue(values[key])}`);
   const remaining = keys.length > preview.length ? `; +${keys.length - preview.length} cambio(s)` : "";
-  return `${preview.join("; ")}${remaining}`;
+  return `${[...summaryParts, ...preview].join("; ")}${remaining}`;
 }
 
 function comparatorPreviewValue(value) {
   if (Array.isArray(value)) return `[${value.join(", ")}]`;
   if (value && typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function comparatorUsesNoRoutingPreset(values = {}) {
+  return BINARY_ROUTER_HEURISTIC_KEYS.every((key) => values[key] === false);
+}
+
+function comparatorRouterHeuristicFields(container) {
+  return Array.from(container?.querySelectorAll?.("[data-comparator-cli-value]") || [])
+    .filter((field) => BINARY_ROUTER_HEURISTIC_KEY_SET.has(field.dataset.cliKey || field.dataset.cliFlag || ""));
+}
+
+function comparatorBoolFieldValue(field) {
+  if (!field) return null;
+  if (field.tagName === "SELECT") {
+    if (field.value === "true") return true;
+    if (field.value === "false") return false;
+    return null;
+  }
+  return Boolean(field.checked);
+}
+
+function setComparatorBoolFieldValue(field, value) {
+  if (!field) return;
+  if (field.tagName === "SELECT") {
+    field.value = value === null ? "" : value ? "true" : "false";
+  } else {
+    field.checked = Boolean(value);
+  }
+}
+
+function setComparatorRouterHeuristicFieldsDisabled(fields, disabled) {
+  fields.forEach((field) => {
+    field.disabled = disabled;
+    field.closest(".cli-field, .cli-field-checkbox")?.classList.toggle("cli-field-disabled", disabled);
+  });
+}
+
+function syncComparatorNoRoutingPreset(container) {
+  const preset = container?.querySelector?.("[data-comparator-router-no-routing]");
+  if (!preset) return;
+  const fields = comparatorRouterHeuristicFields(container);
+  const valuesByKey = new Map(fields.map((field) => [field.dataset.cliKey || field.dataset.cliFlag || "", comparatorBoolFieldValue(field)]));
+  const allFalse = BINARY_ROUTER_HEURISTIC_KEYS.every((key) => valuesByKey.get(key) === false);
+  preset.checked = allFalse;
+  setComparatorRouterHeuristicFieldsDisabled(fields, allFalse);
+  syncComparatorConfigGroupLayout(preset.closest(".proposal-config-group"));
+}
+
+function applyComparatorNoRoutingPreset(container, enabled) {
+  const fields = comparatorRouterHeuristicFields(container);
+  fields.forEach((field) => setComparatorBoolFieldValue(field, enabled ? false : null));
+  setComparatorRouterHeuristicFieldsDisabled(fields, enabled);
+  syncComparatorConfigGroupLayout(container?.querySelector?.("[data-comparator-router-no-routing]")?.closest(".proposal-config-group"));
+}
+
+function bindComparatorNoRoutingPreset(container) {
+  const preset = container?.querySelector?.("[data-comparator-router-no-routing]");
+  if (!preset) return;
+  preset.addEventListener("change", () => applyComparatorNoRoutingPreset(container, preset.checked));
+  comparatorRouterHeuristicFields(container).forEach((field) => {
+    field.addEventListener("change", () => syncComparatorNoRoutingPreset(container));
+  });
+  syncComparatorNoRoutingPreset(container);
 }
 
 function enhanceComparatorSelects(container = dom.comparatorProposalConfigPanels) {
@@ -5129,12 +5206,28 @@ function renderComparatorCliFields(proposal, options) {
         </summary>
         <div class="proposal-config-group-body"></div>
       `;
-      details.querySelector(".proposal-config-group-body").replaceChildren(
-        ...groupOptions.map((option) => renderComparatorCliOption(proposal, option)),
-      );
+      const renderedOptions = groupOptions.map((option) => renderComparatorCliOption(proposal, option));
+      if (group === "router") {
+        renderedOptions.unshift(renderComparatorNoRoutingPresetOption());
+      }
+      details.querySelector(".proposal-config-group-body").replaceChildren(...renderedOptions);
       nodes.push(details);
     });
   return nodes;
+}
+
+function renderComparatorNoRoutingPresetOption() {
+  const label = document.createElement("label");
+  label.className = "cli-field cli-field-checkbox cli-router-preset";
+  label.innerHTML = `
+    <input type="checkbox" data-comparator-router-no-routing>
+    <span>
+      <strong>Sin enrutamiento (heuristicas base)</strong>
+      <em>Al activarlo, todas las rutas router.heuristics.* se envian como false.</em>
+      <small>Usa parametros LLM disabled_default y candidatos base WordNet/PPDB, evitando las heuristicas dinamicas del router.</small>
+    </span>
+  `;
+  return label;
 }
 
 function renderComparatorCliOption(proposal, option) {
@@ -5682,6 +5775,7 @@ function openComparatorInstanceModal(proposalId, instanceId = null, duplicate = 
     applyComparatorCliValues(fields, draft.proposalConfig?.cliValues || {});
     enhanceComparatorSelects(fields);
     bindComparatorConfigGroupLayouts(fields);
+    bindComparatorNoRoutingPreset(fields);
   } else {
     fields.innerHTML = '<p class="muted-note">Esta propuesta no expone flags propios adicionales.</p>';
   }
@@ -6320,28 +6414,28 @@ function comparatorProposalSummaryTooltip(label, metrics = {}) {
     return "Vector diagnostico SBERT/diversidad calculado despues de ejecutar una propuesta uniobjetivo; se usa para comparar, no para decidir dentro del algoritmo.";
   }
   if (key === "algoritmo") {
-    return "Tiempo wall-clock del proceso Python de la propuesta; no incluye metricas ni graficos del comparador.";
+    return "Tiempo wall-clock promedio por repeticion completada del proceso Python; no incluye metricas ni graficos del comparador.";
   }
   if (key === "total prop.") {
-    return "Tiempo de la propuesta mas post-procesamiento externo del comparador; no altera el costo interno del algoritmo.";
+    return "Tiempo promedio por repeticion de la propuesta mas post-procesamiento externo del comparador.";
   }
   if (key === "post") {
-    return "Tiempo de seleccion o ranking externo posterior a la ejecucion; se reporta separado del algoritmo.";
+    return "Tiempo promedio por repeticion de seleccion o ranking externo posterior a la ejecucion.";
   }
   if (key === "metricas web") {
-    return "Tiempo de normalizacion y metricas calculadas por la web despues de ejecutar la propuesta.";
+    return "Tiempo promedio por repeticion de normalizacion y metricas calculadas por la web despues de ejecutar la propuesta.";
   }
   if (key === "llamadas llm") {
-    return "Cantidad de llamadas registradas al modelo LLM durante la ejecucion de la propuesta.";
+    return "Promedio de llamadas registradas al modelo LLM por repeticion completada.";
   }
   if (key === "tiempo llm") {
-    return "Suma de latencias cliente de llamadas LLM reportadas por la propuesta o wrapper.";
+    return "Tiempo LLM cliente promedio por repeticion completada.";
   }
   if (key === "prom. llamada") {
     return "Tiempo LLM promedio por llamada registrada. Menor indica llamadas mas rapidas.";
   }
   if (key === "tokens") {
-    return "Tokens reportados por la propuesta cuando existen; No reportado no se interpreta como cero.";
+    return "Promedio de tokens reportados por repeticion completada; No reportado no se interpreta como cero.";
   }
   if (key === "git") {
     return "Rama y commit local usados para ejecutar la propuesta.";
@@ -6356,6 +6450,12 @@ function comparatorProposalSummaryTerm(label, metrics = {}) {
   const tooltip = comparatorProposalSummaryTooltip(label, metrics);
   const title = tooltip ? ` title="${escapeHtml(tooltip)}"` : "";
   return `<dt${title}>${escapeHtml(label)}</dt>`;
+}
+
+function formatComparatorCostQuantity(value, digits = 2) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return Number.isInteger(number) ? String(number) : formatNumber(number, digits);
 }
 
 function renderComparatorCards(proposals, config = null) {
@@ -6376,7 +6476,7 @@ function renderComparatorCards(proposals, config = null) {
       const hvLabel = metrics.postHocDiagnostic ? "HV comp. post-hoc" : "HV comp.";
       const spreadLabel = metrics.postHocDiagnostic ? "Spread comp. post-hoc" : "Spread comp.";
       const nonDominatedLabel = metrics.postHocDiagnostic ? "No dom. post-hoc" : "No dominadas";
-      const tokenValue = comparatorCostHasTokenReport(cost) ? String(cost.totalTokens ?? 0) : "No reportado";
+      const tokenValue = comparatorCostHasTokenReport(cost) ? formatComparatorCostQuantity(cost.totalTokens ?? 0) : "No reportado";
       const progressState = proposal.progressState || proposal;
       const progressPercent = Math.round(Math.max(0, Math.min(1, Number(progressState.progress || 0))) * 100);
       const stageLabel = progressState.stageLabel || comparatorStatusLabel(proposal.status);
@@ -6410,7 +6510,7 @@ function renderComparatorCards(proposals, config = null) {
           ${term("Total prop.")}<dd>${escapeHtml(cost.proposalTotalWallClockLabel || cost.processWallClockLabel || "--")}</dd>
           ${term("Post")}<dd>${escapeHtml(cost.postProcessingWallClockLabel || "0s")}</dd>
           ${term("Metricas web")}<dd>${escapeHtml(cost.metricExtractionLabel || "0s")}</dd>
-          ${term("Llamadas LLM")}<dd>${escapeHtml(String(cost.llmCalls ?? 0))}</dd>
+          ${term("Llamadas LLM")}<dd>${escapeHtml(formatComparatorCostQuantity(cost.llmCalls ?? 0))}</dd>
           ${term("Tiempo LLM")}<dd>${escapeHtml(cost.llmClientWallClockLabel || "--")}</dd>
           ${term("Prom. llamada")}<dd>${escapeHtml(cost.llmAverageCallLabel || "No disponible")}</dd>
           ${term("Tokens")}<dd>${escapeHtml(tokenValue)}</dd>
@@ -6454,8 +6554,8 @@ function renderComparatorCostExplanation(run) {
   dom.comparatorCostExplanation.innerHTML = `
     <p><strong>${escapeHtml(comparable ? "Costos comparables" : "Costos no comparables")}</strong>: ${escapeHtml(comparisonDetail)}</p>
     <p>Modo: ${escapeHtml(policy.label || run.config?.executionMode || "--")}; paralelismo efectivo ${escapeHtml(String(effective))} de ${escapeHtml(String(requested))} solicitado(s); wall-clock total de corrida ${escapeHtml(runCost.runWallClockLabel || "--")}.</p>
-    <p>La tabla se concentra en costos utiles para comparar ejecuciones: wall-clock, llamadas LLM, tokens y tiempos reportados por Ollama. Menor es mejor salvo que una metrica no sea reportada.</p>
-    <p>Post-procesamiento, extraccion de metricas y preparacion visual siguen separados internamente, pero no se muestran como costo principal ni se suman al costo real del algoritmo.</p>
+    <p>La tabla se concentra en costos promedio por repeticion completada: wall-clock, llamadas LLM, tokens y tiempos reportados por Ollama. Menor es mejor salvo que una metrica no sea reportada.</p>
+    <p>Post-procesamiento, extraccion de metricas y preparacion visual siguen separados internamente. Los totales reales de campana quedan en costSummary y en los campos Total del JSON.</p>
     <p>Tokens y duracion Ollama solo se comparan cuando todas las propuestas completadas reportan esa metrica con fuente real; si no, se muestra No reportado y no se destaca ganador.</p>
   `;
 }
@@ -6470,27 +6570,27 @@ function comparatorCostMetricDefinitions() {
     {
       id: "process",
       label: "Wall-clock proceso",
-      detail: "Tiempo real del proceso Python ejecutado por el backend.",
+      detail: "Tiempo real promedio del proceso Python por repeticion completada.",
       ...secondsMetric("processWallClockSeconds", "processWallClockLabel"),
     },
     {
       id: "algorithm",
       label: "Runtime algoritmo",
-      detail: "Tiempo interno reportado por la propuesta cuando existe.",
+      detail: "Tiempo interno promedio reportado por la propuesta cuando existe.",
       ...secondsMetric("algorithmRuntimeSeconds", "algorithmRuntimeLabel"),
     },
     {
       id: "llmCalls",
       label: "Llamadas LLM",
-      detail: "Total de llamadas reales registradas hacia el LLM.",
+      detail: "Promedio de llamadas reales registradas hacia el LLM por repeticion completada.",
       value: (_proposal, cost) => cost.llmCalls,
-      format: (_proposal, cost) => String(cost.llmCalls ?? 0),
+      format: (_proposal, cost) => formatComparatorCostQuantity(cost.llmCalls ?? 0),
       isReported: (_proposal, cost) => Number.isFinite(Number(cost.llmCalls)),
     },
     {
       id: "llmTime",
       label: "Tiempo LLM cliente",
-      detail: "Suma de latencias cliente de llamadas LLM.",
+      detail: "Tiempo cliente LLM promedio por repeticion completada.",
       ...secondsMetric("llmClientWallClockSeconds", "llmClientWallClockLabel"),
     },
     {
@@ -6502,24 +6602,24 @@ function comparatorCostMetricDefinitions() {
     {
       id: "llmFailed",
       label: "Llamadas fallidas",
-      detail: "Errores registrados durante llamadas LLM.",
+      detail: "Promedio de errores registrados durante llamadas LLM por repeticion completada.",
       value: (_proposal, cost) => cost.llmFailedCalls,
-      format: (_proposal, cost) => String(cost.llmFailedCalls ?? 0),
+      format: (_proposal, cost) => formatComparatorCostQuantity(cost.llmFailedCalls ?? 0),
       isReported: (_proposal, cost) => Number.isFinite(Number(cost.llmFailedCalls)),
     },
     {
       id: "tokens",
       label: "Tokens reportados",
-      detail: "Suma de prompt y completion tokens cuando la propuesta los reporta.",
+      detail: "Promedio de prompt y completion tokens por repeticion completada cuando la propuesta los reporta.",
       value: (_proposal, cost) => cost.totalTokens,
-      format: (_proposal, cost) => String(cost.totalTokens ?? 0),
+      format: (_proposal, cost) => formatComparatorCostQuantity(cost.totalTokens ?? 0),
       isReported: (_proposal, cost) => comparatorCostHasTokenReport(cost),
       requireAllReported: true,
     },
     {
       id: "ollamaDuration",
       label: "Duracion Ollama reportada",
-      detail: "Duracion total informada por Ollama cuando esta disponible.",
+      detail: "Duracion promedio informada por Ollama por repeticion completada cuando esta disponible.",
       value: (_proposal, cost) => cost.ollamaTotalDurationSeconds,
       format: (_proposal, cost) => cost.ollamaTotalDurationLabel || "--",
       isReported: (_proposal, cost) => comparatorCostHasOllamaDuration(cost),
