@@ -1167,6 +1167,10 @@ class RepetitionAggregationTests(unittest.TestCase):
                     "postHocDiagnostic": True,
                     "bestDiagnosticObjectiveVector": [0.6, 0.5],
                     "postHocNonDominatedRows": 2,
+                    "externalArchiveUpdateCount": 4,
+                    "externalArchivePruneCount": 1,
+                    "externalArchiveUpdateCountTotal": 4,
+                    "externalArchivePruneCountTotal": 1,
                 },
                 "cost": {"llmCalls": 2, "llmClientWallClockSeconds": 1.0, "totalTokens": 20},
             },
@@ -1186,6 +1190,10 @@ class RepetitionAggregationTests(unittest.TestCase):
                     "postHocDiagnostic": True,
                     "bestDiagnosticObjectiveVector": [0.8, 0.7],
                     "postHocNonDominatedRows": 4,
+                    "externalArchiveUpdateCount": 8,
+                    "externalArchivePruneCount": 3,
+                    "externalArchiveUpdateCountTotal": 8,
+                    "externalArchivePruneCountTotal": 3,
                 },
                 "cost": {"llmCalls": 3, "llmClientWallClockSeconds": 2.0, "totalTokens": 30},
             },
@@ -1196,6 +1204,10 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(aggregated["metrics"]["bestObjectiveLabel"], "[0.700000]")
         self.assertEqual(aggregated["metrics"]["nonDominatedRows"], 3.0)
         self.assertEqual(aggregated["metrics"]["postHocNonDominatedRows"], 3.0)
+        self.assertAlmostEqual(aggregated["metrics"]["externalArchiveUpdateCount"], 6.0)
+        self.assertAlmostEqual(aggregated["metrics"]["externalArchivePruneCount"], 2.0)
+        self.assertEqual(aggregated["metrics"]["externalArchiveUpdateCountTotal"], 12)
+        self.assertEqual(aggregated["metrics"]["externalArchivePruneCountTotal"], 4)
         self.assertAlmostEqual(aggregated["cost"]["llmCalls"], 2.5)
         self.assertEqual(aggregated["cost"]["llmCallsTotal"], 5)
         self.assertAlmostEqual(aggregated["cost"]["llmClientWallClockSeconds"], 1.5)
@@ -1240,6 +1252,62 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(rows[0]["objectiveVector"], [0.7, 0.4])
         self.assertEqual(rows[0]["comparableObjectiveVector"], [0.85, 0.2])
         self.assertTrue(rows[0]["nonDominated"])
+
+    def test_binary_summary_reads_external_archive_counts_from_metrics_csv(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "\n".join(
+                    [
+                        "generation,archive_update_count,archive_prune_count",
+                        "1,2,0",
+                        "2,5,1",
+                        "bad,9,9",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            rows = service._normalize_rows(
+                proposal,
+                [{"generated_text": "Generated", "objectives": {"f1": 0.0, "f2": 1.0}}],
+                top_k=5,
+            )
+            metrics = service._summarize_rows(proposal, rows, output_dir)
+
+        self.assertEqual(metrics["externalArchiveUpdateCount"], 5)
+        self.assertEqual(metrics["externalArchivePruneCount"], 1)
+        self.assertEqual(metrics["externalArchiveUpdateCountTotal"], 5)
+        self.assertEqual(metrics["externalArchivePruneCountTotal"], 1)
+
+    def test_binary_summary_falls_back_to_runtime_log_for_external_archive_counts(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "generation,hypervolume\n1,0.25\n",
+                encoding="utf-8",
+            )
+            (output_dir / "runtime.log").write_text(
+                "\n".join(
+                    [
+                        "2026-06-03 00:05:20 | INFO | run 1/1 | generation 1/2 | archive_updates=3 | archive_prunes=1 | elapsed=00:00:16",
+                        "2026-06-03 00:05:30 | INFO | run 1/1 finished | archive_updates=4 | archive_prunes=2 | elapsed=00:00:26",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            rows = service._normalize_rows(
+                proposal,
+                [{"generated_text": "Generated", "objectives": {"f1": 0.0, "f2": 1.0}}],
+                top_k=5,
+            )
+            metrics = service._summarize_rows(proposal, rows, output_dir)
+
+        self.assertEqual(metrics["externalArchiveUpdateCount"], 4)
+        self.assertEqual(metrics["externalArchivePruneCount"], 2)
 
     def test_mesap_rows_normalize_from_population_final_with_posthoc_metrics(self):
         service = ComparatorService(Path("."))
@@ -1733,7 +1801,7 @@ class RepetitionAggregationTests(unittest.TestCase):
             recomputed = service.recompute_run_metrics(run_id)
             proposal = recomputed["proposals"][0]
 
-        self.assertEqual(recomputed["metricSchemaVersion"], 2)
+        self.assertEqual(recomputed["metricSchemaVersion"], 3)
         self.assertEqual(recomputed["metricCoordinateSpace"], "comparable_normalized")
         self.assertFalse(recomputed["metricRecomputeStatus"]["recommended"])
         self.assertAlmostEqual(proposal["metrics"]["hypervolume"], 0.375)

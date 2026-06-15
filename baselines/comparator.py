@@ -52,6 +52,8 @@ GENERATION_TIME_RE = re.compile(
     re.IGNORECASE,
 )
 ELAPSED_RE = re.compile(r"\belapsed=(\d{1,2}:\d{2}(?::\d{2})?)\b", re.IGNORECASE)
+ARCHIVE_UPDATES_RE = re.compile(r"\barchive_updates=(\d+)\b", re.IGNORECASE)
+ARCHIVE_PRUNES_RE = re.compile(r"\barchive_prunes=(\d+)\b", re.IGNORECASE)
 PERCENT_RE = re.compile(r"(\d{1,3})%")
 TIMESTAMPED_LOG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+\|\s+[A-Z]+\s+\|\s+(.+)$")
 PYTHON_EXCEPTION_LOG_RE = re.compile(
@@ -109,7 +111,7 @@ DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN = config_bool(COMPARATOR_DEFAULTS.get("up
 DEFAULT_EXECUTION_MODE = str(COMPARATOR_DEFAULTS.get("executionMode") or EXECUTION_MODE_FAIR_SEQUENTIAL)
 COMPARATOR_TIMEOUT_MINUTES_MIN = 2400
 COMPARATOR_TIMEOUT_MINUTES_MAX = 10080
-METRIC_SCHEMA_VERSION = 2
+METRIC_SCHEMA_VERSION = 3
 METRIC_COORDINATE_SPACE = "comparable_normalized"
 POSTHOC_DIAGNOSTIC_KMEANS_CLUSTERS = 3
 MODULE_ROOT = Path(__file__).resolve().parents[1]
@@ -486,6 +488,18 @@ def finite_float(value: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
     return number if math.isfinite(number) else default
+
+
+def finite_int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return int(number)
 
 
 COMPARATOR_RUN_LOG_LIMIT = max(250, int(finite_float(COMPARATOR_DEFAULTS.get("runLogTailLimit"), 1000)))
@@ -946,6 +960,16 @@ def average_vector(vectors: list[Any]) -> list[float]:
     return [sum(vector[index] for vector in normalized) / len(normalized) for index in range(width)]
 
 
+def sum_present_metric(metrics_list: list[dict[str, Any]], key: str, fallback_key: str | None = None) -> float | None:
+    values: list[float] = []
+    for metrics in metrics_list:
+        if metrics.get(key) is not None:
+            values.append(finite_float(metrics.get(key)))
+        elif fallback_key and metrics.get(fallback_key) is not None:
+            values.append(finite_float(metrics.get(fallback_key)))
+    return sum(values) if values else None
+
+
 def aggregate_runtime_breakdowns(costs: list[dict[str, Any]]) -> dict[str, float]:
     totals: dict[str, float] = {}
     for cost in costs:
@@ -1104,6 +1128,24 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
     ])
     hypervolume = average_present([metrics.get("hypervolume") for metrics in metrics_list])
     spread = average_present([metrics.get("spread") for metrics in metrics_list])
+    archive_update_average = average_present([
+        metrics.get("externalArchiveUpdateCount")
+        for metrics in metrics_list
+    ])
+    archive_prune_average = average_present([
+        metrics.get("externalArchivePruneCount")
+        for metrics in metrics_list
+    ])
+    archive_update_total = sum_present_metric(
+        metrics_list,
+        "externalArchiveUpdateCountTotal",
+        "externalArchiveUpdateCount",
+    )
+    archive_prune_total = sum_present_metric(
+        metrics_list,
+        "externalArchivePruneCountTotal",
+        "externalArchivePruneCount",
+    )
     first_metrics = next((metrics for metrics in metrics_list if metrics), {})
     metrics: dict[str, Any] = {
         "totalRows": average_present([metrics.get("totalRows") for metrics in metrics_list]),
@@ -1125,6 +1167,15 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
         "moConvention": first_metrics.get("moConvention"),
         "repetitionAggregation": "Promedio sobre repeticiones K con semillas distintas.",
     }
+    if archive_update_average is not None and archive_prune_average is not None:
+        metrics.update(
+            {
+                "externalArchiveUpdateCount": archive_update_average,
+                "externalArchivePruneCount": archive_prune_average,
+                "externalArchiveUpdateCountTotal": archive_update_total,
+                "externalArchivePruneCountTotal": archive_prune_total,
+            }
+        )
     if first_metrics.get("postHocDiagnostic"):
         posthoc_non_dominated = average_present([
             item.get("postHocNonDominatedRows")
@@ -3716,7 +3767,7 @@ class ComparatorService:
             if not archive:
                 continue
             rows = self._normalize_rows(proposal, archive, top_k=len(archive))
-            metrics = self._summarize_rows(proposal, rows, Path("."))
+            metrics = self._summarize_rows(proposal, rows, Path("."), include_artifact_metrics=False)
             series.append(
                 {
                     "generation": int(finite_float(payload.get("generation"))),
@@ -3742,6 +3793,44 @@ class ComparatorService:
                 }
             )
         return [item for item in series if item["generation"] > 0]
+
+    def _read_binary_archive_summary_metrics(self, output_dir: Path) -> dict[str, Any]:
+        counts = self._read_binary_archive_counts_from_metrics_csv(output_dir)
+        if counts is None:
+            counts = self._read_binary_archive_counts_from_runtime_log(output_dir)
+        if counts is None:
+            return {}
+        update_count, prune_count = counts
+        return {
+            "externalArchiveUpdateCount": update_count,
+            "externalArchivePruneCount": prune_count,
+            "externalArchiveUpdateCountTotal": update_count,
+            "externalArchivePruneCountTotal": prune_count,
+        }
+
+    def _read_binary_archive_counts_from_metrics_csv(self, output_dir: Path) -> tuple[int, int] | None:
+        rows = self._read_csv_dicts(output_dir / "evolucion_metricas.csv")
+        for item in reversed(rows):
+            generation = finite_int_or_none(item.get("generation"))
+            if generation is None or generation <= 0:
+                continue
+            update_count = finite_int_or_none(item.get("archive_update_count"))
+            prune_count = finite_int_or_none(item.get("archive_prune_count"))
+            if update_count is not None and prune_count is not None:
+                return update_count, prune_count
+        return None
+
+    def _read_binary_archive_counts_from_runtime_log(self, output_dir: Path) -> tuple[int, int] | None:
+        path = output_dir / "runtime.log"
+        if not path.exists():
+            return None
+        counts: tuple[int, int] | None = None
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            update_match = ARCHIVE_UPDATES_RE.search(line)
+            prune_match = ARCHIVE_PRUNES_RE.search(line)
+            if update_match and prune_match:
+                counts = int(update_match.group(1)), int(prune_match.group(1))
+        return counts
 
     def _read_legacy_metric_series(self, proposal: ProposalDefinition, output_dir: Path) -> list[dict[str, Any]]:
         filename = proposal.metrics_series_file
@@ -3813,7 +3902,7 @@ class ComparatorService:
     def _history_entry_metrics(self, proposal: ProposalDefinition, entry: dict[str, Any], reference_text: str) -> dict[str, Any]:
         population = entry.get("population") if isinstance(entry.get("population"), list) else []
         rows = self._normalize_rows(proposal, population, top_k=len(population) or 1, reference_text=reference_text)
-        metrics = self._summarize_rows(proposal, rows, Path("."))
+        metrics = self._summarize_rows(proposal, rows, Path("."), include_artifact_metrics=False)
         return {
             "generation": int(finite_float(entry.get("generation"))),
             "hypervolume": metrics.get("hypervolume"),
@@ -3823,7 +3912,7 @@ class ComparatorService:
         }
 
     def _final_series_point(self, proposal: ProposalDefinition, rows: list[dict[str, Any]]) -> dict[str, Any]:
-        metrics = self._summarize_rows(proposal, rows, Path("."))
+        metrics = self._summarize_rows(proposal, rows, Path("."), include_artifact_metrics=False)
         return {
             "generation": 0,
             "hypervolume": metrics.get("hypervolume"),
@@ -3848,6 +3937,7 @@ class ComparatorService:
             "series": output_dir / proposal.metrics_series_file if proposal.metrics_series_file else None,
             "populationHistory": output_dir / "population_history.jsonl",
             "runtime": output_dir / "runtime.txt",
+            "runtimeLog": output_dir / "runtime.log",
             "llmCalls": output_dir / "llm_calls.jsonl",
         }
         return {key: str(path) if path and path.exists() else None for key, path in files.items()}
@@ -4537,6 +4627,7 @@ class ComparatorService:
         proposal: ProposalDefinition,
         rows: list[dict[str, Any]],
         output_dir: Path,
+        include_artifact_metrics: bool = True,
     ) -> dict[str, Any]:
         completed = [row for row in rows if row.get("status") == "ok"]
         best_vector = completed[0]["objectiveVector"] if completed else []
@@ -4622,6 +4713,9 @@ class ComparatorService:
                 "the normalized vector [(f1 + 1) / 2, f2 / 2] for every proposal, with reference point [0, 0]. "
                 "Spread is normalized consecutive-distance deviation, lower is better."
             )
+
+        if include_artifact_metrics and proposal.kind == "binary-mopso-cd":
+            metrics.update(self._read_binary_archive_summary_metrics(output_dir))
 
         return metrics
 

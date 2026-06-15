@@ -6437,6 +6437,12 @@ function comparatorProposalSummaryTooltip(label, metrics = {}) {
   if (key === "tokens") {
     return "Promedio de tokens reportados por repeticion completada; No reportado no se interpreta como cero.";
   }
+  if (key === "actualiz. archivo ext.") {
+    return "Cantidad de veces que el archivo externo cambio efectivamente su conjunto de soluciones durante Binary MOPSO-CD.";
+  }
+  if (key === "podas archivo ext.") {
+    return "Cantidad de eventos en que Binary MOPSO-CD recorto el archivo externo por superar su capacidad.";
+  }
   if (key === "git") {
     return "Rama y commit local usados para ejecutar la propuesta.";
   }
@@ -6458,6 +6464,21 @@ function formatComparatorCostQuantity(value, digits = 2) {
   return Number.isInteger(number) ? String(number) : formatNumber(number, digits);
 }
 
+function formatComparatorArchiveCounter(average, total, repetitionsK) {
+  const averageNumber = Number(average);
+  if (!Number.isFinite(averageNumber)) return null;
+  const totalNumber = Number(total);
+  if (Number(repetitionsK) > 1 && Number.isFinite(totalNumber)) {
+    return `${formatComparatorCostQuantity(averageNumber)} prom.; ${formatComparatorCostQuantity(totalNumber)} total`;
+  }
+  return formatComparatorCostQuantity(averageNumber);
+}
+
+function comparatorArchiveMetricRow(label, average, total, repetitionsK, metrics) {
+  const value = formatComparatorArchiveCounter(average, total, repetitionsK);
+  return value === null ? "" : `${comparatorProposalSummaryTerm(label, metrics)}<dd>${escapeHtml(value)}</dd>`;
+}
+
 function renderComparatorCards(proposals, config = null) {
   if (!proposals.length) {
     dom.comparatorProposalCards.innerHTML = `
@@ -6477,6 +6498,21 @@ function renderComparatorCards(proposals, config = null) {
       const spreadLabel = metrics.postHocDiagnostic ? "Spread comp. post-hoc" : "Spread comp.";
       const nonDominatedLabel = metrics.postHocDiagnostic ? "No dom. post-hoc" : "No dominadas";
       const tokenValue = comparatorCostHasTokenReport(cost) ? formatComparatorCostQuantity(cost.totalTokens ?? 0) : "No reportado";
+      const repetitionsK = proposal.repetitionsK ?? config?.repetitionsK ?? 1;
+      const archiveUpdateRow = comparatorArchiveMetricRow(
+        "Actualiz. archivo ext.",
+        metrics.externalArchiveUpdateCount,
+        metrics.externalArchiveUpdateCountTotal,
+        repetitionsK,
+        metrics,
+      );
+      const archivePruneRow = comparatorArchiveMetricRow(
+        "Podas archivo ext.",
+        metrics.externalArchivePruneCount,
+        metrics.externalArchivePruneCountTotal,
+        repetitionsK,
+        metrics,
+      );
       const progressState = proposal.progressState || proposal;
       const progressPercent = Math.round(Math.max(0, Math.min(1, Number(progressState.progress || 0))) * 100);
       const stageLabel = progressState.stageLabel || comparatorStatusLabel(proposal.status);
@@ -6506,6 +6542,8 @@ function renderComparatorCards(proposals, config = null) {
           ${term(hvLabel)}<dd>${escapeHtml(metrics.hypervolumeLabel || "No aplica")}</dd>
           ${term(spreadLabel)}<dd>${escapeHtml(metrics.spreadLabel || "No aplica")}</dd>
           ${metrics.postHocDiagnostic ? `${term("Vector post-hoc")}<dd>${escapeHtml(metrics.bestDiagnosticObjectiveLabel || "--")}</dd>` : ""}
+          ${archiveUpdateRow}
+          ${archivePruneRow}
           ${term("Algoritmo")}<dd>${escapeHtml(cost.processWallClockLabel || "--")}</dd>
           ${term("Total prop.")}<dd>${escapeHtml(cost.proposalTotalWallClockLabel || cost.processWallClockLabel || "--")}</dd>
           ${term("Post")}<dd>${escapeHtml(cost.postProcessingWallClockLabel || "0s")}</dd>
