@@ -57,7 +57,7 @@ ARCHIVE_PRUNES_RE = re.compile(r"\barchive_prunes=(\d+)\b", re.IGNORECASE)
 PERCENT_RE = re.compile(r"(\d{1,3})%")
 TIMESTAMPED_LOG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+\|\s+[A-Z]+\s+\|\s+(.+)$")
 PYTHON_EXCEPTION_LOG_RE = re.compile(
-    r"^(?:[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception)|KeyboardInterrupt|SystemExit):\s+.+$"
+    r"^(?:[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception|Timeout)|KeyboardInterrupt|SystemExit):\s+.+$"
 )
 GIT_REMOTE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
@@ -1270,6 +1270,10 @@ def aggregate_proposal_repetitions(
         "completedRepetitions": len(completed),
         "repetitions": results,
     }
+
+
+def completed_repetition_count(results: list[dict[str, Any]]) -> int:
+    return sum(1 for result in results if result.get("status") == STATUS_COMPLETED)
 
 
 def proposal_config(proposal_id: str) -> dict[str, Any]:
@@ -2938,9 +2942,15 @@ class ComparatorService:
         state["stageLabel"] = comparator_status_message(result["status"])
         state["progress"] = 1.0
         total_repetitions = max(1, int(result.get("repetitionsK") or run.get("config", {}).get("repetitionsK") or 1))
+        raw_completed_repetitions = result.get("completedRepetitions")
+        if raw_completed_repetitions is None:
+            completed_repetitions = 1 if result.get("status") == STATUS_COMPLETED else 0
+        else:
+            completed_repetitions = int(raw_completed_repetitions)
+        completed_repetitions = max(0, min(total_repetitions, completed_repetitions))
         state["totalRepetitions"] = total_repetitions
-        state["completedRepetitions"] = min(total_repetitions, int(result.get("completedRepetitions") or total_repetitions))
-        state["currentRepetitionIndex"] = state["completedRepetitions"] or total_repetitions
+        state["completedRepetitions"] = completed_repetitions
+        state["currentRepetitionIndex"] = total_repetitions
         state["updatedAt"] = utc_now()
         run["updatedAt"] = utc_now()
         self._refresh_run_progress_unlocked(run)
@@ -2995,7 +3005,7 @@ class ComparatorService:
                 self._repetition_seed(run["config"].get("seed"), 0),
             )
             result = {**self._result_identity(instance), **result}
-            result["completedRepetitions"] = 1 if result.get("status") in {STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED} else 0
+            result["completedRepetitions"] = 1 if result.get("status") == STATUS_COMPLETED else 0
             result["repetitionsK"] = 1
             with self._lock:
                 state = run["proposalStates"].get(instance.instance_id)
@@ -3022,7 +3032,7 @@ class ComparatorService:
                 state = run["proposalStates"].get(instance.instance_id)
                 if state:
                     state["currentRepetitionIndex"] = repetition_index + 1
-                    state["completedRepetitions"] = repetition_index
+                    state["completedRepetitions"] = completed_repetition_count(results)
                     state["totalRepetitions"] = repetitions_k
                     timing = self._iteration_timing(state)
                     timing["activeIterationKey"] = None
@@ -3041,13 +3051,12 @@ class ComparatorService:
             with self._lock:
                 state = run["proposalStates"].get(instance.instance_id)
                 if state:
-                    state["completedRepetitions"] = len(results)
+                    state["completedRepetitions"] = completed_repetition_count(results)
                     state["currentRepetitionIndex"] = min(len(results) + 1, repetitions_k)
                     state["totalRepetitions"] = repetitions_k
                     state["updatedAt"] = utc_now()
 
         aggregated = aggregate_proposal_repetitions(base_proposal, base_dir, results, repetitions_k, self._result_identity(instance))
-        aggregated["completedRepetitions"] = len(results)
         return aggregated
 
     def _build_command(

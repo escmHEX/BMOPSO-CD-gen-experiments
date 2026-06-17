@@ -268,6 +268,125 @@ class RepetitionAggregationTests(unittest.TestCase):
             self.assertEqual(state["totalRepetitions"], 3)
             self.assertEqual(state["currentRepetitionIndex"], 3)
 
+    def test_comparator_does_not_count_failed_single_repetition_as_completed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+            run = {
+                "runId": "run-1",
+                "runDir": str(root / "runs" / "comparator" / "run-1"),
+                "status": "running",
+                "startedAtEpoch": None,
+                "config": {"repetitionsK": 1, "seed": 100, "generaciones": 2},
+                "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal, 1)},
+                "proposals": [],
+                "progress": {},
+                "costSummary": {},
+                "logs": [],
+            }
+
+            def fake_execute_once(_run, _proposal, output_dir, _seed):
+                return {
+                    "proposalId": proposal.proposal_id,
+                    "displayName": proposal.display_name,
+                    "status": "failed",
+                    "outputDir": str(output_dir),
+                    "rows": [],
+                    "metrics": {},
+                    "cost": {},
+                    "error": "httpx.ReadTimeout: timed out",
+                }
+
+            with patch.object(service, "_execute_proposal_once", side_effect=fake_execute_once):
+                result = service._execute_proposal(run, proposal)
+
+            state = run["proposalStates"][proposal.proposal_id]
+            self.assertEqual(result["completedRepetitions"], 0)
+            self.assertEqual(result["repetitionsK"], 1)
+            self.assertEqual(state["completedRepetitions"], 0)
+            self.assertEqual(state["totalRepetitions"], 1)
+            self.assertEqual(state["currentRepetitionIndex"], 1)
+
+    def test_comparator_counts_only_successful_repetitions_after_mixed_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+            run = {
+                "runId": "run-1",
+                "runDir": str(root / "runs" / "comparator" / "run-1"),
+                "status": "running",
+                "startedAtEpoch": None,
+                "config": {"repetitionsK": 3, "seed": 100, "generaciones": 2},
+                "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal, 3)},
+                "proposals": [],
+                "progress": {},
+                "costSummary": {},
+                "logs": [],
+            }
+            statuses = ["completed", "failed", "completed"]
+
+            def fake_execute_once(_run, _proposal, output_dir, seed):
+                status = statuses.pop(0)
+                return {
+                    "proposalId": proposal.proposal_id,
+                    "displayName": proposal.display_name,
+                    "status": status,
+                    "outputDir": str(output_dir),
+                    "rows": [],
+                    "selectedRows": [],
+                    "metrics": {},
+                    "series": [],
+                    "charts": {},
+                    "cost": {},
+                    "error": None if status == "completed" else "httpx.ReadTimeout: timed out",
+                    "seed": seed,
+                }
+
+            with patch.object(service, "_execute_proposal_once", side_effect=fake_execute_once):
+                result = service._execute_proposal(run, proposal)
+
+            state = run["proposalStates"][proposal.proposal_id]
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["completedRepetitions"], 2)
+            self.assertEqual(result["repetitionsK"], 3)
+            self.assertEqual(result["error"], "1 repeticion(es) fallaron.")
+            self.assertEqual(state["completedRepetitions"], 2)
+            self.assertEqual(state["totalRepetitions"], 3)
+            self.assertEqual(state["currentRepetitionIndex"], 3)
+
+    def test_record_proposal_result_preserves_zero_completed_repetitions(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        run = {
+            "runId": "run-1",
+            "runDir": "run-1",
+            "status": "running",
+            "startedAtEpoch": None,
+            "config": {"repetitionsK": 1},
+            "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal, 1)},
+            "proposals": [],
+            "progress": {},
+            "costSummary": {},
+            "logs": [],
+            "repositoryUpdates": {},
+        }
+        result = {
+            "proposalId": proposal.proposal_id,
+            "displayName": proposal.display_name,
+            "status": "failed",
+            "completedRepetitions": 0,
+            "repetitionsK": 1,
+            "cost": {},
+        }
+
+        service._record_proposal_result_unlocked(run, result)
+
+        state = run["proposalStates"][proposal.proposal_id]
+        self.assertEqual(state["completedRepetitions"], 0)
+        self.assertEqual(state["totalRepetitions"], 1)
+
     def test_comparator_executes_instance_in_isolated_output_directory(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1978,6 +2097,27 @@ class RepetitionAggregationTests(unittest.TestCase):
             message,
             "Process exited with code 1. RuntimeError: Initial semantic pools are insufficient: product=0, required=180",
         )
+
+    def test_process_failure_message_uses_read_timeout_exception_log_detail(self):
+        service = ComparatorService(Path("."))
+        run = {
+            "config": {"timeoutMinutes": 60},
+            "logs": [
+                {"proposalId": "binary-mopso-cd", "message": "Traceback (most recent call last):"},
+                {
+                    "proposalId": "binary-mopso-cd",
+                    "message": (
+                        'File "C:\\Users\\Admin\\Desktop\\Implementacion\\Binary MOPSO-CD\\.venv\\Lib\\'
+                        'site-packages\\httpx\\_transports\\default.py", line 118, in map_httpcore_exceptions'
+                    ),
+                },
+                {"proposalId": "binary-mopso-cd", "message": "httpx.ReadTimeout: timed out"},
+            ],
+        }
+
+        message = service._process_failure_message(run, "binary-mopso-cd", 1, False)
+
+        self.assertEqual(message, "Process exited with code 1. httpx.ReadTimeout: timed out")
 
     def test_binary_failed_costs_can_read_existing_output_dir(self):
         with tempfile.TemporaryDirectory() as temp_dir:
