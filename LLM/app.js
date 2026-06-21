@@ -6582,6 +6582,8 @@ function comparatorBenchmarkMetricDefinitions() {
     qualityMetric("contribution", "contributionLabel", "Contribution", "Aporte al frente combinado P*, con credito compartido entre puntos repetidos."),
     qualityMetric("extent", "extentLabel", "Extent", "Cobertura del frente no dominado en el espacio comparable."),
     qualityMetric("unaryEntropy", "unaryEntropyLabel", "Unary Entropy", "Entropia normalizada de la distribucion del frente comparable."),
+    qualityMetric("globalInertia", "globalInertiaLabel", "K-Means Inertia", "Dispersion geometrica promedio de embeddings SBERT por generacion final disponible."),
+    qualityMetric("globalEntropy", "globalEntropyLabel", "Entity Entropy", "Variedad conceptual por lemas NOUN/VERB/ADJ en la generacion final disponible."),
     {
       id: "process",
       label: "Wall-clock",

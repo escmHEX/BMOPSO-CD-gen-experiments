@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import types
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -19,6 +20,20 @@ from baselines.comparator_metrics import calculate_extent
 from baselines.comparator_metrics import calculate_unary_entropy
 from initial_population.comparison import InitialPopulationComparisonService
 from turbulence_comparison.service import aggregate_turbulence_repetitions
+
+
+class FakeSpacyToken:
+    def __init__(self, lemma: str, pos: str):
+        self.lemma_ = lemma
+        self.pos_ = pos
+
+
+class FakeSpacyModel:
+    def __init__(self, docs):
+        self._docs = docs
+
+    def pipe(self, _texts):
+        return iter(self._docs)
 
 
 def command_set_values(command: list[str]) -> dict[str, str]:
@@ -1774,11 +1789,11 @@ class RepetitionAggregationTests(unittest.TestCase):
 
         self.assertEqual(len(series), 2)
         self.assertEqual(series[0]["generation"], 1)
-        self.assertAlmostEqual(series[0]["globalInertia"], 0.3689031219)
-        self.assertAlmostEqual(series[0]["globalEntropy"], 0.6886581024)
+        self.assertIsNone(series[0]["globalInertia"])
+        self.assertIsNone(series[0]["globalEntropy"])
         self.assertIsNone(series[0]["hypervolume"])
 
-    def test_evolmd_mo_history_series_merges_global_diagnostics_from_csv(self):
+    def test_evolmd_mo_history_series_uses_posthoc_diagnostics_instead_of_bugged_csv(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
             (output_dir / "population_history.jsonl").write_text(
@@ -1807,6 +1822,10 @@ class RepetitionAggregationTests(unittest.TestCase):
             evolmd_mo = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
 
             with patch.object(
+                service,
+                "_posthoc_population_diagnostics",
+                return_value={"globalInertia": 0.125, "globalEntropy": 0.5},
+            ), patch.object(
                 comparator_module,
                 "calculate_posthoc_semantic_scores",
                 return_value=[
@@ -1817,10 +1836,73 @@ class RepetitionAggregationTests(unittest.TestCase):
                 series = service._build_metric_series(evolmd_mo, output_dir, [], "reference")
 
         self.assertEqual(len(series), 1)
-        self.assertIsNotNone(series[0]["hypervolume"])
-        self.assertAlmostEqual(series[0]["globalInertia"], 0.3689031219)
-        self.assertAlmostEqual(series[0]["globalEntropy"], 0.6886581024)
+        self.assertAlmostEqual(series[0]["hypervolume"], 0.29)
+        self.assertAlmostEqual(series[0]["globalInertia"], 0.125)
+        self.assertAlmostEqual(series[0]["globalEntropy"], 0.5)
         self.assertEqual(series[0]["source"], "population_history")
+
+    def test_posthoc_population_diagnostics_uses_common_kmeans_definition(self):
+        service = ComparatorService(Path("."))
+        calls = []
+
+        class FakeSbertService:
+            def encode_texts(self, model_name, texts):
+                calls.append((model_name, list(texts)))
+                return [[float(index)] for index, _text in enumerate(texts)], {}
+
+        class FakeKMeans:
+            def __init__(self, n_clusters, n_init, random_state):
+                self.n_clusters = n_clusters
+                self.n_init = n_init
+                self.random_state = random_state
+                self.inertia_ = 12.0
+
+            def fit(self, embeddings):
+                self.embeddings = embeddings
+                return self
+
+        created_models = []
+
+        def fake_kmeans(*args, **kwargs):
+            model = FakeKMeans(*args, **kwargs)
+            created_models.append(model)
+            return model
+
+        fake_sklearn = types.SimpleNamespace()
+        fake_cluster = types.SimpleNamespace(KMeans=fake_kmeans)
+        with patch.object(comparator_module, "shared_sbert_service", return_value=FakeSbertService()), patch.dict(
+            sys.modules,
+            {"sklearn": fake_sklearn, "sklearn.cluster": fake_cluster},
+        ), patch.object(service, "_posthoc_entity_entropy", return_value=0.25):
+            metrics = service._posthoc_population_diagnostics(["a", "b", "c", "d", "e", "f"])
+
+        self.assertEqual(calls, [(comparator_module.POSTHOC_EMBEDDING_MODEL, ["a", "b", "c", "d", "e", "f"])])
+        self.assertEqual(created_models[0].n_clusters, 5)
+        self.assertEqual(created_models[0].n_init, 10)
+        self.assertEqual(created_models[0].random_state, 0)
+        self.assertAlmostEqual(metrics["globalInertia"], 2.0)
+        self.assertAlmostEqual(metrics["globalEntropy"], 0.25)
+
+    def test_posthoc_entity_entropy_uses_pos_lemmas_and_log2_normalization(self):
+        service = ComparatorService(Path("."))
+        service._posthoc_spacy_model = FakeSpacyModel(
+            [
+                [
+                    FakeSpacyToken("shelter", "NOUN"),
+                    FakeSpacyToken("help", "VERB"),
+                    FakeSpacyToken("quickly", "ADV"),
+                ],
+                [
+                    FakeSpacyToken("urgent", "ADJ"),
+                    FakeSpacyToken("shelter", "NOUN"),
+                    FakeSpacyToken("Chile", "PROPN"),
+                ],
+            ]
+        )
+
+        score = service._posthoc_entity_entropy(["doc one", "doc two"])
+
+        self.assertAlmostEqual(score, 1.5 / comparator_module.math.log2(6))
 
     def test_binary_monitor_series_reads_inertia_and_entropy(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1969,7 +2051,8 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertIsNotNone(series[0]["unaryEntropy"])
         self.assertEqual(series[0]["frontPoints"], [[0.5, 0.5], [0.7, 0.3]])
         self.assertEqual(series[1]["source"], "legacy_csv_without_front")
-        self.assertAlmostEqual(series[1]["globalInertia"], 0.3689031219)
+        self.assertIsNone(series[1]["globalInertia"])
+        self.assertIsNone(series[1]["globalEntropy"])
 
     def test_series_contribution_uses_final_only_generation(self):
         service = ComparatorService(Path("."))
@@ -2133,6 +2216,34 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertAlmostEqual(series[0]["globalEntropy"], 0.7)
         self.assertAlmostEqual(series[1]["globalInertia"], 0.4)
         self.assertAlmostEqual(series[1]["globalEntropy"], 0.8)
+
+    def test_aggregate_proposal_repetitions_exposes_terminal_global_diagnostics_as_metrics(self):
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
+        aggregated = aggregate_proposal_repetitions(
+            proposal,
+            Path("."),
+            [
+                {
+                    "status": "completed",
+                    "rows": [],
+                    "selectedRows": [],
+                    "metrics": {"totalRows": 0, "completedRows": 0},
+                    "series": [
+                        {"generation": 1, "globalInertia": 0.2, "globalEntropy": 0.6},
+                        {"generation": 2, "globalInertia": 0.4, "globalEntropy": 0.8},
+                    ],
+                    "cost": {},
+                }
+            ],
+            repetitions_k=1,
+        )
+
+        self.assertIn("globalInertia", aggregated["metrics"])
+        self.assertAlmostEqual(aggregated["metrics"]["globalInertia"], 0.4)
+        self.assertEqual(aggregated["metrics"]["globalInertiaLabel"], "0.400000")
+        self.assertIn("globalEntropy", aggregated["metrics"])
+        self.assertAlmostEqual(aggregated["metrics"]["globalEntropy"], 0.8)
+        self.assertEqual(aggregated["metrics"]["globalEntropyLabel"], "0.800000")
 
     def test_legacy_summary_without_comparable_points_is_recompute_recommended(self):
         service = ComparatorService(Path("."))

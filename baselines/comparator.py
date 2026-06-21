@@ -114,7 +114,8 @@ COMPARATOR_TIMEOUT_MINUTES_MIN = 2400
 COMPARATOR_TIMEOUT_MINUTES_MAX = 10080
 METRIC_SCHEMA_VERSION = 4
 METRIC_COORDINATE_SPACE = "comparable_normalized"
-POSTHOC_DIAGNOSTIC_KMEANS_CLUSTERS = 3
+POSTHOC_DIAGNOSTIC_KMEANS_CLUSTERS = 5
+POSTHOC_ENTITY_ENTROPY_POS = {"NOUN", "VERB", "ADJ"}
 PROXY_OBJECTIVE_NAMES = ["fidelity_sbert_proxy", "semantic_diversity_proxy"]
 MODULE_ROOT = Path(__file__).resolve().parents[1]
 BINARY_PROPOSAL_ID = "binary-mopso-cd"
@@ -1244,6 +1245,28 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
     return metrics
 
 
+def attach_terminal_series_diagnostics(metrics: dict[str, Any], series: list[dict[str, Any]]) -> dict[str, Any]:
+    for key, label_key in (("globalInertia", "globalInertiaLabel"), ("globalEntropy", "globalEntropyLabel")):
+        value = latest_finite_series_value(series, key)
+        metrics[key] = value
+        metrics[label_key] = f"{value:.6f}" if value is not None else "No aplica"
+    return metrics
+
+
+def latest_finite_series_value(series: list[dict[str, Any]], key: str) -> float | None:
+    ordered = sorted(
+        [point for point in series if isinstance(point, dict)],
+        key=lambda point: finite_float(point.get("generation"), -1.0),
+    )
+    for point in reversed(ordered):
+        if point.get(key) is None:
+            continue
+        value = finite_float(point.get(key), None)
+        if value is not None:
+            return value
+    return None
+
+
 def aggregate_proposal_repetitions(
     proposal: ProposalDefinition,
     proposal_dir: Path,
@@ -1304,6 +1327,7 @@ def aggregate_proposal_repetitions(
                 })
 
     series = aggregate_series(completed)
+    metrics = attach_terminal_series_diagnostics(aggregate_comparator_metrics(completed, proposal_dir), series)
 
     return {
         **identity,
@@ -1311,7 +1335,7 @@ def aggregate_proposal_repetitions(
         "outputDir": str(proposal_dir),
         "rows": rows,
         "selectedRows": selected_rows,
-        "metrics": aggregate_comparator_metrics(completed, proposal_dir),
+        "metrics": metrics,
         "series": series,
         "charts": build_charts_from_rows(rows, selected_rows, series),
         "cost": aggregate_comparator_costs(completed),
@@ -3509,6 +3533,7 @@ class ComparatorService:
             self._mark_selected_rows(rows, selected_rows)
             metrics = self._summarize_rows(base_proposal, rows, output_dir)
             series = self._build_metric_series(base_proposal, output_dir, rows, run["config"]["referenceText"])
+            attach_terminal_series_diagnostics(metrics, series)
             add_cost_timing(cost, "metricExtractionSeconds", time.perf_counter() - metrics_started)
 
             plot_started = time.perf_counter()
@@ -3760,6 +3785,8 @@ class ComparatorService:
         output_dir: Path,
         history: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
+        if proposal.kind != "binary-mopso-cd" and history:
+            return self._build_posthoc_diagnostic_series(proposal, history)
         native = self._read_native_diagnostic_metric_series(proposal, output_dir)
         if self._series_has_diagnostics(native):
             return native
@@ -3853,16 +3880,17 @@ class ComparatorService:
         if not texts:
             return None
         try:
-            import numpy as np
-
             embeddings, _ = shared_sbert_service().encode_texts(POSTHOC_EMBEDDING_MODEL, texts)
-            embedding_array = np.asarray(embeddings, dtype=float)
+            embedding_rows = [[float(value) for value in row] for row in embeddings]
             inertia = 0.0
-            if len(embedding_array) >= 2:
+            if len(embedding_rows) >= 2:
                 from sklearn.cluster import KMeans
 
-                clusters = min(POSTHOC_DIAGNOSTIC_KMEANS_CLUSTERS, len(embedding_array))
-                inertia = float(KMeans(n_clusters=clusters, n_init="auto", random_state=0).fit(embedding_array).inertia_)
+                clusters = min(POSTHOC_DIAGNOSTIC_KMEANS_CLUSTERS, len(embedding_rows))
+                inertia = float(
+                    KMeans(n_clusters=clusters, n_init=10, random_state=0).fit(embedding_rows).inertia_
+                    / len(embedding_rows)
+                )
             return {
                 "globalInertia": finite_float(inertia, 0.0),
                 "globalEntropy": self._posthoc_entity_entropy(texts),
@@ -3872,21 +3900,26 @@ class ComparatorService:
 
     def _posthoc_entity_entropy(self, generated_texts: list[str]) -> float:
         try:
-            import numpy as np
-
             if self._posthoc_spacy_model is None:
                 import spacy
 
                 self._posthoc_spacy_model = spacy.load("en_core_web_sm")
             nlp = self._posthoc_spacy_model
-            labels: list[str] = []
+            concepts: list[str] = []
+            total_tokens = 0
             for doc in nlp.pipe(generated_texts):
-                labels.extend(entity.label_ for entity in doc.ents)
-            if not labels:
+                total_tokens += len(doc)
+                for token in doc:
+                    if token.pos_ in POSTHOC_ENTITY_ENTROPY_POS:
+                        lemma = str(token.lemma_ or "").lower().strip()
+                        if lemma:
+                            concepts.append(lemma)
+            if not concepts or total_tokens <= 1:
                 return 0.0
-            counts = Counter(labels)
+            counts = Counter(concepts)
             total = sum(counts.values())
-            return finite_float(-sum((count / total) * np.log(count / total) for count in counts.values()))
+            raw_entropy = -sum((count / total) * math.log2(count / total) for count in counts.values())
+            return finite_float(raw_entropy / math.log2(total_tokens))
         except Exception:
             return 0.0
 
@@ -4001,8 +4034,8 @@ class ComparatorService:
                     "extent": None,
                     "unaryEntropy": None,
                     "contribution": None,
-                    "globalInertia": finite_float(item.get("Inercia_Global"), None),
-                    "globalEntropy": finite_float(item.get("Entropia_Global"), None),
+                    "globalInertia": None,
+                    "globalEntropy": None,
                     "source": "legacy_csv_without_front",
                 }
             )
