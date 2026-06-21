@@ -6,38 +6,21 @@ export function comparatorPointCoordinates(point) {
   return { x, y };
 }
 
-export const COMPARATOR_RAW_OBJECTIVE_BOUNDS = {
-  xMin: -1,
-  xMax: 1,
-  yMin: 0,
-  yMax: 2,
-};
-
-export function comparatorRawPointCoordinates(point) {
-  const vector = point?.nativeObjectiveVector;
-  if (!Array.isArray(vector) || vector.length < 2) return null;
-  const x = Number(vector[0]);
-  const y = Number(vector[1]);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  return { x, y };
+export function comparatorProposalEntityId(proposal) {
+  return proposal?.instanceId || proposal?.proposalId || "";
 }
 
-export function comparatorRawChartPoint(point) {
-  const coordinates = comparatorRawPointCoordinates(point);
-  if (!coordinates) return null;
-  return {
-    ...point,
-    x: coordinates.x,
-    y: coordinates.y,
-    value: [coordinates.x, coordinates.y],
-    coordinateSpace: "semantic_raw",
-  };
-}
-
-export function comparatorRawChartPoints(points) {
-  return points
-    .map(comparatorRawChartPoint)
-    .filter(Boolean);
+export function comparatorBenchmarkProposals(proposals = []) {
+  return [...proposals].sort((left, right) => {
+    const leftIsBinary = left?.proposalId === "binary-mopso-cd" ? 0 : 1;
+    const rightIsBinary = right?.proposalId === "binary-mopso-cd" ? 0 : 1;
+    if (leftIsBinary !== rightIsBinary) return leftIsBinary - rightIsBinary;
+    return String(left?.displayName || left?.proposalId || "").localeCompare(
+      String(right?.displayName || right?.proposalId || ""),
+      "es",
+      { sensitivity: "base" },
+    );
+  });
 }
 
 export function comparatorDominates(candidate, point) {
@@ -123,11 +106,17 @@ export function comparatorHypervolumeArea(points) {
 }
 
 export function comparatorMetricMetadata(metricKey) {
-  if (metricKey === "spread") {
-    return { description: "Menor spread suele indicar un frente mas uniforme.", higherIsBetter: false };
-  }
   if (metricKey === "nonDominatedRows") {
     return { description: "Mayor cantidad de soluciones Pareto disponibles es mejor.", higherIsBetter: true };
+  }
+  if (metricKey === "contribution") {
+    return { description: "Mayor Contribution indica mayor aporte al frente combinado P*.", higherIsBetter: true };
+  }
+  if (metricKey === "extent") {
+    return { description: "Mayor Extent indica mayor cobertura del frente comparable.", higherIsBetter: true };
+  }
+  if (metricKey === "unaryEntropy") {
+    return { description: "Mayor Unary Entropy indica mejor distribucion del frente comparable.", higherIsBetter: true };
   }
   if (metricKey === "globalInertia") {
     return { description: "Mayor inercia indica mayor dispersion global de embeddings.", higherIsBetter: true };
@@ -149,8 +138,8 @@ export function comparatorMetricExtremes(values, higherIsBetter) {
   };
 }
 
-export function comparatorBestCostProposalIds(proposals, metric, options = {}) {
-  if (!options.costsComparable) return new Set();
+export function comparatorBestMetricProposalIds(proposals, metric, options = {}) {
+  if (metric.kind === "cost" && !options.costsComparable) return new Set();
   const completed = proposals.filter((proposal) => proposal?.status === "completed");
   const entries = completed
     .map((proposal) => {
@@ -158,7 +147,7 @@ export function comparatorBestCostProposalIds(proposals, metric, options = {}) {
       const rawValue = metric.value(proposal, cost);
       const value = rawValue === null || rawValue === undefined || rawValue === "" ? NaN : Number(rawValue);
       const reported = metric.isReported ? metric.isReported(proposal, cost) : true;
-      return { id: proposal.instanceId || proposal.proposalId, value, reported };
+      return { id: comparatorProposalEntityId(proposal), value, reported };
     })
     .filter((entry) => entry.id && entry.reported && Number.isFinite(entry.value));
 
@@ -169,4 +158,15 @@ export function comparatorBestCostProposalIds(proposals, metric, options = {}) {
     ? Math.max(...entries.map((entry) => entry.value))
     : Math.min(...entries.map((entry) => entry.value));
   return new Set(entries.filter((entry) => entry.value === target).map((entry) => entry.id));
+}
+
+export function comparatorBestCostProposalIds(proposals, metric, options = {}) {
+  return comparatorBestMetricProposalIds(proposals, { ...metric, kind: "cost" }, options);
+}
+
+export function comparatorMetricCellClassName({ primaryColumn = false, best = false } = {}) {
+  return [
+    primaryColumn ? "is-primary-proposal" : "",
+    best ? "metric-best comparator-cost-best comparator-metric-best-cell" : "",
+  ].filter(Boolean).join(" ");
 }

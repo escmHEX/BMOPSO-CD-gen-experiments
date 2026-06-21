@@ -24,14 +24,15 @@ from typing import Any, Callable
 
 from baselines.comparator_metrics import aggregate_series
 from baselines.comparator_metrics import build_charts_from_rows
+from baselines.comparator_metrics import calculate_contribution
+from baselines.comparator_metrics import calculate_extent
 from baselines.comparator_metrics import calculate_hypervolume
-from baselines.comparator_metrics import calculate_spread
+from baselines.comparator_metrics import calculate_unary_entropy
 from baselines.comparator_metrics import canonical_generated_text
 from baselines.comparator_metrics import COMPARABLE_OBJECTIVE_NAMES
 from baselines.comparator_metrics import comparable_point
 from baselines.comparator_metrics import entropy_weights
 from baselines.comparator_metrics import mark_non_dominated
-from baselines.comparator_metrics import mark_posthoc_non_dominated
 from baselines.comparator_metrics import normalized_objective_vector
 from baselines.comparator_metrics import topsis_scores
 from sbert_service import shared_sbert_service
@@ -111,9 +112,10 @@ DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN = config_bool(COMPARATOR_DEFAULTS.get("up
 DEFAULT_EXECUTION_MODE = str(COMPARATOR_DEFAULTS.get("executionMode") or EXECUTION_MODE_FAIR_SEQUENTIAL)
 COMPARATOR_TIMEOUT_MINUTES_MIN = 2400
 COMPARATOR_TIMEOUT_MINUTES_MAX = 10080
-METRIC_SCHEMA_VERSION = 3
+METRIC_SCHEMA_VERSION = 4
 METRIC_COORDINATE_SPACE = "comparable_normalized"
 POSTHOC_DIAGNOSTIC_KMEANS_CLUSTERS = 3
+PROXY_OBJECTIVE_NAMES = ["fidelity_sbert_proxy", "semantic_diversity_proxy"]
 MODULE_ROOT = Path(__file__).resolve().parents[1]
 BINARY_PROPOSAL_ID = "binary-mopso-cd"
 BINARY_TASK_MODEL_PREFIX = "router.task_models."
@@ -622,6 +624,42 @@ def calculate_posthoc_semantic_scores(generated_texts: list[str], reference_text
     return scores
 
 
+class ComparableObjectiveProxy:
+    def attach(self, rows: list[dict[str, Any]], reference_text: str, display_name: str) -> None:
+        valid_rows = [row for row in rows if row.get("status") == "ok"]
+        scores = calculate_posthoc_semantic_scores(
+            [row.get("generatedText") or "" for row in valid_rows],
+            reference_text,
+        )
+        for row in rows:
+            row["postHocNonDominated"] = False
+            if row.get("status") != "ok":
+                row.pop("comparableObjectiveVector", None)
+                row.pop("comparableObjectiveLabel", None)
+                row.pop("comparableObjectiveNames", None)
+        for row, score in zip(valid_rows, scores):
+            fidelity_score = finite_float(score.get("semanticFidelity"))
+            diversity_score = finite_float(score.get("semanticDiversity"))
+            proxy_vector = [fidelity_score, diversity_score]
+            comparable_vector = normalized_objective_vector(proxy_vector) or []
+            row["proxyObjectiveVector"] = proxy_vector
+            row["proxyObjectiveLabel"] = objective_label(proxy_vector)
+            row["proxyObjectiveNames"] = list(PROXY_OBJECTIVE_NAMES)
+            row["diagnosticObjectiveVector"] = proxy_vector
+            row["diagnosticObjectiveLabel"] = objective_label(proxy_vector)
+            row["diagnosticObjectiveNames"] = list(PROXY_OBJECTIVE_NAMES)
+            row["comparableObjectiveVector"] = comparable_vector
+            row["comparableObjectiveLabel"] = objective_label(comparable_vector)
+            row["comparableObjectiveNames"] = list(COMPARABLE_OBJECTIVE_NAMES)
+            row["postHocDiagnostics"] = {
+                "semanticFidelity": fidelity_score,
+                "semanticDiversity": diversity_score,
+                "semanticDiversityModel": POSTHOC_EMBEDDING_MODEL,
+                "proxyObjectiveNames": list(PROXY_OBJECTIVE_NAMES),
+                "note": f"Common comparable proxy for {display_name}; native objectives are preserved as traceability only.",
+            }
+
+
 def latest_child_directory(path: Path) -> Path | None:
     if not path.exists():
         return None
@@ -1112,8 +1150,12 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
             "nonDominatedRows": 0,
             "hypervolume": None,
             "hypervolumeLabel": "No aplica",
-            "spread": None,
-            "spreadLabel": "No aplica",
+            "extent": None,
+            "extentLabel": "No aplica",
+            "unaryEntropy": None,
+            "unaryEntropyLabel": "No aplica",
+            "contribution": None,
+            "contributionLabel": "No aplica",
             "outputDir": str(proposal_dir),
             "repetitionAggregation": "Promedio sobre repeticiones K con semillas distintas.",
         }
@@ -1127,7 +1169,9 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
         for metrics in metrics_list
     ])
     hypervolume = average_present([metrics.get("hypervolume") for metrics in metrics_list])
-    spread = average_present([metrics.get("spread") for metrics in metrics_list])
+    extent = average_present([metrics.get("extent") for metrics in metrics_list])
+    unary_entropy = average_present([metrics.get("unaryEntropy") for metrics in metrics_list])
+    contribution = average_present([metrics.get("contribution") for metrics in metrics_list])
     archive_update_average = average_present([
         metrics.get("externalArchiveUpdateCount")
         for metrics in metrics_list
@@ -1161,8 +1205,12 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
         "nonDominatedRows": average_present([metrics.get("nonDominatedRows") for metrics in metrics_list]),
         "hypervolume": hypervolume,
         "hypervolumeLabel": f"{hypervolume:.6f}" if hypervolume is not None else "No aplica",
-        "spread": spread,
-        "spreadLabel": f"{spread:.6f}" if spread is not None else "No aplica",
+        "extent": extent,
+        "extentLabel": f"{extent:.6f}" if extent is not None else "No aplica",
+        "unaryEntropy": unary_entropy,
+        "unaryEntropyLabel": f"{unary_entropy:.6f}" if unary_entropy is not None else "No aplica",
+        "contribution": contribution,
+        "contributionLabel": f"{contribution:.6f}" if contribution is not None else "No aplica",
         "outputDir": str(proposal_dir),
         "moConvention": first_metrics.get("moConvention"),
         "repetitionAggregation": "Promedio sobre repeticiones K con semillas distintas.",
@@ -1191,6 +1239,8 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
                 "nonDominatedRows": posthoc_non_dominated,
             }
         )
+    if first_metrics.get("proxyDiagnostic"):
+        metrics["proxyDiagnostic"] = True
     return metrics
 
 
@@ -1574,6 +1624,7 @@ class ComparatorService:
         self._runs: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
         self._posthoc_spacy_model: Any | None = None
+        self._comparable_proxy = ComparableObjectiveProxy()
 
     def list_proposals(self) -> list[dict[str, Any]]:
         proposals = []
@@ -1857,6 +1908,7 @@ class ComparatorService:
             },
             "updatedAt": utc_now(),
         }
+        self._apply_contribution_metrics_unlocked(updated)
         logs = list(updated.get("logs") or [])
         log_entry = {
             "at": utc_now(),
@@ -2843,6 +2895,7 @@ class ComparatorService:
 
             with self._lock:
                 self._sort_proposals_unlocked(run)
+                self._apply_contribution_metrics_unlocked(run)
                 failed = [item for item in run["proposals"] if item["status"] == STATUS_FAILED]
                 if run["cancelRequested"]:
                     run["status"] = STATUS_CANCELLED
@@ -2970,6 +3023,82 @@ class ComparatorService:
                 proposal_order.get(item.get("proposalId"), len(proposal_order)),
             )
         )
+
+    def _apply_contribution_metrics_unlocked(self, run: dict[str, Any]) -> None:
+        completed = [
+            proposal
+            for proposal in run.get("proposals") or []
+            if isinstance(proposal, dict) and proposal.get("status") == STATUS_COMPLETED
+        ]
+        points_by_proposal = {
+            self._proposal_entity_id(proposal): self._proposal_non_dominated_points(proposal)
+            for proposal in completed
+        }
+        contributions = calculate_contribution(points_by_proposal)
+        for proposal in completed:
+            entity_id = self._proposal_entity_id(proposal)
+            contribution = contributions.get(entity_id, 0.0)
+            metrics = proposal.setdefault("metrics", {})
+            metrics["contribution"] = contribution
+            metrics["contributionLabel"] = f"{contribution:.6f}"
+        self._apply_series_contribution_metrics(completed)
+
+    def _proposal_entity_id(self, proposal: dict[str, Any]) -> str:
+        return str(proposal.get("instanceId") or proposal.get("proposalId") or "")
+
+    def _proposal_non_dominated_points(self, proposal: dict[str, Any]) -> list[tuple[float, float]]:
+        points: list[tuple[float, float]] = []
+        for point in ((proposal.get("charts") or {}).get("nonDominated") or []):
+            if not isinstance(point, dict):
+                continue
+            x_value = finite_float(point.get("x"), None)
+            y_value = finite_float(point.get("y"), None)
+            if x_value is None or y_value is None:
+                continue
+            points.append((x_value, y_value))
+        return points
+
+    def _apply_series_contribution_metrics(self, proposals: list[dict[str, Any]]) -> None:
+        generations = sorted(
+            {
+                int(finite_float(point.get("generation"), -1))
+                for proposal in proposals
+                for point in proposal.get("series") or []
+                if isinstance(point, dict) and finite_float(point.get("generation"), -1) >= 0
+            }
+        )
+        for generation in generations:
+            points_by_proposal: dict[str, list[tuple[float, float]]] = {}
+            series_by_proposal: dict[str, dict[str, Any]] = {}
+            for proposal in proposals:
+                entity_id = self._proposal_entity_id(proposal)
+                point = next(
+                    (
+                        item
+                        for item in proposal.get("series") or []
+                        if isinstance(item, dict) and int(finite_float(item.get("generation"), -1)) == generation
+                    ),
+                    None,
+                )
+                if point is None:
+                    continue
+                front_points = []
+                for raw_point in point.get("frontPoints") or []:
+                    if not isinstance(raw_point, list) or len(raw_point) < 2:
+                        continue
+                    x_value = finite_float(raw_point[0], None)
+                    y_value = finite_float(raw_point[1], None)
+                    if x_value is None or y_value is None:
+                        continue
+                    front_points.append((x_value, y_value))
+                if front_points:
+                    points_by_proposal[entity_id] = front_points
+                    series_by_proposal[entity_id] = point
+            if not points_by_proposal:
+                continue
+            contributions = calculate_contribution(points_by_proposal)
+            for entity_id, point in series_by_proposal.items():
+                point["contribution"] = contributions.get(entity_id, 0.0)
 
     def _mark_queued_as_cancelled_unlocked(self, run: dict[str, Any]) -> None:
         for state in (run.get("proposalStates") or {}).values():
@@ -3606,18 +3735,21 @@ class ComparatorService:
         diagnostic_series = self._read_diagnostic_metric_series(proposal, output_dir, history)
         base_series: list[dict[str, Any]] = []
         if proposal.kind == "binary-mopso-cd":
-            archive_series = self._read_binary_archive_metric_series(proposal, output_dir)
+            archive_series = self._read_binary_archive_metric_series(proposal, output_dir, reference_text)
             if archive_series:
+                archive_series = self._ensure_final_front_series_point(proposal, archive_series, final_rows)
                 return self._merge_series_diagnostics(archive_series, diagnostic_series)
             series = self._read_binary_metric_series(output_dir)
             if series:
+                series = self._ensure_final_front_series_point(proposal, series, final_rows)
                 return self._merge_series_diagnostics(series, diagnostic_series)
         csv_series = self._read_legacy_metric_series(proposal, output_dir)
         if history:
             history_series = [self._history_entry_metrics(proposal, entry, reference_text) for entry in history]
+            history_series = self._ensure_final_front_series_point(proposal, history_series, final_rows)
             return self._merge_series_diagnostics(history_series, diagnostic_series or csv_series)
         if csv_series:
-            base_series = csv_series
+            base_series = self._ensure_final_front_series_point(proposal, csv_series, final_rows)
         else:
             base_series = [self._final_series_point(proposal, final_rows)]
         return self._merge_series_diagnostics(base_series, diagnostic_series)
@@ -3662,7 +3794,9 @@ class ComparatorService:
                     "generation": int(finite_float(generation)),
                     "hypervolume": None,
                     "nonDominatedRows": None,
-                    "spread": None,
+                    "extent": None,
+                    "unaryEntropy": None,
+                    "contribution": None,
                     "globalInertia": finite_float(item.get("kmeans_inertia"), None),
                     "globalEntropy": finite_float(item.get("entity_entropy"), None),
                     "source": "binary_monitor",
@@ -3691,7 +3825,9 @@ class ComparatorService:
                     "generation": int(finite_float(entry.get("generation"))),
                     "hypervolume": None,
                     "nonDominatedRows": None,
-                    "spread": None,
+                    "extent": None,
+                    "unaryEntropy": None,
+                    "contribution": None,
                     **diagnostic,
                     "source": "posthoc_diagnostic_history",
                 }
@@ -3758,6 +3894,7 @@ class ComparatorService:
         self,
         proposal: ProposalDefinition,
         output_dir: Path,
+        reference_text: str,
     ) -> list[dict[str, Any]]:
         path = output_dir / "archive_history.jsonl"
         if not path.exists():
@@ -3775,14 +3912,17 @@ class ComparatorService:
             archive = payload.get("archive") if isinstance(payload.get("archive"), list) else []
             if not archive:
                 continue
-            rows = self._normalize_rows(proposal, archive, top_k=len(archive))
+            rows = self._normalize_rows(proposal, archive, top_k=len(archive), reference_text=reference_text)
             metrics = self._summarize_rows(proposal, rows, Path("."), include_artifact_metrics=False)
             series.append(
                 {
                     "generation": int(finite_float(payload.get("generation"))),
                     "hypervolume": metrics.get("hypervolume"),
                     "nonDominatedRows": metrics.get("nonDominatedRows"),
-                    "spread": metrics.get("spread"),
+                    "extent": metrics.get("extent"),
+                    "unaryEntropy": metrics.get("unaryEntropy"),
+                    "contribution": metrics.get("contribution"),
+                    "frontPoints": self._front_points_from_rows(rows),
                     "source": "archive_history",
                 }
             )
@@ -3797,7 +3937,9 @@ class ComparatorService:
                     "generation": int(finite_float(item.get("generation"))),
                     "hypervolume": finite_float(item.get("hypervolume"), None),
                     "nonDominatedRows": finite_float(item.get("archive_size"), None),
-                    "spread": finite_float(item.get("spread"), None),
+                    "extent": None,
+                    "unaryEntropy": None,
+                    "contribution": None,
                     "source": "native",
                 }
             )
@@ -3856,7 +3998,9 @@ class ComparatorService:
                     "generation": int(finite_float(generation)),
                     "hypervolume": None,
                     "nonDominatedRows": None,
-                    "spread": None,
+                    "extent": None,
+                    "unaryEntropy": None,
+                    "contribution": None,
                     "globalInertia": finite_float(item.get("Inercia_Global"), None),
                     "globalEntropy": finite_float(item.get("Entropia_Global"), None),
                     "source": "legacy_csv_without_front",
@@ -3885,6 +4029,43 @@ class ComparatorService:
                     merged_point[key] = diagnostic.get(key)
             merged.append(merged_point)
         return merged
+
+    def _ensure_final_front_series_point(
+        self,
+        proposal: ProposalDefinition,
+        base_series: list[dict[str, Any]],
+        final_rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if self._series_has_front_metrics(base_series) or not final_rows:
+            return base_series
+        final_point = self._final_series_point(proposal, final_rows)
+        if not self._series_has_front_metrics([final_point]):
+            return base_series
+        merged: list[dict[str, Any]] = []
+        final_inserted = False
+        for point in base_series:
+            generation = int(finite_float(point.get("generation"), -1))
+            if generation == 0:
+                combined = dict(final_point)
+                combined.update({key: value for key, value in point.items() if value is not None})
+                combined["frontPoints"] = final_point.get("frontPoints") or point.get("frontPoints") or []
+                combined["source"] = final_point.get("source")
+                merged.append(combined)
+                final_inserted = True
+            else:
+                merged.append(point)
+        if not final_inserted:
+            merged.append(final_point)
+        return sorted(merged, key=lambda item: int(finite_float(item.get("generation"), -1)))
+
+    def _series_has_front_metrics(self, series: list[dict[str, Any]]) -> bool:
+        return any(
+            bool(point.get("frontPoints"))
+            or point.get("extent") is not None
+            or point.get("unaryEntropy") is not None
+            for point in series
+            if isinstance(point, dict)
+        )
 
     def _read_csv_dicts(self, path: Path) -> list[dict[str, str]]:
         if not path.exists():
@@ -3916,7 +4097,10 @@ class ComparatorService:
             "generation": int(finite_float(entry.get("generation"))),
             "hypervolume": metrics.get("hypervolume"),
             "nonDominatedRows": metrics.get("postHocNonDominatedRows") if metrics.get("postHocDiagnostic") else metrics.get("nonDominatedRows"),
-            "spread": metrics.get("spread"),
+            "extent": metrics.get("extent"),
+            "unaryEntropy": metrics.get("unaryEntropy"),
+            "contribution": metrics.get("contribution"),
+            "frontPoints": self._front_points_from_rows(rows),
             "source": "population_history",
         }
 
@@ -3926,9 +4110,21 @@ class ComparatorService:
             "generation": 0,
             "hypervolume": metrics.get("hypervolume"),
             "nonDominatedRows": metrics.get("postHocNonDominatedRows") if metrics.get("postHocDiagnostic") else metrics.get("nonDominatedRows"),
-            "spread": metrics.get("spread"),
+            "extent": metrics.get("extent"),
+            "unaryEntropy": metrics.get("unaryEntropy"),
+            "contribution": metrics.get("contribution"),
+            "frontPoints": self._front_points_from_rows(rows),
             "source": "final_only",
         }
+
+    def _front_points_from_rows(self, rows: list[dict[str, Any]]) -> list[list[float]]:
+        return [
+            [point[0], point[1]]
+            for row in rows
+            if row.get("nonDominated") or row.get("postHocNonDominated")
+            for point in [comparable_point(row)]
+            if point is not None
+        ]
 
     def _build_chart_payload(
         self,
@@ -4474,10 +4670,11 @@ class ComparatorService:
             for index, row in enumerate(raw_rows, start=1)
             if isinstance(row, dict)
         ]
-        if proposal.single_objective:
-            self._attach_evolmd_posthoc_diagnostics(rows, reference_text or "", proposal.display_name)
+        self._attach_comparable_proxy(rows, reference_text or "", proposal.display_name)
 
         mark_non_dominated(rows)
+        for row in rows:
+            row["postHocNonDominated"] = bool(row.get("nonDominated"))
         if proposal.single_objective:
             rows.sort(key=lambda row: row["objectiveVector"][0], reverse=True)
         else:
@@ -4506,32 +4703,14 @@ class ComparatorService:
             return self._normalize_evolmd_row(proposal, row, index)
         return self._normalize_evolmd_mo_row(proposal, row, index)
 
+    def _attach_comparable_proxy(self, rows: list[dict[str, Any]], reference_text: str, display_name: str) -> None:
+        self._comparable_proxy.attach(rows, reference_text, display_name)
+
     def _attach_evolmd_posthoc_diagnostics(self, rows: list[dict[str, Any]], reference_text: str, display_name: str = "EVOLMD") -> None:
-        valid_rows = [row for row in rows if row.get("status") == "ok"]
-        scores = calculate_posthoc_semantic_scores(
-            [row.get("generatedText") or "" for row in valid_rows],
-            reference_text,
-        )
+        self._attach_comparable_proxy(rows, reference_text, display_name)
+        mark_non_dominated(rows)
         for row in rows:
-            row["postHocNonDominated"] = False
-        for row, score in zip(valid_rows, scores):
-            fidelity_score = finite_float(score.get("semanticFidelity"))
-            diversity_score = finite_float(score.get("semanticDiversity"))
-            diagnostic_vector = [fidelity_score, diversity_score]
-            row["diagnosticObjectiveVector"] = diagnostic_vector
-            row["diagnosticObjectiveLabel"] = objective_label(diagnostic_vector)
-            row["diagnosticObjectiveNames"] = ["fidelity_sbert_posthoc", "semantic_diversity_posthoc"]
-            comparable_vector = normalized_objective_vector(diagnostic_vector)
-            row["comparableObjectiveVector"] = comparable_vector or []
-            row["comparableObjectiveLabel"] = objective_label(comparable_vector or [])
-            row["comparableObjectiveNames"] = list(COMPARABLE_OBJECTIVE_NAMES)
-            row["postHocDiagnostics"] = {
-                "semanticFidelity": fidelity_score,
-                "semanticDiversity": diversity_score,
-                "semanticDiversityModel": POSTHOC_EMBEDDING_MODEL,
-                "note": f"Diagnostic only; {display_name} selection remains single-objective with native fitness.",
-            }
-        mark_posthoc_non_dominated(valid_rows)
+            row["postHocNonDominated"] = bool(row.get("nonDominated"))
 
     def _normalize_evolmd_row(
         self,
@@ -4657,71 +4836,59 @@ class ComparatorService:
             "bestComparableObjectiveLabel": objective_label(best_comparable_vector),
             "metricSchemaVersion": METRIC_SCHEMA_VERSION,
             "metricCoordinateSpace": METRIC_COORDINATE_SPACE,
-            "nonDominatedRows": sum(1 for row in rows if row.get("nonDominated")),
+            "nonDominatedRows": sum(1 for row in rows if row.get("nonDominated") or row.get("postHocNonDominated")),
             "hypervolume": None,
             "hypervolumeLabel": "No aplica",
-            "spread": None,
-            "spreadLabel": "No aplica",
+            "extent": None,
+            "extentLabel": "No aplica",
+            "unaryEntropy": None,
+            "unaryEntropyLabel": "No aplica",
+            "contribution": None,
+            "contributionLabel": "No aplica",
             "outputDir": str(output_dir),
         }
 
-        if proposal.single_objective:
-            diagnostic_rows = [row for row in rows if row.get("diagnosticObjectiveVector")]
-            diagnostic_points = [
-                point
-                for row in diagnostic_rows
-                if row.get("postHocNonDominated")
-                for point in [comparable_point(row)]
-                if point is not None
-            ]
-            hypervolume = calculate_hypervolume(diagnostic_points)
-            spread = calculate_spread(diagnostic_points)
-            best_diagnostic = (
-                max(
-                    diagnostic_rows,
-                    key=lambda row: sum(row.get("diagnosticObjectiveVector") or []),
-                ).get("diagnosticObjectiveVector")
-                if diagnostic_rows
-                else []
-            )
-            metrics["postHocDiagnostic"] = True
-            metrics["diagnosticObjectiveNames"] = ["fidelity_sbert_posthoc", "semantic_diversity_posthoc"]
-            metrics["bestDiagnosticObjectiveVector"] = best_diagnostic
-            metrics["bestDiagnosticObjectiveLabel"] = objective_label(best_diagnostic)
-            best_comparable = normalized_objective_vector(best_diagnostic)
-            metrics["bestComparableObjectiveVector"] = best_comparable or []
-            metrics["bestComparableObjectiveLabel"] = objective_label(best_comparable or [])
-            post_hoc_non_dominated_rows = sum(1 for row in rows if row.get("postHocNonDominated"))
-            metrics["postHocNonDominatedRows"] = post_hoc_non_dominated_rows
-            metrics["nonDominatedRows"] = post_hoc_non_dominated_rows
-            metrics["hypervolume"] = hypervolume
-            metrics["hypervolumeLabel"] = f"{hypervolume:.6f}" if hypervolume is not None else "No aplica"
-            metrics["spread"] = spread
-            metrics["spreadLabel"] = f"{spread:.6f}" if spread is not None else "No aplica"
-            metrics["moConvention"] = (
-                f"Comparative diagnostics only; {proposal.display_name} optimized native fitness as a single objective. "
-                "Comparable vector uses SBERT fidelity and semantic diversity post-hoc, normalized as "
-                "[(f1 + 1) / 2, f2 / 2]. HV reference point [0, 0]; spread uses the comparable diagnostic front."
-            )
-        else:
-            points = [
-                point
-                for row in rows
-                if row.get("nonDominated")
-                for point in [comparable_point(row)]
-                if point is not None
-            ]
-            hypervolume = calculate_hypervolume(points)
-            spread = calculate_spread(points)
-            metrics["hypervolume"] = hypervolume
-            metrics["hypervolumeLabel"] = f"{hypervolume:.6f}" if hypervolume is not None else "No aplica"
-            metrics["spread"] = spread
-            metrics["spreadLabel"] = f"{spread:.6f}" if spread is not None else "No aplica"
-            metrics["moConvention"] = (
-                "Maximization. Native objectives are preserved separately; comparative HV/spread use "
-                "the normalized vector [(f1 + 1) / 2, f2 / 2] for every proposal, with reference point [0, 0]. "
-                "Spread is normalized consecutive-distance deviation, lower is better."
-            )
+        diagnostic_rows = [row for row in completed if row.get("diagnosticObjectiveVector") or row.get("proxyObjectiveVector")]
+        front_points = [
+            point
+            for row in rows
+            if row.get("nonDominated") or row.get("postHocNonDominated")
+            for point in [comparable_point(row)]
+            if point is not None
+        ]
+        hypervolume = calculate_hypervolume(front_points)
+        extent = calculate_extent(front_points) if front_points else None
+        unary_entropy = calculate_unary_entropy(front_points) if front_points else None
+        best_diagnostic_row = max(
+            diagnostic_rows,
+            key=lambda row: sum(row.get("comparableObjectiveVector") or []),
+            default=None,
+        )
+        best_diagnostic = (
+            (best_diagnostic_row.get("proxyObjectiveVector") or best_diagnostic_row.get("diagnosticObjectiveVector") or [])
+            if best_diagnostic_row
+            else []
+        )
+        metrics["proxyDiagnostic"] = True
+        metrics["postHocDiagnostic"] = proposal.single_objective
+        metrics["diagnosticObjectiveNames"] = list(PROXY_OBJECTIVE_NAMES)
+        metrics["bestDiagnosticObjectiveVector"] = best_diagnostic
+        metrics["bestDiagnosticObjectiveLabel"] = objective_label(best_diagnostic)
+        if best_comparable_vector:
+            metrics["bestComparableObjectiveVector"] = best_comparable_vector
+            metrics["bestComparableObjectiveLabel"] = objective_label(best_comparable_vector)
+        metrics["postHocNonDominatedRows"] = metrics["nonDominatedRows"]
+        metrics["hypervolume"] = hypervolume
+        metrics["hypervolumeLabel"] = f"{hypervolume:.6f}" if hypervolume is not None else "No aplica"
+        metrics["extent"] = extent
+        metrics["extentLabel"] = f"{extent:.6f}" if extent is not None else "No aplica"
+        metrics["unaryEntropy"] = unary_entropy
+        metrics["unaryEntropyLabel"] = f"{unary_entropy:.6f}" if unary_entropy is not None else "No aplica"
+        metrics["moConvention"] = (
+            "Maximization. Comparative metrics use the common SBERT proxy vector "
+            "[(semantic_fidelity + 1) / 2, semantic_diversity / 2] for every proposal. "
+            "Native objective vectors are preserved only for traceability. HV uses reference point [0, 0]."
+        )
 
         if include_artifact_metrics and proposal.kind == "binary-mopso-cd":
             metrics.update(self._read_binary_archive_summary_metrics(output_dir))
@@ -4756,8 +4923,12 @@ class ComparatorService:
                 "nonDominatedRows": 0,
                 "hypervolume": None,
                 "hypervolumeLabel": "No aplica",
-                "spread": None,
-                "spreadLabel": "No aplica",
+                "extent": None,
+                "extentLabel": "No aplica",
+                "unaryEntropy": None,
+                "unaryEntropyLabel": "No aplica",
+                "contribution": None,
+                "contributionLabel": "No aplica",
                 "outputDir": str(proposal_dir),
             },
             "cost": cost or empty_cost_metrics(),

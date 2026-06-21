@@ -14,6 +14,9 @@ from baselines.comparator import ComparatorService, PROPOSALS, aggregate_proposa
 from baselines.comparator import aggregate_series
 from baselines.comparator import mark_non_dominated
 from baselines.comparator_metrics import build_charts_from_rows
+from baselines.comparator_metrics import calculate_contribution
+from baselines.comparator_metrics import calculate_extent
+from baselines.comparator_metrics import calculate_unary_entropy
 from initial_population.comparison import InitialPopulationComparisonService
 from turbulence_comparison.service import aggregate_turbulence_repetitions
 
@@ -533,7 +536,7 @@ class RepetitionAggregationTests(unittest.TestCase):
         service._apply_log_progress_unlocked(
             run,
             proposal.proposal_id,
-            "2026-06-03 00:05:20 | INFO | run 1/1 | generation 29/30 | modified=5/20 | archive=10 | hv=0.301896 | spread=0.258775 | elapsed=00:08:44",
+            "2026-06-03 00:05:20 | INFO | run 1/1 | generation 29/30 | modified=5/20 | archive=10 | hv=0.301896 | elapsed=00:08:44",
         )
         state = run["proposalStates"][proposal.proposal_id]
         self.assertEqual(state["generationIndex"], 29)
@@ -578,7 +581,7 @@ class RepetitionAggregationTests(unittest.TestCase):
         service._apply_log_progress_unlocked(
             run,
             proposal.proposal_id,
-            "2026-06-03 00:05:20 | INFO | run 1/1 | generation 1/3 | modified=2/20 | archive=4 | hv=0.1 | spread=0.2 | elapsed=00:00:16",
+            "2026-06-03 00:05:20 | INFO | run 1/1 | generation 1/3 | modified=2/20 | archive=4 | hv=0.1 | elapsed=00:00:16",
         )
 
         timing = run["proposalStates"][proposal.proposal_id]["iterationTiming"]
@@ -619,7 +622,7 @@ class RepetitionAggregationTests(unittest.TestCase):
             "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal)},
         }
         start_log = "2026-06-03 00:05:14 | INFO | run 1/1 | generation 1/3 started | elapsed=00:00:10"
-        end_log = "2026-06-03 00:05:20 | INFO | run 1/1 | generation 1/3 | modified=2/20 | archive=4 | hv=0.1 | spread=0.2 | elapsed=00:00:16"
+        end_log = "2026-06-03 00:05:20 | INFO | run 1/1 | generation 1/3 | modified=2/20 | archive=4 | hv=0.1 | elapsed=00:00:16"
         service._apply_log_progress_unlocked(run, proposal.proposal_id, start_log)
         service._apply_log_progress_unlocked(run, proposal.proposal_id, end_log)
         service._apply_log_progress_unlocked(run, proposal.proposal_id, end_log)
@@ -1282,7 +1285,9 @@ class RepetitionAggregationTests(unittest.TestCase):
                     "bestObjectiveVector": [0.6],
                     "nonDominatedRows": 0,
                     "hypervolume": 0.2,
-                    "spread": 0.4,
+                    "extent": 0.4,
+                    "unaryEntropy": 0.6,
+                    "contribution": 0.25,
                     "postHocDiagnostic": True,
                     "bestDiagnosticObjectiveVector": [0.6, 0.5],
                     "postHocNonDominatedRows": 2,
@@ -1305,7 +1310,9 @@ class RepetitionAggregationTests(unittest.TestCase):
                     "bestObjectiveVector": [0.8],
                     "nonDominatedRows": 0,
                     "hypervolume": 0.4,
-                    "spread": 0.2,
+                    "extent": 0.2,
+                    "unaryEntropy": 1.0,
+                    "contribution": 0.75,
                     "postHocDiagnostic": True,
                     "bestDiagnosticObjectiveVector": [0.8, 0.7],
                     "postHocNonDominatedRows": 4,
@@ -1343,33 +1350,66 @@ class RepetitionAggregationTests(unittest.TestCase):
 
     def test_aggregate_series_averages_by_generation(self):
         series = aggregate_series([
-            {"series": [{"generation": 1, "hypervolume": 0.2, "nonDominatedRows": 2, "spread": 0.5}]},
-            {"series": [{"generation": 1, "hypervolume": 0.4, "nonDominatedRows": 4, "spread": 0.3}]},
+            {
+                "series": [
+                    {
+                        "generation": 1,
+                        "hypervolume": 0.2,
+                        "nonDominatedRows": 2,
+                        "extent": 0.5,
+                        "unaryEntropy": 0.8,
+                        "contribution": 0.25,
+                        "frontPoints": [[0.5, 0.7]],
+                    }
+                ]
+            },
+            {
+                "series": [
+                    {
+                        "generation": 1,
+                        "hypervolume": 0.4,
+                        "nonDominatedRows": 4,
+                        "extent": 0.3,
+                        "unaryEntropy": 0.6,
+                        "contribution": 0.75,
+                        "frontPoints": [[0.7, 0.5]],
+                    }
+                ]
+            },
         ])
         self.assertEqual(len(series), 1)
         self.assertAlmostEqual(series[0]["hypervolume"], 0.3)
         self.assertAlmostEqual(series[0]["nonDominatedRows"], 3.0)
-        self.assertAlmostEqual(series[0]["spread"], 0.4)
+        self.assertAlmostEqual(series[0]["extent"], 0.4)
+        self.assertAlmostEqual(series[0]["unaryEntropy"], 0.7)
+        self.assertAlmostEqual(series[0]["contribution"], 0.5)
+        self.assertEqual(series[0]["frontPoints"], [[0.5, 0.7], [0.7, 0.5]])
 
     def test_binary_rows_normalize_from_native_outputs(self):
         service = ComparatorService(Path("."))
         proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
-        rows = service._normalize_rows(
-            proposal,
-            [
-                {
-                    "solution_id": "s1",
-                    "generated_text": "Generated",
-                    "prompt": "Prompt",
-                    "objectives": {"f1": 0.7, "f2": 0.4},
-                    "components": {"role": "resident"},
-                }
-            ],
-            top_k=5,
-        )
+        with patch.object(
+            comparator_module,
+            "calculate_posthoc_semantic_scores",
+            return_value=[{"semanticFidelity": 0.2, "semanticDiversity": 0.6}],
+        ):
+            rows = service._normalize_rows(
+                proposal,
+                [
+                    {
+                        "solution_id": "s1",
+                        "generated_text": "Generated",
+                        "prompt": "Prompt",
+                        "objectives": {"f1": 0.7, "f2": 0.4},
+                        "components": {"role": "resident"},
+                    }
+                ],
+                top_k=5,
+                reference_text="reference",
+            )
         self.assertEqual(rows[0]["proposalId"], "binary-mopso-cd")
         self.assertEqual(rows[0]["objectiveVector"], [0.7, 0.4])
-        self.assertEqual(rows[0]["comparableObjectiveVector"], [0.85, 0.2])
+        self.assertEqual(rows[0]["comparableObjectiveVector"], [0.6, 0.3])
         self.assertTrue(rows[0]["nonDominated"])
 
     def test_binary_summary_reads_external_archive_counts_from_metrics_csv(self):
@@ -1388,11 +1428,17 @@ class RepetitionAggregationTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            rows = service._normalize_rows(
-                proposal,
-                [{"generated_text": "Generated", "objectives": {"f1": 0.0, "f2": 1.0}}],
-                top_k=5,
-            )
+            with patch.object(
+                comparator_module,
+                "calculate_posthoc_semantic_scores",
+                return_value=[{"semanticFidelity": 0.0, "semanticDiversity": 1.0}],
+            ):
+                rows = service._normalize_rows(
+                    proposal,
+                    [{"generated_text": "Generated", "objectives": {"f1": 0.0, "f2": 1.0}}],
+                    top_k=5,
+                    reference_text="reference",
+                )
             metrics = service._summarize_rows(proposal, rows, output_dir)
 
         self.assertEqual(metrics["externalArchiveUpdateCount"], 5)
@@ -1418,11 +1464,17 @@ class RepetitionAggregationTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            rows = service._normalize_rows(
-                proposal,
-                [{"generated_text": "Generated", "objectives": {"f1": 0.0, "f2": 1.0}}],
-                top_k=5,
-            )
+            with patch.object(
+                comparator_module,
+                "calculate_posthoc_semantic_scores",
+                return_value=[{"semanticFidelity": 0.0, "semanticDiversity": 1.0}],
+            ):
+                rows = service._normalize_rows(
+                    proposal,
+                    [{"generated_text": "Generated", "objectives": {"f1": 0.0, "f2": 1.0}}],
+                    top_k=5,
+                    reference_text="reference",
+                )
             metrics = service._summarize_rows(proposal, rows, output_dir)
 
         self.assertEqual(metrics["externalArchiveUpdateCount"], 4)
@@ -1490,7 +1542,7 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(metrics["postHocNonDominatedRows"], 2)
         self.assertEqual(metrics["nonDominatedRows"], 2)
 
-    def test_charts_use_posthoc_non_dominated_rows_for_evolmd(self):
+    def test_charts_use_common_non_dominated_rows_for_evolmd(self):
         rows = [
             {
                 "proposalId": "evolmd",
@@ -1501,7 +1553,7 @@ class RepetitionAggregationTests(unittest.TestCase):
                 "comparableObjectiveVector": [0.8, 0.2],
                 "generatedText": "single objective front",
                 "postHocNonDominated": True,
-                "nonDominated": False,
+                "nonDominated": True,
             },
             {
                 "proposalId": "evolmd",
@@ -1512,7 +1564,7 @@ class RepetitionAggregationTests(unittest.TestCase):
                 "comparableObjectiveVector": [0.75, 0.1],
                 "generatedText": "dominated diagnostic row",
                 "postHocNonDominated": False,
-                "nonDominated": True,
+                "nonDominated": False,
             },
         ]
         charts = build_charts_from_rows(rows, [], [])
@@ -1551,56 +1603,156 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(charts["nonDominated"][0]["x"], 0.85)
         self.assertEqual(charts["nonDominated"][0]["y"], 0.25)
 
-    def test_binary_summary_uses_native_diversity_scale_for_hypervolume(self):
+    def test_binary_summary_uses_common_proxy_for_hypervolume(self):
         service = ComparatorService(Path("."))
         proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
-        rows = service._normalize_rows(
-            proposal,
-            [
-                {
-                    "solution_id": "s1",
-                    "generated_text": "Generated",
-                    "objectives": {"f1": 0.0, "f2": 1.5},
-                }
-            ],
-            top_k=5,
-        )
+        with patch.object(
+            comparator_module,
+            "calculate_posthoc_semantic_scores",
+            return_value=[{"semanticFidelity": 0.0, "semanticDiversity": 1.5}],
+        ):
+            rows = service._normalize_rows(
+                proposal,
+                [
+                    {
+                        "solution_id": "s1",
+                        "generated_text": "Generated",
+                        "objectives": {"f1": 0.9, "f2": 0.1},
+                    }
+                ],
+                top_k=5,
+                reference_text="reference",
+            )
         metrics = service._summarize_rows(proposal, rows, Path("out"))
         self.assertAlmostEqual(metrics["hypervolume"], 0.375)
 
-    def test_evolmd_mo_and_binary_share_comparable_hv_normalization(self):
+    def test_evolmd_mo_and_binary_share_common_proxy_hv_normalization(self):
         service = ComparatorService(Path("."))
         evolmd_mo = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
         binary = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
 
-        mo_rows = service._normalize_rows(
-            evolmd_mo,
-            [{"generated_data": "Generated", "objetivos": [0.0, 1.5]}],
-            top_k=5,
-        )
-        binary_rows = service._normalize_rows(
-            binary,
-            [{"generated_text": "Generated", "objectives": {"f1": 0.0, "f2": 1.5}}],
-            top_k=5,
-        )
+        with patch.object(
+            comparator_module,
+            "calculate_posthoc_semantic_scores",
+            return_value=[{"semanticFidelity": 0.0, "semanticDiversity": 1.5}],
+        ):
+            mo_rows = service._normalize_rows(
+                evolmd_mo,
+                [{"generated_data": "Generated", "objetivos": [0.9, 0.1]}],
+                top_k=5,
+                reference_text="reference",
+            )
+            binary_rows = service._normalize_rows(
+                binary,
+                [{"generated_text": "Generated", "objectives": {"f1": 0.2, "f2": 0.4}}],
+                top_k=5,
+                reference_text="reference",
+            )
 
         self.assertEqual(mo_rows[0]["comparableObjectiveVector"], [0.5, 0.75])
         self.assertEqual(binary_rows[0]["comparableObjectiveVector"], [0.5, 0.75])
+        self.assertEqual(mo_rows[0]["objectiveVector"], [0.9, 0.1])
+        self.assertEqual(binary_rows[0]["objectiveVector"], [0.2, 0.4])
         self.assertAlmostEqual(service._summarize_rows(evolmd_mo, mo_rows, Path("out"))["hypervolume"], 0.375)
         self.assertAlmostEqual(service._summarize_rows(binary, binary_rows, Path("out"))["hypervolume"], 0.375)
 
-    def test_evolmd_mo_comparable_vector_divides_diversity_by_two(self):
+    def test_evolmd_mo_native_objectives_do_not_drive_comparable_vector(self):
         service = ComparatorService(Path("."))
         evolmd_mo = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
 
-        rows = service._normalize_rows(
-            evolmd_mo,
-            [{"generated_data": "Generated", "objetivos": [0.957685112953186, 0.4842589497566223]}],
-            top_k=5,
-        )
+        with patch.object(
+            comparator_module,
+            "calculate_posthoc_semantic_scores",
+            return_value=[{"semanticFidelity": -0.4, "semanticDiversity": 0.8}],
+        ):
+            rows = service._normalize_rows(
+                evolmd_mo,
+                [{"generated_data": "Generated", "objetivos": [0.957685112953186, 0.4842589497566223]}],
+                top_k=5,
+                reference_text="reference",
+            )
 
-        self.assertAlmostEqual(rows[0]["comparableObjectiveVector"][0], 0.978842556476593)
-        self.assertAlmostEqual(rows[0]["comparableObjectiveVector"][1], 0.24212947487831116)
+        self.assertEqual(rows[0]["objectiveVector"], [0.957685112953186, 0.4842589497566223])
+        self.assertAlmostEqual(rows[0]["comparableObjectiveVector"][0], 0.3)
+        self.assertAlmostEqual(rows[0]["comparableObjectiveVector"][1], 0.4)
+
+    def test_common_proxy_overrides_native_comparable_vectors_for_all_proposals(self):
+        service = ComparatorService(Path("."))
+        raw_by_proposal = {
+            "evolmd": [{"generated_data": "Generated", "prompt": "Prompt", "fitness": 0.4}],
+            "mesap": [{"generated_data": "Generated", "prompt": "Prompt", "fitness": 0.5}],
+            "evolmd-mo": [{"generated_data": "Generated", "prompt": "Prompt", "objetivos": [-0.4, 1.6]}],
+            "binary-mopso-cd": [{"generated_text": "Generated", "prompt": "Prompt", "objectives": {"f1": -0.4, "f2": 1.6}}],
+        }
+
+        with patch.object(
+            comparator_module,
+            "calculate_posthoc_semantic_scores",
+            return_value=[{"semanticFidelity": 0.8, "semanticDiversity": 0.5}],
+        ) as proxy:
+            for proposal_id, raw_rows in raw_by_proposal.items():
+                proposal = next(item for item in PROPOSALS if item.proposal_id == proposal_id)
+                rows = service._normalize_rows(proposal, raw_rows, top_k=5, reference_text="reference")
+
+                self.assertEqual(rows[0]["proxyObjectiveVector"], [0.8, 0.5])
+                self.assertEqual(rows[0]["diagnosticObjectiveVector"], [0.8, 0.5])
+                self.assertEqual(rows[0]["comparableObjectiveVector"], [0.9, 0.25])
+                self.assertEqual(rows[0]["comparableObjectiveNames"], ["fidelity_sbert_proxy_normalized", "semantic_diversity_proxy_normalized"])
+
+        self.assertEqual(proxy.call_count, 4)
+
+    def test_common_proxy_skips_invalid_rows_and_metrics_use_proxy_front(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+
+        with patch.object(
+            comparator_module,
+            "calculate_posthoc_semantic_scores",
+            return_value=[
+                {"semanticFidelity": 0.0, "semanticDiversity": 1.0},
+                {"semanticFidelity": 0.6, "semanticDiversity": 0.2},
+            ],
+        ):
+            rows = service._normalize_rows(
+                proposal,
+                [
+                    {"generated_text": "front-a", "prompt": "Prompt A", "objectives": {"f1": -0.9, "f2": 0.1}},
+                    {"generated_text": "", "prompt": "Invalid", "objectives": {"f1": 1.0, "f2": 2.0}},
+                    {"generated_text": "front-b", "prompt": "Prompt B", "objectives": {"f1": -0.9, "f2": 0.1}},
+                ],
+                top_k=5,
+                reference_text="reference",
+            )
+
+        invalid = next(row for row in rows if row["status"] != "ok")
+        self.assertNotIn("proxyObjectiveVector", invalid)
+        self.assertFalse(invalid["nonDominated"])
+
+        metrics = service._summarize_rows(proposal, rows, Path("out"), include_artifact_metrics=False)
+        self.assertEqual(metrics["nonDominatedRows"], 2)
+        self.assertAlmostEqual(metrics["hypervolume"], 0.28)
+        self.assertAlmostEqual(metrics["extent"], (0.3 + 0.4) ** 0.5)
+        self.assertEqual(metrics["unaryEntropy"], 1.0)
+        self.assertNotIn("spread", metrics)
+
+    def test_front_metrics_follow_html_formulas(self):
+        points = [(0.2, 0.8), (0.8, 0.2)]
+
+        self.assertAlmostEqual(calculate_extent(points), (0.6 + 0.6) ** 0.5)
+        self.assertAlmostEqual(calculate_unary_entropy(points, mu=5), 1.0)
+        self.assertEqual(calculate_unary_entropy([(0.2, 0.8)], mu=5), 0.0)
+
+        contributions = calculate_contribution(
+            {
+                "binary-mopso-cd": [(0.9, 0.4), (0.6, 0.8)],
+                "evolmd-mo": [(0.9, 0.4), (0.3, 0.3)],
+                "evolmd": [(0.2, 0.2)],
+            }
+        )
+        self.assertAlmostEqual(contributions["binary-mopso-cd"], 0.75)
+        self.assertAlmostEqual(contributions["evolmd-mo"], 0.25)
+        self.assertAlmostEqual(contributions["evolmd"], 0.0)
+        self.assertAlmostEqual(sum(contributions.values()), 1.0)
 
     def test_evolmd_mo_legacy_series_reads_global_inertia_and_entropy(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1654,7 +1806,15 @@ class RepetitionAggregationTests(unittest.TestCase):
             service = ComparatorService(Path("."))
             evolmd_mo = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
 
-            series = service._build_metric_series(evolmd_mo, output_dir, [], "reference")
+            with patch.object(
+                comparator_module,
+                "calculate_posthoc_semantic_scores",
+                return_value=[
+                    {"semanticFidelity": 0.0, "semanticDiversity": 1.0},
+                    {"semanticFidelity": 0.2, "semanticDiversity": 0.8},
+                ],
+            ):
+                series = service._build_metric_series(evolmd_mo, output_dir, [], "reference")
 
         self.assertEqual(len(series), 1)
         self.assertIsNotNone(series[0]["hypervolume"])
@@ -1711,13 +1871,135 @@ class RepetitionAggregationTests(unittest.TestCase):
             service = ComparatorService(Path("."))
             proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
 
-            series = service._build_metric_series(proposal, output_dir, [], "reference")
+            with patch.object(
+                comparator_module,
+                "calculate_posthoc_semantic_scores",
+                return_value=[{"semanticFidelity": 0.0, "semanticDiversity": 1.0}],
+            ):
+                series = service._build_metric_series(proposal, output_dir, [], "reference")
 
         self.assertEqual(len(series), 1)
         self.assertIsNotNone(series[0]["hypervolume"])
         self.assertAlmostEqual(series[0]["globalInertia"], 0.125)
         self.assertAlmostEqual(series[0]["globalEntropy"], 0.693)
         self.assertEqual(series[0]["source"], "archive_history")
+
+    def test_binary_native_series_adds_final_proxy_point_without_archive_history(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "\n".join(
+                    [
+                        "generation,hypervolume,archive_size",
+                        "1,0.11,2",
+                        "2,0.22,3",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(Path("."))
+            proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+
+            with patch.object(
+                comparator_module,
+                "calculate_posthoc_semantic_scores",
+                return_value=[
+                    {"semanticFidelity": 0.0, "semanticDiversity": 1.0},
+                    {"semanticFidelity": 0.4, "semanticDiversity": 0.6},
+                ],
+            ):
+                final_rows = service._normalize_rows(
+                    proposal,
+                    [
+                        {"generated_text": "Generated A", "prompt": "Prompt A", "objectives": {"f1": 0.9, "f2": 0.1}},
+                        {"generated_text": "Generated B", "prompt": "Prompt B", "objectives": {"f1": 0.2, "f2": 0.8}},
+                    ],
+                    top_k=5,
+                    reference_text="reference",
+                )
+                series = service._build_metric_series(proposal, output_dir, final_rows, "reference")
+
+        self.assertEqual([point["generation"] for point in series], [0, 1, 2])
+        self.assertEqual(series[0]["source"], "final_only")
+        self.assertIsNotNone(series[0]["hypervolume"])
+        self.assertIsNotNone(series[0]["extent"])
+        self.assertIsNotNone(series[0]["unaryEntropy"])
+        self.assertEqual(series[0]["frontPoints"], [[0.5, 0.5], [0.7, 0.3]])
+        self.assertEqual(series[1]["source"], "native")
+
+    def test_legacy_series_adds_final_proxy_point_without_population_history(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "\n".join(
+                    [
+                        "Generacion,Max_Fidelidad,Max_Diversidad_Individual,Inercia_Global,Entropia_Global",
+                        "1,0.8,0.7,0.3689031219,0.6886581024",
+                        "2,0.9,0.8,0.3678999329,0.6905771496",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(Path("."))
+            proposal = next(item for item in PROPOSALS if item.proposal_id == "evolmd-mo")
+
+            with patch.object(
+                comparator_module,
+                "calculate_posthoc_semantic_scores",
+                return_value=[
+                    {"semanticFidelity": 0.0, "semanticDiversity": 1.0},
+                    {"semanticFidelity": 0.4, "semanticDiversity": 0.6},
+                ],
+            ):
+                final_rows = service._normalize_rows(
+                    proposal,
+                    [
+                        {"generated_data": "Generated A", "prompt": "Prompt A", "objetivos": [0.9, 0.1]},
+                        {"generated_data": "Generated B", "prompt": "Prompt B", "objetivos": [0.2, 0.8]},
+                    ],
+                    top_k=5,
+                    reference_text="reference",
+                )
+                series = service._build_metric_series(proposal, output_dir, final_rows, "reference")
+
+        self.assertEqual([point["generation"] for point in series], [0, 1, 2])
+        self.assertEqual(series[0]["source"], "final_only")
+        self.assertIsNotNone(series[0]["hypervolume"])
+        self.assertIsNotNone(series[0]["extent"])
+        self.assertIsNotNone(series[0]["unaryEntropy"])
+        self.assertEqual(series[0]["frontPoints"], [[0.5, 0.5], [0.7, 0.3]])
+        self.assertEqual(series[1]["source"], "legacy_csv_without_front")
+        self.assertAlmostEqual(series[1]["globalInertia"], 0.3689031219)
+
+    def test_series_contribution_uses_final_only_generation(self):
+        service = ComparatorService(Path("."))
+        proposals = [
+            {
+                "proposalId": "binary-mopso-cd",
+                "instanceId": "binary-mopso-cd",
+                "series": [
+                    {
+                        "generation": 0,
+                        "frontPoints": [[0.9, 0.4], [0.6, 0.8]],
+                    }
+                ],
+            },
+            {
+                "proposalId": "evolmd-mo",
+                "instanceId": "evolmd-mo",
+                "series": [
+                    {
+                        "generation": 0,
+                        "frontPoints": [[0.9, 0.4], [0.3, 0.3]],
+                    }
+                ],
+            },
+        ]
+
+        service._apply_series_contribution_metrics(proposals)
+
+        self.assertAlmostEqual(proposals[0]["series"][0]["contribution"], 0.75)
+        self.assertAlmostEqual(proposals[1]["series"][0]["contribution"], 0.25)
 
     def test_history_series_uses_posthoc_diagnostics_when_native_diagnostics_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1803,7 +2085,9 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(series[0]["generation"], 1)
         self.assertAlmostEqual(series[0]["hypervolume"], 0.4)
         self.assertEqual(series[0]["nonDominatedRows"], 1)
-        self.assertIsNone(series[0]["spread"])
+        self.assertEqual(series[0]["extent"], 0.0)
+        self.assertEqual(series[0]["unaryEntropy"], 0.0)
+        self.assertIsNone(series[0]["contribution"])
         self.assertEqual(series[0]["source"], "population_history")
 
     def test_legacy_series_without_global_diagnostics_keeps_missing_values(self):
@@ -1917,10 +2201,15 @@ class RepetitionAggregationTests(unittest.TestCase):
             }
             (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
 
-            recomputed = service.recompute_run_metrics(run_id)
+            with patch.object(
+                comparator_module,
+                "calculate_posthoc_semantic_scores",
+                return_value=[{"semanticFidelity": 0.0, "semanticDiversity": 1.5}],
+            ):
+                recomputed = service.recompute_run_metrics(run_id)
             proposal = recomputed["proposals"][0]
 
-        self.assertEqual(recomputed["metricSchemaVersion"], 3)
+        self.assertEqual(recomputed["metricSchemaVersion"], 4)
         self.assertEqual(recomputed["metricCoordinateSpace"], "comparable_normalized")
         self.assertFalse(recomputed["metricRecomputeStatus"]["recommended"])
         self.assertAlmostEqual(proposal["metrics"]["hypervolume"], 0.375)
@@ -2016,14 +2305,20 @@ class RepetitionAggregationTests(unittest.TestCase):
     def test_mo_metrics_exclude_invalid_rows_with_high_objectives(self):
         service = ComparatorService(Path("."))
         proposal = PROPOSALS[1]
-        rows = service._normalize_rows(
-            proposal,
-            [
-                {"generated_data": "", "objetivos": [1.0, 1.0]},
-                {"generated_data": "valid text", "objetivos": [0.5, 0.5]},
-            ],
-            top_k=10,
-        )
+        with patch.object(
+            comparator_module,
+            "calculate_posthoc_semantic_scores",
+            return_value=[{"semanticFidelity": 0.5, "semanticDiversity": 0.5}],
+        ):
+            rows = service._normalize_rows(
+                proposal,
+                [
+                    {"generated_data": "", "objetivos": [1.0, 1.0]},
+                    {"generated_data": "valid text", "objetivos": [0.5, 0.5]},
+                ],
+                top_k=10,
+                reference_text="reference",
+            )
         invalid = next(row for row in rows if row["status"] != "ok")
         valid = next(row for row in rows if row["status"] == "ok")
         self.assertFalse(invalid["nonDominated"])

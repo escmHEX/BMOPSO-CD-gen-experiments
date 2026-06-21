@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  COMPARATOR_RAW_OBJECTIVE_BOUNDS,
+  comparatorBenchmarkProposals,
   comparatorBestCostProposalIds,
+  comparatorBestMetricProposalIds,
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
   comparatorHypervolumeArea,
   comparatorIsGloballyNonDominated,
+  comparatorMetricCellClassName,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
-  comparatorRawChartPoints,
 } from "../LLM/comparator_chart_helpers.mjs";
 
 test("global non-dominated front is computed from all proposal points", () => {
@@ -59,42 +60,25 @@ test("global front counts are grouped by instance when available", () => {
   assert.equal(counts.get("binary-mopso-cd"), undefined);
 });
 
-test("raw chart points use native semantic objectives", () => {
-  const points = comparatorRawChartPoints([
-    {
-      label: "row",
-      value: [0.95, 0.2],
-      nativeObjectiveVector: [0.9, 1.4],
-      comparableObjectiveVector: [0.95, 0.7],
-    },
+test("benchmark table orders Binary MOPSO-CD first", () => {
+  const ordered = comparatorBenchmarkProposals([
+    { proposalId: "mesap", displayName: "MESAP" },
+    { proposalId: "evolmd-mo", displayName: "EVOLMD-MO" },
+    { proposalId: "binary-mopso-cd", displayName: "Binary MOPSO-CD" },
+    { proposalId: "evolmd", displayName: "EVOLMD" },
   ]);
 
-  assert.deepEqual(points[0].value, [0.9, 1.4]);
-  assert.equal(points[0].x, 0.9);
-  assert.equal(points[0].y, 1.4);
-  assert.equal(points[0].coordinateSpace, "semantic_raw");
-  assert.deepEqual(points[0].comparableObjectiveVector, [0.95, 0.7]);
+  assert.equal(ordered[0].proposalId, "binary-mopso-cd");
+  assert.deepEqual(ordered.slice(1).map((proposal) => proposal.displayName), ["EVOLMD", "EVOLMD-MO", "MESAP"]);
 });
 
-test("raw chart points skip missing or invalid native vectors", () => {
-  const points = comparatorRawChartPoints([
-    { nativeObjectiveVector: [0.9] },
-    { nativeObjectiveVector: ["bad", 0.4] },
-    { value: [0.4, 0.5] },
-    { nativeObjectiveVector: [-0.2, 1.1] },
-  ]);
-
-  assert.equal(points.length, 1);
-  assert.deepEqual(points[0].value, [-0.2, 1.1]);
-});
-
-test("raw semantic chart bounds are fixed for cross-proposal comparison", () => {
-  assert.deepEqual(COMPARATOR_RAW_OBJECTIVE_BOUNDS, {
-    xMin: -1,
-    xMax: 1,
-    yMin: 0,
-    yMax: 2,
-  });
+test("benchmark metric winner cell uses strong visual classes", () => {
+  assert.equal(
+    comparatorMetricCellClassName({ primaryColumn: true, best: true }),
+    "is-primary-proposal metric-best comparator-cost-best comparator-metric-best-cell",
+  );
+  assert.equal(comparatorMetricCellClassName({ primaryColumn: false, best: true }), "metric-best comparator-cost-best comparator-metric-best-cell");
+  assert.equal(comparatorMetricCellClassName({ primaryColumn: true, best: false }), "is-primary-proposal");
 });
 
 test("hypervolume area uses stepped front from reference origin", () => {
@@ -161,6 +145,18 @@ test("metric extremes respect best direction", () => {
 });
 
 test("diagnostic iteration metrics use higher-is-better metadata", () => {
+  assert.deepEqual(comparatorMetricMetadata("contribution"), {
+    description: "Mayor Contribution indica mayor aporte al frente combinado P*.",
+    higherIsBetter: true,
+  });
+  assert.deepEqual(comparatorMetricMetadata("extent"), {
+    description: "Mayor Extent indica mayor cobertura del frente comparable.",
+    higherIsBetter: true,
+  });
+  assert.deepEqual(comparatorMetricMetadata("unaryEntropy"), {
+    description: "Mayor Unary Entropy indica mejor distribucion del frente comparable.",
+    higherIsBetter: true,
+  });
   assert.deepEqual(comparatorMetricMetadata("globalInertia"), {
     description: "Mayor inercia indica mayor dispersion global de embeddings.",
     higherIsBetter: true,
@@ -169,6 +165,33 @@ test("diagnostic iteration metrics use higher-is-better metadata", () => {
     description: "Mayor entropia indica mayor variedad conceptual o semantica.",
     higherIsBetter: true,
   });
+});
+
+test("quality winners do not depend on cost comparability", () => {
+  const winners = comparatorBestMetricProposalIds([
+    { proposalId: "binary-mopso-cd", status: "completed", metrics: { hypervolume: 0.8 } },
+    { proposalId: "evolmd", status: "completed", metrics: { hypervolume: 0.7 } },
+  ], {
+    kind: "quality",
+    direction: "max",
+    value: (proposal) => proposal.metrics.hypervolume,
+  }, { costsComparable: false });
+
+  assert.deepEqual([...winners], ["binary-mopso-cd"]);
+});
+
+test("cost winners remain disabled when costs are not comparable", () => {
+  const winners = comparatorBestMetricProposalIds([
+    { proposalId: "binary-mopso-cd", status: "completed", cost: { promptEvalCount: 120, hasTokenReport: true } },
+    { proposalId: "evolmd", status: "completed", cost: { promptEvalCount: 80, hasTokenReport: true } },
+  ], {
+    kind: "cost",
+    direction: "min",
+    value: (_proposal, cost) => cost.promptEvalCount,
+    isReported: (_proposal, cost) => cost.hasTokenReport,
+  }, { costsComparable: false });
+
+  assert.equal(winners.size, 0);
 });
 
 test("cost winners choose the lowest completed reported value", () => {

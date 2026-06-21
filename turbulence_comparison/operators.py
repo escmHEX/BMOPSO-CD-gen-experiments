@@ -33,6 +33,26 @@ PREFERRED_POS_BY_COMPONENT = {
     "topic": {"NOUN", "PROPN", "ADJ"},
     "action": {"VERB", "NOUN", "PROPN"},
 }
+FALLBACK_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
 
 
 @dataclass(frozen=True)
@@ -100,7 +120,12 @@ class LinguisticAnalyzer:
         return self._nlp
 
     def extract_units(self, text: str, include_phrases: bool = True) -> list[MutableUnit]:
-        doc = self._load_model()(text)
+        try:
+            doc = self._load_model()(text)
+        except (ModuleNotFoundError, OSError) as exc:
+            if isinstance(exc, ModuleNotFoundError) and exc.name != "spacy":
+                raise
+            return self._extract_units_without_spacy(text, include_phrases)
         units: list[MutableUnit] = []
         seen: set[tuple[int, int, str]] = set()
 
@@ -147,6 +172,38 @@ class LinguisticAnalyzer:
                 )
 
         return sorted(units, key=lambda unit: (unit.start, unit.end, unit.kind))
+
+    def _extract_units_without_spacy(self, text: str, include_phrases: bool) -> list[MutableUnit]:
+        token_units = [
+            MutableUnit(
+                text=match.group(0),
+                lemma=match.group(0).lower(),
+                pos="NOUN",
+                start=match.start(),
+                end=match.end(),
+                kind="word",
+            )
+            for match in TOKEN_RE.finditer(text)
+            if match.group(0).lower() not in FALLBACK_STOPWORDS
+        ]
+        if not include_phrases:
+            return token_units
+
+        phrase_units: list[MutableUnit] = []
+        for size in range(2, 5):
+            for index in range(0, len(token_units) - size + 1):
+                window = token_units[index:index + size]
+                phrase_units.append(
+                    MutableUnit(
+                        text=text[window[0].start:window[-1].end],
+                        lemma=normalize_text(text[window[0].start:window[-1].end]),
+                        pos="NOUN",
+                        start=window[0].start,
+                        end=window[-1].end,
+                        kind="phrase",
+                    )
+                )
+        return sorted([*token_units, *phrase_units], key=lambda unit: (unit.start, unit.end, unit.kind))
 
 
 class PPDBIndex:

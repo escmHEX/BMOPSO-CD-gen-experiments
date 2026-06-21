@@ -1189,11 +1189,6 @@ Output rules:
               <p>Referencia [0,0] con fidelidad normalizada.</p>
             </article>
             <article class="metric">
-              <span>Spread</span>
-              <strong id="initialSpread">--</strong>
-              <p>Menor es mejor.</p>
-            </article>
-            <article class="metric">
               <span>Prom. LLM / individuo</span>
               <strong id="initialCallsPerIndividual">--</strong>
               <p>Costo computacional por individuo final.</p>
@@ -1545,7 +1540,6 @@ Output rules:
                     <th>No dominadas</th>
                     <th>Mejor F.O. comun</th>
                     <th>HV</th>
-                    <th>Spread</th>
                     <th>Wall-clock</th>
                     <th>Sin paralelismo estim.</th>
                     <th>Llamadas LLM</th>
@@ -1554,7 +1548,7 @@ Output rules:
                   </tr>
                 </thead>
                 <tbody id="initialComparisonMetricsBody">
-                  <tr><td colspan="13">Sin resultados todavia.</td></tr>
+                  <tr><td colspan="12">Sin resultados todavia.</td></tr>
                 </tbody>
               </table>
             </div>
@@ -2192,7 +2186,7 @@ Context:
           <section class="panel">
             <div class="panel-title">
               <h2>Resumen por propuesta</h2>
-              <span>Soluciones finales indica OK/total del archivo final normalizado; no corresponde a generaciones.</span>
+              <span>Estado operativo y trazabilidad; las metricas comparativas estan en la tabla unica.</span>
             </div>
             <div id="comparatorProposalCards" class="proposal-card-grid">
               <article class="proposal-card">
@@ -2205,7 +2199,7 @@ Context:
           <nav class="tab-strip" aria-label="Vistas del comparador">
             <button class="secondary comparator-tab is-active" type="button" data-comparator-tab="charts" aria-selected="true">Graficos</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="table" aria-selected="false">Tabla</button>
-            <button class="secondary comparator-tab" type="button" data-comparator-tab="costs" aria-selected="false">Costos</button>
+            <button class="secondary comparator-tab" type="button" data-comparator-tab="costs" aria-selected="false">Metricas</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="logs" aria-selected="false">Logs</button>
           </nav>
 
@@ -2229,10 +2223,10 @@ Context:
             </article>
             <article class="panel">
               <div class="panel-title">
-                <h2>No dominadas globales</h2>
-                <span>Union no dominada entre propuestas.</span>
+                <h2>Contribution</h2>
+                <span>Aporte al frente combinado P*.</span>
               </div>
-              <div id="comparatorGlobalNonDominatedChart" class="chart-surface"></div>
+              <div id="comparatorContributionChart" class="chart-surface"></div>
             </article>
             <section class="grid three-columns">
               <article class="panel">
@@ -2246,17 +2240,29 @@ Context:
                 <div id="comparatorNonDominatedChart" class="chart-surface small-chart"></div>
               </article>
               <article class="panel">
-                <div class="panel-title"><h2>Spread</h2></div>
-                <p class="chart-help">Menor suele ser mejor: indica un frente mas uniforme y menos disperso irregularmente.</p>
-                <div id="comparatorSpreadChart" class="chart-surface small-chart"></div>
+                <div class="panel-title"><h2>Extent</h2></div>
+                <p class="chart-help">Mayor es mejor: mide cobertura del frente comparable.</p>
+                <div id="comparatorExtentChart" class="chart-surface small-chart"></div>
               </article>
             </section>
-            <section class="grid two-columns">
+            <section class="grid three-columns">
+              <article class="panel">
+                <div class="panel-title"><h2>Unary Entropy</h2></div>
+                <p class="chart-help">Mayor es mejor: indica distribucion mas amplia del frente comparable.</p>
+                <div id="comparatorUnaryEntropyChart" class="chart-surface small-chart"></div>
+              </article>
+              <article class="panel">
+                <div class="panel-title"><h2>Contribution</h2></div>
+                <p class="chart-help">Mayor es mejor: indica mayor aporte al frente combinado P* por iteracion.</p>
+                <div id="comparatorContributionLineChart" class="chart-surface small-chart"></div>
+              </article>
               <article class="panel">
                 <div class="panel-title"><h2>Inercia global por iteracion</h2></div>
                 <p class="chart-help">Mayor inercia indica mayor dispersion global de embeddings en la poblacion.</p>
                 <div id="comparatorGlobalInertiaChart" class="chart-surface small-chart"></div>
               </article>
+            </section>
+            <section class="grid two-columns">
               <article class="panel">
                 <div class="panel-title"><h2>Entropia global por iteracion</h2></div>
                 <p class="chart-help">Mayor entropia indica mayor variedad conceptual o semantica observada.</p>
@@ -2293,8 +2299,8 @@ Context:
 
           <section id="comparatorCostsTab" class="panel comparator-tab-panel">
             <div class="panel-title">
-              <h2>Costos y trazabilidad</h2>
-              <span>Proceso Python, post-procesamiento y extraccion de metricas separados.</span>
+              <h2>Metricas comparativas</h2>
+              <span>Calidad y costo en una tabla unica por propuesta.</span>
             </div>
             <div id="comparatorCostExplanation" class="cost-explanation">
               Sin corrida activa.

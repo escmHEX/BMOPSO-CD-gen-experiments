@@ -96,9 +96,9 @@ La web llama a la API local de `server.py`:
 
 El backend ejecuta los `main.py` originales con Ollama local, usando `http://127.0.0.1:11434` tal como esperan los clones. Cada corrida se guarda en `runs/comparator/<runId>/`, junto con un `summary.json` normalizado.
 
-Los adaptadores propios están fuera de los submodules, en `baselines/comparator.py`. EVOLMD lee `data_final_evaluada.json` y normaliza F.O. como `[fitness]`. EVOLMD-MO lee `pareto_front.json` y normaliza F.O. como `[fidelity_sbert, diversity_individual]`.
+Los adaptadores propios están fuera de los submodules, en `baselines/comparator.py`. EVOLMD lee `data_final_evaluada.json`, MESAP lee `population_final.json`, EVOLMD-MO lee `pareto_front.json` y Binary MOPSO-CD lee `pareto_front.json`/`final_selection_hybrid.json`.
 
-Para EVOLMD, el adaptador calcula diversidad semántica post-hoc sobre los textos finales con SBERT `all-MiniLM-L6-v2`. Ese cálculo no cambia selección, cruce, mutación ni supervivencia de EVOLMD. Se reporta como vector diagnóstico `[fitness, semantic_diversity_posthoc]` y permite mostrar HV/spread post-hoc separados del objetivo original single-objective.
+Todas las métricas comparativas usan el proxy común SBERT `all-MiniLM-L6-v2`: `proxyObjectiveVector = [semantic_fidelity, semantic_diversity]` y `comparableObjectiveVector = [(semantic_fidelity + 1) / 2, semantic_diversity / 2]`, acotado a `[0,1]`. Los objetivos nativos de cada propuesta se conservan solo como trazabilidad.
 
 El lanzamiento pasa por `baselines/bootstrap.py`, que precarga los módulos declarados por cada adaptador antes de ejecutar el `main.py` original. Esto evita problemas de orden de carga de PyTorch en Windows sin modificar los clones.
 
@@ -108,7 +108,7 @@ Los costos de ejecución se devuelven en `costSummary` a nivel de corrida y en `
 
 `proposalParallelism` controla cuántas propuestas se ejecutan al mismo tiempo desde el adaptador. No modifica el paralelismo interno de EVOLMD ni EVOLMD-MO, porque ese comportamiento queda dentro de los clones upstream. `timeoutMinutes` limita la duración máxima por propuesta.
 
-Para EVOLMD-MO se usa maximización, fidelidad normalizada con `(fidelity + 1) / 2`, diversidad acotada a `[0, 1]`, punto de referencia HV `[0, 0]` y spread como desviación normalizada entre distancias consecutivas del frente no dominado. Para EVOLMD, HV/spread son diagnósticos post-hoc sobre `[fitness, semantic_diversity_posthoc]`, con ambos valores acotados a `[0, 1]`.
+En schema de métricas `4`, HV, no dominadas, Contribution, Extent y Unary Entropy se calculan sobre el frente no dominado del proxy comparable. HV usa referencia `[0,0]`. Contribution se calcula contra el frente combinado `P*` y reparte crédito `1/K` cuando un punto aparece en K propuestas.
 
 ### Agregación de K ejecuciones del comparador
 
@@ -118,10 +118,10 @@ Las métricas de calidad finales de `proposal.metrics` no toman la última repet
 
 - `totalRows` y `completedRows`: promedio aritmético de los conteos finales por repetición completada.
 - `nonDominatedRows`: promedio aritmético de la cantidad de soluciones no dominadas de cada repetición completada. No es la última ejecución ni la unión de todos los frentes. En propuestas uniobjetivo, este valor corresponde al conteo no dominado post-hoc calculado sobre el vector diagnóstico comparable.
-- `hypervolume`: promedio aritmético del HV calculado dentro de cada repetición completada sobre su propio frente no dominado comparable normalizado. No se recalcula HV sobre un frente combinado entre repeticiones.
-- `spread`: promedio aritmético del spread calculado dentro de cada repetición completada. Si una repetición no tiene suficientes puntos de frente para calcular spread, esa repetición no aporta a ese promedio.
+- `hypervolume`, `extent` y `unaryEntropy`: promedio aritmético de cada métrica calculada dentro de cada repetición completada sobre su propio frente no dominado comparable normalizado.
+- `contribution`: aporte al frente combinado `P*`; en corridas con varias propuestas se recalcula globalmente después de construir todos los frentes comparables.
 - `bestObjectiveVector`, `bestComparableObjectiveVector` y `bestDiagnosticObjectiveVector`: promedio componente a componente de los vectores reportados por las repeticiones completadas. No se selecciona el mejor vector global ni el de la última repetición.
-- `series`: las curvas por generación agrupan puntos con el mismo número de generación y promedian `hypervolume`, `nonDominatedRows`, `spread`, `globalInertia` y `globalEntropy` entre repeticiones completadas. Los valores ausentes se ignoran por métrica.
+- `series`: las curvas por generación agrupan puntos con el mismo número de generación y promedian `hypervolume`, `nonDominatedRows`, `extent`, `unaryEntropy`, `contribution`, `globalInertia` y `globalEntropy` entre repeticiones completadas. Los valores ausentes se ignoran por métrica.
 - `rows` y `selectedRows`: no se promedian. Se concatenan las filas normalizadas de las repeticiones completadas y se conserva `repetitionIndex`/`repetitionSeed` para trazabilidad.
 
 Las métricas de costo finales de `proposal.cost`, que son las usadas para el análisis comparativo de costo, también se promedian por repetición completada. Esto representa el costo esperado de una ejecución estocástica de la propuesta, que es lo comparable cuando K se usa para mitigar variación. El costo total de la campaña experimental se conserva en campos con sufijo `Total` y en `costSummary`.

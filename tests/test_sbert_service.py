@@ -2,9 +2,27 @@ from __future__ import annotations
 
 import unittest
 
-import numpy as np
-
 from sbert_service import SbertSimilarityService
+
+
+class FakeEmbeddingVector:
+    def __init__(self, values):
+        self.values = list(values)
+
+    def __matmul__(self, other):
+        return sum(left * right for left, right in zip(self.values, other.values))
+
+    def tolist(self):
+        return list(self.values)
+
+
+class FakeEmbeddingMatrix:
+    def __init__(self, rows):
+        self.rows = [FakeEmbeddingVector(row) for row in rows]
+        self.shape = (len(self.rows), len(self.rows[0].values) if self.rows else 0)
+
+    def __getitem__(self, index):
+        return self.rows[index]
 
 
 class FakeSentenceTransformer:
@@ -12,7 +30,7 @@ class FakeSentenceTransformer:
         self.texts = texts
         self.convert_to_numpy = convert_to_numpy
         self.normalize_embeddings = normalize_embeddings
-        return np.array([[1.0, 0.0, 0.0], [0.5, 0.5, 0.0]], dtype=float)
+        return FakeEmbeddingMatrix([[1.0, 0.0, 0.0], [0.5, 0.5, 0.0]])
 
 
 class StubSbertSimilarityService(SbertSimilarityService):

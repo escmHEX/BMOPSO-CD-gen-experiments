@@ -6,8 +6,8 @@ from typing import Any
 
 COSINE_DISTANCE_UPPER_BOUND = 2.0
 COMPARABLE_OBJECTIVE_NAMES = [
-    "fidelity_sbert_normalized",
-    "semantic_diversity_normalized",
+    "fidelity_sbert_proxy_normalized",
+    "semantic_diversity_proxy_normalized",
 ]
 
 
@@ -24,13 +24,13 @@ def finite_float(value: Any, default: float = 0.0) -> float:
 
 
 def is_dominated(row: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
-    vector = row.get("objectiveVector") or []
+    vector = row.get("comparableObjectiveVector") or row.get("objectiveVector") or []
     if len(vector) < 2:
         return False
     for other in rows:
         if other is row:
             continue
-        other_vector = other.get("objectiveVector") or []
+        other_vector = other.get("comparableObjectiveVector") or other.get("objectiveVector") or []
         if len(other_vector) != len(vector):
             continue
         if all(a >= b for a, b in zip(other_vector, vector)) and any(
@@ -43,9 +43,10 @@ def is_dominated(row: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
 def mark_non_dominated(rows: list[dict[str, Any]]) -> None:
     valid_rows = [row for row in rows if row.get("status") == "ok"]
     for row in rows:
+        vector = row.get("comparableObjectiveVector") or row.get("objectiveVector") or []
         row["nonDominated"] = (
             row.get("status") == "ok"
-            and len(row.get("objectiveVector") or []) >= 2
+            and len(vector) >= 2
             and not is_dominated(row, valid_rows)
         )
 
@@ -136,21 +137,70 @@ def calculate_hypervolume(points: list[tuple[float, float]]) -> float | None:
     return clamp(hv, 0.0, 1.0)
 
 
-def calculate_spread(points: list[tuple[float, float]]) -> float | None:
-    front = pareto_points(points)
-    if len(front) < 3:
-        return None
-
-    distances = [
-        math.dist(front[index - 1], front[index])
-        for index in range(1, len(front))
-    ]
-    mean_distance = sum(distances) / len(distances)
-    if mean_distance <= 0:
+def calculate_extent(points: list[tuple[float, ...]]) -> float:
+    if len(points) <= 1:
         return 0.0
+    width = min(len(point) for point in points)
+    if width <= 0:
+        return 0.0
+    ranges = []
+    for index in range(width):
+        values = [clamp(finite_float(point[index]), 0.0, 1.0) for point in points]
+        ranges.append(max(values) - min(values))
+    return math.sqrt(sum(ranges))
 
-    absolute_deviation = sum(abs(distance - mean_distance) for distance in distances)
-    return absolute_deviation / (len(distances) * mean_distance)
+
+def calculate_unary_entropy(points: list[tuple[float, ...]], mu: int = 5) -> float:
+    if len(points) <= 1:
+        return 0.0
+    width = min(len(point) for point in points)
+    if width <= 0 or mu <= 1:
+        return 0.0
+    cells: dict[tuple[int, ...], int] = {}
+    for point in points:
+        cell = tuple(
+            min(mu, math.floor(mu * clamp(finite_float(point[index]), 0.0, 1.0)) + 1)
+            for index in range(width)
+        )
+        cells[cell] = cells.get(cell, 0) + 1
+    denominator_base = min(len(points), mu ** width)
+    if denominator_base <= 1:
+        return 0.0
+    entropy = 0.0
+    total = len(points)
+    for count in cells.values():
+        probability = count / total
+        if probability > 0:
+            entropy -= probability * math.log(probability)
+    return clamp(entropy / math.log(denominator_base), 0.0, 1.0)
+
+
+def calculate_contribution(points_by_proposal: dict[str, list[tuple[float, float]]]) -> dict[str, float]:
+    proposal_points = {
+        proposal_id: set(points)
+        for proposal_id, points in points_by_proposal.items()
+    }
+    all_points = sorted(
+        {point for points in proposal_points.values() for point in points},
+        key=lambda item: (item[0], item[1]),
+    )
+    front = pareto_points(all_points)
+    if not front:
+        return {proposal_id: 0.0 for proposal_id in points_by_proposal}
+
+    contributions = {proposal_id: 0.0 for proposal_id in points_by_proposal}
+    for point in front:
+        producers = [
+            proposal_id
+            for proposal_id, points in proposal_points.items()
+            if point in points
+        ]
+        if not producers:
+            continue
+        credit = 1.0 / len(producers)
+        for proposal_id in producers:
+            contributions[proposal_id] += credit / len(front)
+    return contributions
 
 
 def entropy_weights(matrix: list[list[float]]) -> list[float]:
@@ -224,13 +274,21 @@ def aggregate_series(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 {
                     "hypervolume": [],
                     "nonDominatedRows": [],
-                    "spread": [],
+                    "extent": [],
+                    "unaryEntropy": [],
+                    "contribution": [],
                     "globalInertia": [],
                     "globalEntropy": [],
+                    "frontPoints": [],
                 },
             )
             sources[generation] = str(point.get("source") or sources.get(generation) or "aggregated")
             for key in bucket:
+                if key == "frontPoints":
+                    raw_points = point.get("frontPoints")
+                    if isinstance(raw_points, list):
+                        bucket[key].extend(raw_points)
+                    continue
                 value = point.get(key)
                 if value is not None:
                     bucket[key].append(finite_float(value))
@@ -242,9 +300,12 @@ def aggregate_series(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "generation": generation,
                 "hypervolume": sum(bucket["hypervolume"]) / len(bucket["hypervolume"]) if bucket["hypervolume"] else None,
                 "nonDominatedRows": sum(bucket["nonDominatedRows"]) / len(bucket["nonDominatedRows"]) if bucket["nonDominatedRows"] else None,
-                "spread": sum(bucket["spread"]) / len(bucket["spread"]) if bucket["spread"] else None,
+                "extent": sum(bucket["extent"]) / len(bucket["extent"]) if bucket["extent"] else None,
+                "unaryEntropy": sum(bucket["unaryEntropy"]) / len(bucket["unaryEntropy"]) if bucket["unaryEntropy"] else None,
+                "contribution": sum(bucket["contribution"]) / len(bucket["contribution"]) if bucket["contribution"] else None,
                 "globalInertia": sum(bucket["globalInertia"]) / len(bucket["globalInertia"]) if bucket["globalInertia"] else None,
                 "globalEntropy": sum(bucket["globalEntropy"]) / len(bucket["globalEntropy"]) if bucket["globalEntropy"] else None,
+                "frontPoints": bucket["frontPoints"],
                 "source": sources.get(generation, "aggregated"),
             }
         )
@@ -281,9 +342,6 @@ def chart_point_from_row(row: dict[str, Any], selected: bool = False) -> dict[st
 def row_is_chart_non_dominated(row: dict[str, Any]) -> bool:
     if row.get("status") != "ok":
         return False
-    proposal_id = str(row.get("proposalId") or "").lower()
-    if proposal_id == "evolmd":
-        return bool(row.get("postHocNonDominated"))
     return bool(row.get("nonDominated"))
 
 

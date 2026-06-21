@@ -1,14 +1,14 @@
 import {
-  COMPARATOR_RAW_OBJECTIVE_BOUNDS,
-  comparatorBestCostProposalIds,
+  comparatorBenchmarkProposals,
+  comparatorBestMetricProposalIds,
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
   comparatorHypervolumeArea,
   comparatorIsGloballyNonDominated,
+  comparatorMetricCellClassName,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
   comparatorPointCoordinates,
-  comparatorRawChartPoints,
 } from "./comparator_chart_helpers.mjs";
 
 const EMBEDDING_MODELS = {
@@ -551,7 +551,6 @@ const dom = {
   initialFinalIndividuals: document.querySelector("#initialFinalIndividuals"),
   initialNonDominated: document.querySelector("#initialNonDominated"),
   initialHypervolume: document.querySelector("#initialHypervolume"),
-  initialSpread: document.querySelector("#initialSpread"),
   initialCallsPerIndividual: document.querySelector("#initialCallsPerIndividual"),
   initialRunId: document.querySelector("#initialRunId"),
   initialStatusTone: document.querySelector("#initialStatusTone"),
@@ -739,10 +738,12 @@ const dom = {
   comparatorChartProposalFilters: document.querySelector("#comparatorChartProposalFilters"),
   comparatorParetoCharts: document.querySelector("#comparatorParetoCharts"),
   comparatorCombinedParetoChart: document.querySelector("#comparatorCombinedParetoChart"),
-  comparatorGlobalNonDominatedChart: document.querySelector("#comparatorGlobalNonDominatedChart"),
+  comparatorContributionChart: document.querySelector("#comparatorContributionChart"),
   comparatorHvChart: document.querySelector("#comparatorHvChart"),
   comparatorNonDominatedChart: document.querySelector("#comparatorNonDominatedChart"),
-  comparatorSpreadChart: document.querySelector("#comparatorSpreadChart"),
+  comparatorExtentChart: document.querySelector("#comparatorExtentChart"),
+  comparatorUnaryEntropyChart: document.querySelector("#comparatorUnaryEntropyChart"),
+  comparatorContributionLineChart: document.querySelector("#comparatorContributionLineChart"),
   comparatorGlobalInertiaChart: document.querySelector("#comparatorGlobalInertiaChart"),
   comparatorGlobalEntropyChart: document.querySelector("#comparatorGlobalEntropyChart"),
   comparatorCostExplanation: document.querySelector("#comparatorCostExplanation"),
@@ -850,8 +851,11 @@ const ABBREVIATION_TOOLTIPS = Object.freeze({
   "run id": "Identificador de ejecucion.",
   "sbert": "Sentence-BERT.",
   "sin paralelismo estim.": "Estimacion sin ejecutar estrategias en paralelo.",
-  "spread comp.": "Spread comparable en el espacio objetivo normalizado.",
-  "spread comp. post-hoc": "Spread comparable calculado post-hoc.",
+  "contribution": "Aporte de la propuesta al frente combinado P*, con credito compartido entre puntos repetidos.",
+  "extent": "Cobertura del frente comparable normalizado.",
+  "unary entropy": "Distribucion del frente comparable normalizado en celdas.",
+  "tokens entrada": "Tokens de prompt o entrada reportados por Ollama.",
+  "tokens salida": "Tokens de completion o salida reportados por Ollama.",
   "temp. prompts": "Temperatura usada para generar prompts.",
   "tiempo llm": "Tiempo acumulado asociado a llamadas LLM.",
   "tiempo llm cliente": "Suma de latencias cliente de llamadas LLM.",
@@ -2668,7 +2672,6 @@ function resetInitialPopulationUi() {
   dom.initialFinalIndividuals.textContent = "--";
   dom.initialNonDominated.textContent = "--";
   dom.initialHypervolume.textContent = "--";
-  dom.initialSpread.textContent = "--";
   dom.initialCallsPerIndividual.textContent = "--";
   dom.initialRunId.textContent = "--";
   dom.initialPopulationConnectionText.textContent = "Sin ejecucion";
@@ -2850,7 +2853,6 @@ function renderInitialPopulationRun(run) {
   dom.initialFinalIndividuals.textContent = String(metrics.completedRows ?? rows.length ?? 0);
   dom.initialNonDominated.textContent = metrics.completedRows ? `${metrics.nonDominatedRows ?? 0}/${metrics.completedRows}` : "--";
   dom.initialHypervolume.textContent = metrics.hypervolumeLabel || "No aplica";
-  dom.initialSpread.textContent = metrics.spreadLabel || "No aplica";
 
   renderInitialProgress(run.progress || null);
   renderInitialCost(run.cost || null);
@@ -3289,7 +3291,7 @@ function resetInitialComparisonUi() {
   dom.initialComparisonRunId.textContent = "--";
   dom.initialComparisonConnectionText.textContent = "Sin ejecucion";
   dom.initialComparisonConnectionDot.classList.remove("is-busy", "is-error");
-  dom.initialComparisonMetricsBody.innerHTML = '<tr><td colspan="13">Sin resultados todavia.</td></tr>';
+  dom.initialComparisonMetricsBody.innerHTML = '<tr><td colspan="12">Sin resultados todavia.</td></tr>';
   dom.initialComparisonStrategyDetails.innerHTML = `
     <details class="artifact-disclosure">
       <summary>Sin corrida</summary>
@@ -3319,7 +3321,7 @@ async function runInitialComparison() {
 
   stopInitialComparisonPolling();
   setInitialComparisonRunning(true);
-  dom.initialComparisonMetricsBody.innerHTML = '<tr><td colspan="13">Esperando resultados.</td></tr>';
+  dom.initialComparisonMetricsBody.innerHTML = '<tr><td colspan="12">Esperando resultados.</td></tr>';
   dom.initialComparisonStrategyDetails.innerHTML = "";
   dom.initialComparisonLogOutput.textContent = "Iniciando corrida...";
   dom.initialComparisonConnectionDot.classList.add("is-busy");
@@ -3534,7 +3536,6 @@ function initialComparisonMetricWinners(strategies) {
     nonDominated: initialComparisonBestScalarIds(strategies, (strategy) => strategy.metrics?.nonDominatedRows, "max"),
     objective: initialComparisonBestObjectiveIds(strategies),
     hypervolume: initialComparisonBestScalarIds(strategies, (strategy) => strategy.metrics?.hypervolume, "max"),
-    spread: initialComparisonBestScalarIds(strategies, (strategy) => strategy.metrics?.spread, "min"),
     wallClock: initialComparisonBestScalarIds(strategies, (strategy) => strategy.cost?.processWallClockSeconds ?? strategy.cost?.wallClockSeconds, "min"),
     sequentialWallClock: initialComparisonBestScalarIds(strategies, (strategy) => strategy.cost?.estimatedSequentialWallClockSeconds, "min"),
     llmCalls: initialComparisonBestScalarIds(strategies, (strategy) => strategy.cost?.llmCalls, "min"),
@@ -3545,7 +3546,7 @@ function initialComparisonMetricWinners(strategies) {
 
 function renderInitialComparisonMetrics(strategies) {
   if (!strategies.length) {
-    dom.initialComparisonMetricsBody.innerHTML = '<tr><td colspan="13">Sin resultados todavia.</td></tr>';
+    dom.initialComparisonMetricsBody.innerHTML = '<tr><td colspan="12">Sin resultados todavia.</td></tr>';
     return;
   }
   const winners = initialComparisonMetricWinners(strategies);
@@ -3564,7 +3565,6 @@ function renderInitialComparisonMetrics(strategies) {
         ${initialComparisonMetricCell(String(metrics.nonDominatedRows ?? 0), winners.nonDominated.has(strategyId))}
         ${initialComparisonMetricCell(metrics.bestObjectiveLabel || "--", winners.objective.has(strategyId))}
         ${initialComparisonMetricCell(metrics.hypervolumeLabel || "No aplica", winners.hypervolume.has(strategyId))}
-        ${initialComparisonMetricCell(metrics.spreadLabel || "No aplica", winners.spread.has(strategyId))}
         ${initialComparisonMetricCell(cost.processWallClockLabel || cost.wallClockLabel || "--", winners.wallClock.has(strategyId))}
         ${initialComparisonMetricCell(cost.estimatedSequentialWallClockLabel || "--", winners.sequentialWallClock.has(strategyId))}
         ${initialComparisonMetricCell(String(cost.llmCalls ?? 0), winners.llmCalls.has(strategyId))}
@@ -3599,7 +3599,6 @@ function renderInitialComparisonStrategyDetails(strategies) {
           ["F.O.", strategy.metrics?.bestObjectiveLabel || "--"],
           ["No dominadas", String(strategy.metrics?.nonDominatedRows ?? 0)],
           ["HV", strategy.metrics?.hypervolumeLabel || "No aplica"],
-          ["Spread", strategy.metrics?.spreadLabel || "No aplica"],
         ]),
         initialComparisonDefinitionBlock("Metricas nativas", [
           ["Objetivos", (strategy.nativeMetrics?.objectiveNames || []).join(", ") || "--"],
@@ -4754,10 +4753,12 @@ function resetComparatorUi(options = {}) {
     dom.comparatorChartProposalFilters.innerHTML = '<span class="muted-text">Ejecuta una comparacion para activar filtros.</span>';
   }
   dom.comparatorCombinedParetoChart.innerHTML = "";
-  dom.comparatorGlobalNonDominatedChart.innerHTML = "";
+  dom.comparatorContributionChart.innerHTML = "";
   dom.comparatorHvChart.innerHTML = "";
   dom.comparatorNonDominatedChart.innerHTML = "";
-  dom.comparatorSpreadChart.innerHTML = "";
+  dom.comparatorExtentChart.innerHTML = "";
+  dom.comparatorUnaryEntropyChart.innerHTML = "";
+  dom.comparatorContributionLineChart.innerHTML = "";
   dom.comparatorGlobalInertiaChart.innerHTML = "";
   dom.comparatorGlobalEntropyChart.innerHTML = "";
   renderComparatorCostDetails(null);
@@ -6030,10 +6031,10 @@ async function loadComparatorProposals() {
       ["Git antes de ejecutar", `${payload.defaults?.updateRepositoriesBeforeRun ? "Activado" : "Desactivado"}; ${gitSummary}`],
       ["EVOLMD", "data_final_evaluada.json -> [fitness]"],
       ["MESAP", "population_final.json -> [fitness]"],
-      ["Uniobjetivo post-hoc", "EVOLMD y MESAP usan vector diagnostico SBERT [fidelity_sbert_posthoc, semantic_diversity_posthoc]; HV/spread no alteran la seleccion nativa."],
+      ["Proxy comun", "Todas las propuestas usan el proxy SBERT [semantic_fidelity, semantic_diversity] para metricas comparables; los objetivos nativos quedan como trazabilidad."],
       ["EVOLMD-MO", "pareto_front.json -> [fidelity_sbert, diversity_individual]"],
       ["Binary MOPSO-CD", "pareto_front.json -> [objectives.f1, objectives.f2]; seleccion desde final_selection_hybrid.json"],
-      ["MO comparable", "Graficos, HV y spread usan [(f1 + 1) / 2, f2 / 2] con referencia [0,0]."],
+      ["MO comparable", "Graficos, HV, Contribution, Extent y Unary Entropy usan [(semantic_fidelity + 1) / 2, semantic_diversity / 2] con referencia [0,0]."],
     ]);
   } catch (error) {
     renderDefinitionList(dom.comparatorIntegrationDetails, [
@@ -6392,9 +6393,6 @@ function comparatorProposalSummaryTooltip(label, metrics = {}) {
   if (key === "parametros") {
     return "Parametros comunes enviados por CLI: N es poblacion; G es generaciones o iteraciones.";
   }
-  if (key === "soluciones finales") {
-    return "Soluciones finales normalizadas correctamente sobre el total del archivo final; no corresponde a generaciones.";
-  }
   if (key === "mejor f.o.") {
     return "Vector nativo de la solucion rank 1. En MO: no dominadas primero y luego mayor suma de objetivos nativos; en uniobjetivo: mayor fitness.";
   }
@@ -6407,8 +6405,14 @@ function comparatorProposalSummaryTooltip(label, metrics = {}) {
   if (key.startsWith("hv")) {
     return `Hypervolume del frente no dominado en el espacio comparable normalizado con referencia [0,0]. Mayor es mejor.${diagnosticSuffix}`;
   }
-  if (key.startsWith("spread")) {
-    return `Uniformidad del frente no dominado en el espacio comparable normalizado. Menor es mejor; valores altos indican distancias mas irregulares.${diagnosticSuffix}`;
+  if (key.startsWith("contribution")) {
+    return "Aporte al frente combinado P*. Los puntos compartidos reparten credito entre propuestas.";
+  }
+  if (key.startsWith("extent")) {
+    return "Cobertura del frente no dominado en el espacio comparable normalizado. Mayor es mejor.";
+  }
+  if (key.startsWith("unary")) {
+    return "Entropia normalizada de la distribucion del frente comparable. Mayor es mejor.";
   }
   if (key === "vector post-hoc") {
     return "Vector diagnostico SBERT/diversidad calculado despues de ejecutar una propuesta uniobjetivo; se usa para comparar, no para decidir dentro del algoritmo.";
@@ -6464,21 +6468,6 @@ function formatComparatorCostQuantity(value, digits = 2) {
   return Number.isInteger(number) ? String(number) : formatNumber(number, digits);
 }
 
-function formatComparatorArchiveCounter(average, total, repetitionsK) {
-  const averageNumber = Number(average);
-  if (!Number.isFinite(averageNumber)) return null;
-  const totalNumber = Number(total);
-  if (Number(repetitionsK) > 1 && Number.isFinite(totalNumber)) {
-    return `${formatComparatorCostQuantity(averageNumber)} prom.; ${formatComparatorCostQuantity(totalNumber)} total`;
-  }
-  return formatComparatorCostQuantity(averageNumber);
-}
-
-function comparatorArchiveMetricRow(label, average, total, repetitionsK, metrics) {
-  const value = formatComparatorArchiveCounter(average, total, repetitionsK);
-  return value === null ? "" : `${comparatorProposalSummaryTerm(label, metrics)}<dd>${escapeHtml(value)}</dd>`;
-}
-
 function renderComparatorCards(proposals, config = null) {
   if (!proposals.length) {
     dom.comparatorProposalCards.innerHTML = `
@@ -6493,26 +6482,6 @@ function renderComparatorCards(proposals, config = null) {
   dom.comparatorProposalCards.replaceChildren(
     ...proposals.map((proposal) => {
       const metrics = proposal.metrics || {};
-      const cost = proposal.cost || {};
-      const hvLabel = metrics.postHocDiagnostic ? "HV comp. post-hoc" : "HV comp.";
-      const spreadLabel = metrics.postHocDiagnostic ? "Spread comp. post-hoc" : "Spread comp.";
-      const nonDominatedLabel = metrics.postHocDiagnostic ? "No dom. post-hoc" : "No dominadas";
-      const tokenValue = comparatorCostHasTokenReport(cost) ? formatComparatorCostQuantity(cost.totalTokens ?? 0) : "No reportado";
-      const repetitionsK = proposal.repetitionsK ?? config?.repetitionsK ?? 1;
-      const archiveUpdateRow = comparatorArchiveMetricRow(
-        "Actualiz. archivo ext.",
-        metrics.externalArchiveUpdateCount,
-        metrics.externalArchiveUpdateCountTotal,
-        repetitionsK,
-        metrics,
-      );
-      const archivePruneRow = comparatorArchiveMetricRow(
-        "Podas archivo ext.",
-        metrics.externalArchivePruneCount,
-        metrics.externalArchivePruneCountTotal,
-        repetitionsK,
-        metrics,
-      );
       const progressState = proposal.progressState || proposal;
       const progressPercent = Math.round(Math.max(0, Math.min(1, Number(progressState.progress || 0))) * 100);
       const stageLabel = progressState.stageLabel || comparatorStatusLabel(proposal.status);
@@ -6535,23 +6504,6 @@ function renderComparatorCards(proposals, config = null) {
         <p title="${escapeHtml(repetitionProgress.title)}">${escapeHtml(repetitionProgress.text)}</p>
         <dl>
           ${term("Parametros")}<dd title="N: tamano de poblacion o cantidad de individuos; G: generaciones o iteraciones configuradas.">${escapeHtml(parameterLabel)}</dd>
-          ${term("Soluciones finales")}<dd>${escapeHtml(String(metrics.completedRows ?? 0))}/${escapeHtml(String(metrics.totalRows ?? 0))} <small title="OK/total: soluciones finales normalizadas correctamente sobre el total del archivo final; no corresponde a G.">OK/total; no es G</small></dd>
-          ${term("Mejor F.O.")}<dd>${escapeHtml(metrics.bestObjectiveLabel || "--")}</dd>
-          ${term("Mejor comp.")}<dd>${escapeHtml(metrics.bestComparableObjectiveLabel || "--")}</dd>
-          ${term(nonDominatedLabel)}<dd>${escapeHtml(String((metrics.postHocDiagnostic ? metrics.postHocNonDominatedRows : metrics.nonDominatedRows) ?? 0))}</dd>
-          ${term(hvLabel)}<dd>${escapeHtml(metrics.hypervolumeLabel || "No aplica")}</dd>
-          ${term(spreadLabel)}<dd>${escapeHtml(metrics.spreadLabel || "No aplica")}</dd>
-          ${metrics.postHocDiagnostic ? `${term("Vector post-hoc")}<dd>${escapeHtml(metrics.bestDiagnosticObjectiveLabel || "--")}</dd>` : ""}
-          ${archiveUpdateRow}
-          ${archivePruneRow}
-          ${term("Algoritmo")}<dd>${escapeHtml(cost.processWallClockLabel || "--")}</dd>
-          ${term("Total prop.")}<dd>${escapeHtml(cost.proposalTotalWallClockLabel || cost.processWallClockLabel || "--")}</dd>
-          ${term("Post")}<dd>${escapeHtml(cost.postProcessingWallClockLabel || "0s")}</dd>
-          ${term("Metricas web")}<dd>${escapeHtml(cost.metricExtractionLabel || "0s")}</dd>
-          ${term("Llamadas LLM")}<dd>${escapeHtml(formatComparatorCostQuantity(cost.llmCalls ?? 0))}</dd>
-          ${term("Tiempo LLM")}<dd>${escapeHtml(cost.llmClientWallClockLabel || "--")}</dd>
-          ${term("Prom. llamada")}<dd>${escapeHtml(cost.llmAverageCallLabel || "No disponible")}</dd>
-          ${term("Tokens")}<dd>${escapeHtml(tokenValue)}</dd>
           ${term("Git")}<dd>${escapeHtml(gitLabel)}</dd>
           ${term("Salida")}<dd>${escapeHtml(metrics.outputDir || proposal.outputDir || "--")}</dd>
         </dl>
@@ -6592,33 +6544,54 @@ function renderComparatorCostExplanation(run) {
   dom.comparatorCostExplanation.innerHTML = `
     <p><strong>${escapeHtml(comparable ? "Costos comparables" : "Costos no comparables")}</strong>: ${escapeHtml(comparisonDetail)}</p>
     <p>Modo: ${escapeHtml(policy.label || run.config?.executionMode || "--")}; paralelismo efectivo ${escapeHtml(String(effective))} de ${escapeHtml(String(requested))} solicitado(s); wall-clock total de corrida ${escapeHtml(runCost.runWallClockLabel || "--")}.</p>
-    <p>La tabla se concentra en costos promedio por repeticion completada: wall-clock, llamadas LLM, tokens y tiempos reportados por Ollama. Menor es mejor salvo que una metrica no sea reportada.</p>
-    <p>Post-procesamiento, extraccion de metricas y preparacion visual siguen separados internamente. Los totales reales de campana quedan en costSummary y en los campos Total del JSON.</p>
-    <p>Tokens y duracion Ollama solo se comparan cuando todas las propuestas completadas reportan esa metrica con fuente real; si no, se muestra No reportado y no se destaca ganador.</p>
+    <p>La tabla consolida calidad y costo por propuesta. Las metricas de calidad siempre resaltan el mejor valor; costos, llamadas y tokens solo resaltan ganador cuando la ejecucion fue comparable.</p>
+    <p>Tokens de entrada y salida se muestran separados. totalTokens queda solo como trazabilidad tecnica en el JSON.</p>
   `;
 }
 
-function comparatorCostMetricDefinitions() {
+function comparatorBenchmarkMetricDefinitions() {
   const secondsMetric = (key, labelKey) => ({
+    kind: "cost",
+    direction: "min",
     value: (_proposal, cost) => cost[key],
     format: (_proposal, cost) => cost[labelKey] || "--",
     isReported: (_proposal, cost) => cost[key] !== null && cost[key] !== undefined && Number.isFinite(Number(cost[key])),
   });
+  const qualityMetric = (key, labelKey, label, detail) => ({
+    id: key,
+    kind: "quality",
+    direction: "max",
+    label,
+    detail,
+    value: (proposal) => proposal.metrics?.[key],
+    format: (proposal) => proposal.metrics?.[labelKey] || formatComparatorCostQuantity(proposal.metrics?.[key], 6),
+    isReported: (proposal) => Number.isFinite(Number(proposal.metrics?.[key])),
+  });
   return [
     {
+      id: "nonDominatedRows",
+      kind: "quality",
+      direction: "max",
+      label: "No dominadas",
+      detail: "Cantidad de soluciones del frente Pareto comparable final.",
+      value: (proposal) => proposal.metrics?.nonDominatedRows ?? proposal.metrics?.postHocNonDominatedRows,
+      format: (proposal) => formatComparatorCostQuantity(proposal.metrics?.nonDominatedRows ?? proposal.metrics?.postHocNonDominatedRows ?? 0),
+      isReported: (proposal) => Number.isFinite(Number(proposal.metrics?.nonDominatedRows ?? proposal.metrics?.postHocNonDominatedRows)),
+    },
+    qualityMetric("hypervolume", "hypervolumeLabel", "HV", "Area dominada respecto a [0,0] en el espacio proxy comparable."),
+    qualityMetric("contribution", "contributionLabel", "Contribution", "Aporte al frente combinado P*, con credito compartido entre puntos repetidos."),
+    qualityMetric("extent", "extentLabel", "Extent", "Cobertura del frente no dominado en el espacio comparable."),
+    qualityMetric("unaryEntropy", "unaryEntropyLabel", "Unary Entropy", "Entropia normalizada de la distribucion del frente comparable."),
+    {
       id: "process",
-      label: "Wall-clock proceso",
+      label: "Wall-clock",
       detail: "Tiempo real promedio del proceso Python por repeticion completada.",
       ...secondsMetric("processWallClockSeconds", "processWallClockLabel"),
     },
     {
-      id: "algorithm",
-      label: "Runtime algoritmo",
-      detail: "Tiempo interno promedio reportado por la propuesta cuando existe.",
-      ...secondsMetric("algorithmRuntimeSeconds", "algorithmRuntimeLabel"),
-    },
-    {
       id: "llmCalls",
+      kind: "cost",
+      direction: "min",
       label: "Llamadas LLM",
       detail: "Promedio de llamadas reales registradas hacia el LLM por repeticion completada.",
       value: (_proposal, cost) => cost.llmCalls,
@@ -6626,41 +6599,25 @@ function comparatorCostMetricDefinitions() {
       isReported: (_proposal, cost) => Number.isFinite(Number(cost.llmCalls)),
     },
     {
-      id: "llmTime",
-      label: "Tiempo LLM cliente",
-      detail: "Tiempo cliente LLM promedio por repeticion completada.",
-      ...secondsMetric("llmClientWallClockSeconds", "llmClientWallClockLabel"),
-    },
-    {
-      id: "llmAverage",
-      label: "Promedio por llamada",
-      detail: "Tiempo LLM cliente dividido por cantidad de llamadas.",
-      ...secondsMetric("llmAverageCallSeconds", "llmAverageCallLabel"),
-    },
-    {
-      id: "llmFailed",
-      label: "Llamadas fallidas",
-      detail: "Promedio de errores registrados durante llamadas LLM por repeticion completada.",
-      value: (_proposal, cost) => cost.llmFailedCalls,
-      format: (_proposal, cost) => formatComparatorCostQuantity(cost.llmFailedCalls ?? 0),
-      isReported: (_proposal, cost) => Number.isFinite(Number(cost.llmFailedCalls)),
-    },
-    {
-      id: "tokens",
-      label: "Tokens reportados",
-      detail: "Promedio de prompt y completion tokens por repeticion completada cuando la propuesta los reporta.",
-      value: (_proposal, cost) => cost.totalTokens,
-      format: (_proposal, cost) => formatComparatorCostQuantity(cost.totalTokens ?? 0),
+      id: "promptEvalCount",
+      kind: "cost",
+      direction: "min",
+      label: "Tokens entrada",
+      detail: "Promedio de tokens de prompt reportados por repeticion completada.",
+      value: (_proposal, cost) => cost.promptEvalCount,
+      format: (_proposal, cost) => formatComparatorCostQuantity(cost.promptEvalCount ?? 0),
       isReported: (_proposal, cost) => comparatorCostHasTokenReport(cost),
       requireAllReported: true,
     },
     {
-      id: "ollamaDuration",
-      label: "Duracion Ollama reportada",
-      detail: "Duracion promedio informada por Ollama por repeticion completada cuando esta disponible.",
-      value: (_proposal, cost) => cost.ollamaTotalDurationSeconds,
-      format: (_proposal, cost) => cost.ollamaTotalDurationLabel || "--",
-      isReported: (_proposal, cost) => comparatorCostHasOllamaDuration(cost),
+      id: "evalCount",
+      kind: "cost",
+      direction: "min",
+      label: "Tokens salida",
+      detail: "Promedio de tokens de salida reportados por repeticion completada.",
+      value: (_proposal, cost) => cost.evalCount,
+      format: (_proposal, cost) => formatComparatorCostQuantity(cost.evalCount ?? 0),
+      isReported: (_proposal, cost) => comparatorCostHasTokenReport(cost),
       requireAllReported: true,
     },
   ];
@@ -6673,38 +6630,35 @@ function comparatorCostHasTokenReport(cost = {}) {
     || Number(cost.evalCount) > 0;
 }
 
-function comparatorCostHasOllamaDuration(cost = {}) {
-  return Boolean(cost.hasOllamaDurationReport) || Number(cost.ollamaTotalDurationSeconds) > 0;
-}
-
 function renderComparatorCostTable(proposals, policy) {
   if (!dom.comparatorCostTableHead || !dom.comparatorCostTableBody) return;
+  const orderedProposals = comparatorBenchmarkProposals(proposals);
   dom.comparatorCostTableHead.innerHTML = `
     <tr>
       <th>Metrica</th>
       <th>Detalle</th>
-      ${proposals.map((proposal) => `
-        <th>
+      ${orderedProposals.map((proposal, index) => `
+        <th class="${index === 0 ? "is-primary-proposal" : ""}">
           <span>${escapeHtml(proposal.displayName || proposal.proposalId)}</span>
           <small class="${comparatorStatusClass(proposal.status)}">${escapeHtml(comparatorStatusLabel(proposal.status))}</small>
         </th>
       `).join("")}
     </tr>
   `;
-  if (!proposals.length) {
+  if (!orderedProposals.length) {
     dom.comparatorCostTableBody.innerHTML = '<tr><td colspan="2">Sin resultados todavia.</td></tr>';
     return;
   }
-  const metrics = comparatorCostMetricDefinitions();
+  const metrics = comparatorBenchmarkMetricDefinitions();
   const costsComparable = Boolean(policy?.costsComparable);
   dom.comparatorCostTableBody.replaceChildren(
     ...metrics.map((metric) => {
-      const winners = comparatorBestCostProposalIds(proposals, metric, { costsComparable });
+      const winners = comparatorBestMetricProposalIds(orderedProposals, metric, { costsComparable });
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <th scope="row">${escapeHtml(metric.label)}</th>
         <td>${escapeHtml(metric.detail)}</td>
-        ${proposals.map((proposal) => comparatorCostMetricCell(proposal, metric, winners)).join("")}
+        ${orderedProposals.map((proposal, index) => comparatorCostMetricCell(proposal, metric, winners, index === 0)).join("")}
       `;
       return tr;
     }),
@@ -6712,14 +6666,14 @@ function renderComparatorCostTable(proposals, policy) {
   decorateAbbreviationTooltips(document.getElementById("comparatorCostsTab") || dom.comparatorCostTableBody);
 }
 
-function comparatorCostMetricCell(proposal, metric, winners) {
+function comparatorCostMetricCell(proposal, metric, winners, primaryColumn = false) {
   const cost = proposal.cost || {};
   const rawValue = metric.value(proposal, cost);
   const value = rawValue === null || rawValue === undefined || rawValue === "" ? NaN : Number(rawValue);
   const reported = Number.isFinite(value) && (!metric.isReported || metric.isReported(proposal, cost));
   const best = proposal.status === "completed" && reported && winners.has(comparatorEntityId(proposal));
   const label = reported ? metric.format(proposal, cost) : "No reportado";
-  const className = best ? "metric-best comparator-cost-best" : "";
+  const className = comparatorMetricCellClassName({ primaryColumn, best });
   return `<td class="${className}">${best ? `<strong>${escapeHtml(label)}</strong>` : escapeHtml(label)}</td>`;
 }
 
@@ -6763,10 +6717,12 @@ function renderComparatorCharts(run) {
   const filteredProposals = comparatorFilteredProposals(proposals);
   renderComparatorParetoCharts(filteredProposals);
   renderComparatorCombinedSelectedChart(filteredProposals);
-  renderComparatorGlobalNonDominatedChart(filteredProposals);
+  renderComparatorContributionChart(filteredProposals);
   renderComparatorMetricLine(dom.comparatorHvChart, filteredProposals, "hypervolume", "HV por iteracion");
   renderComparatorMetricLine(dom.comparatorNonDominatedChart, filteredProposals, "nonDominatedRows", "Soluciones no dominadas");
-  renderComparatorMetricLine(dom.comparatorSpreadChart, filteredProposals, "spread", "Spread por iteracion");
+  renderComparatorMetricLine(dom.comparatorExtentChart, filteredProposals, "extent", "Extent por iteracion");
+  renderComparatorMetricLine(dom.comparatorUnaryEntropyChart, filteredProposals, "unaryEntropy", "Unary Entropy por iteracion");
+  renderComparatorMetricLine(dom.comparatorContributionLineChart, filteredProposals, "contribution", "Contribution por iteracion");
   renderComparatorMetricLine(dom.comparatorGlobalInertiaChart, filteredProposals, "globalInertia", "Inercia global por iteracion");
   renderComparatorMetricLine(dom.comparatorGlobalEntropyChart, filteredProposals, "globalEntropy", "Entropia global por iteracion");
 }
@@ -6787,7 +6743,9 @@ function comparatorChartsSignature(run) {
         point.generation,
         point.hypervolume,
         point.nonDominatedRows,
-        point.spread,
+        point.extent,
+        point.unaryEntropy,
+        point.contribution,
         point.globalInertia,
         point.globalEntropy,
       ]),
@@ -6864,25 +6822,13 @@ function renderComparatorParetoCharts(proposals) {
           <h2>${escapeHtml(proposal.displayName)}</h2>
           <span>Frente de Pareto</span>
         </div>
-        <div class="pareto-chart-stack">
-          <section class="pareto-chart-pane">
-            <h3>Normalizado</h3>
-            <div class="chart-surface" data-normalized-chart></div>
-          </section>
-          <section class="pareto-chart-pane">
-            <h3>No normalizado</h3>
-            <div class="chart-surface" data-raw-chart></div>
-          </section>
-        </div>
+        <div class="chart-surface" data-normalized-chart></div>
       `;
       const normalizedChartNode = article.querySelector("[data-normalized-chart]");
-      const rawChartNode = article.querySelector("[data-raw-chart]");
       window.queueMicrotask(() => {
         const normalizedChart = window.echarts.init(normalizedChartNode);
-        const rawChart = window.echarts.init(rawChartNode);
-        comparatorCharts.push(normalizedChart, rawChart);
+        comparatorCharts.push(normalizedChart);
         normalizedChart.setOption(paretoChartOption("Frente comparable normalizado", proposal.charts || {}, proposal.metrics || {}));
-        rawChart.setOption(rawParetoChartOption("Frente semantico no normalizado", proposal.charts || {}));
       });
       return article;
     }),
@@ -6915,15 +6861,19 @@ function renderComparatorCombinedSelectedChart(proposals) {
   );
 }
 
-function renderComparatorGlobalNonDominatedChart(proposals) {
+function renderComparatorContributionChart(proposals) {
   const globalFront = comparatorGlobalNonDominatedPoints(proposals);
   const countsByProposal = comparatorCountByProposal(globalFront);
   const series = proposals.map((proposal, index) => {
     const color = chartPalette(index);
     const entityId = comparatorEntityId(proposal);
     const points = globalFront.filter((point) => (point.instanceId || point.proposalId) === entityId);
+    const contribution = Number(proposal.metrics?.contribution);
+    const contributionLabel = Number.isFinite(contribution)
+      ? `${formatOptionalNumber(contribution * 100, 2)}%`
+      : "s/d";
     return {
-      name: `${proposal.displayName} (${countsByProposal.get(entityId) || 0})`,
+      name: `${proposal.displayName} (${contributionLabel}; ${countsByProposal.get(entityId) || 0} pts)`,
       type: "scatter",
       symbolSize: 13,
       label: { show: false },
@@ -6931,11 +6881,11 @@ function renderComparatorGlobalNonDominatedChart(proposals) {
       itemStyle: { color },
     };
   });
-  const chart = window.echarts.init(dom.comparatorGlobalNonDominatedChart);
+  const chart = window.echarts.init(dom.comparatorContributionChart);
   comparatorCharts.push(chart);
   chart.setOption(
-    baseScatterOption("No dominadas globales", series, {
-      description: `${globalFront.length} soluciones globalmente no dominadas en ejes normalizados comparables. Mayor fidelidad y diversidad es mejor.`,
+    baseScatterOption("Contribution", series, {
+      description: `${globalFront.length} puntos en el frente combinado P*. Puntos compartidos reparten credito 1/K.`,
     }),
   );
 }
@@ -6968,7 +6918,10 @@ function renderComparatorMetricLine(container, proposals, metricKey, title) {
     dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 10 }],
     xAxis: { type: "value", name: "Iteracion", nameLocation: "middle", nameGap: 34, minInterval: 1 },
     yAxis: { type: "value", scale: true },
-    graphic: comparatorEmptyChartGraphic(series, "Sin datos para las propuestas filtradas."),
+    graphic: comparatorEmptyChartGraphic(
+      series,
+      proposals.length ? "Sin serie disponible para las propuestas filtradas." : "Sin propuestas filtradas.",
+    ),
     series,
   });
 }
@@ -6999,41 +6952,6 @@ function paretoChartOption(title, charts, metrics = {}) {
     { name: "Seleccionadas", type: "scatter", symbol: "diamond", symbolSize: 15, data: selectedPoints, label: { show: false }, itemStyle: { color: "#b42318" } },
   ], {
     description: "Ejes normalizados comparables. Area sombreada: HV dominado respecto a [0, 0].",
-  });
-}
-
-function rawParetoChartOption(title, charts) {
-  const allPoints = comparatorRawChartPoints(charts.pareto || []).map((point) => ({
-    value: point.value,
-    labelText: point.label,
-    prompt: point.prompt,
-    rank: point.rank,
-    nativeObjectiveVector: point.nativeObjectiveVector,
-    comparableObjectiveVector: point.comparableObjectiveVector,
-    coordinateSpace: point.coordinateSpace,
-  }));
-  const selectedPoints = comparatorRawChartPoints(charts.selected || []).map((point) => ({
-    value: point.value,
-    labelText: point.label,
-    prompt: point.prompt,
-    rank: point.rank,
-    nativeObjectiveVector: point.nativeObjectiveVector,
-    comparableObjectiveVector: point.comparableObjectiveVector,
-    coordinateSpace: point.coordinateSpace,
-  }));
-  return baseScatterOption(title, [
-    { name: "Individuos", type: "scatter", symbolSize: 8, data: allPoints, label: { show: false }, itemStyle: { color: "#60a5fa", opacity: 0.72 } },
-    { name: "Seleccionadas", type: "scatter", symbol: "diamond", symbolSize: 15, data: selectedPoints, label: { show: false }, itemStyle: { color: "#b42318" } },
-  ], {
-    description: "Ejes semanticos raw comunes: fidelidad [-1, 1], diversidad [0, 2]. HV no se calcula en este espacio.",
-    tooltipFormatter: comparatorRawScatterTooltipFormatter,
-    xAxisName: "Fidelidad semantica raw",
-    yAxisName: "Diversidad semantica raw",
-    xAxisMin: COMPARATOR_RAW_OBJECTIVE_BOUNDS.xMin,
-    xAxisMax: COMPARATOR_RAW_OBJECTIVE_BOUNDS.xMax,
-    yAxisMin: COMPARATOR_RAW_OBJECTIVE_BOUNDS.yMin,
-    yAxisMax: COMPARATOR_RAW_OBJECTIVE_BOUNDS.yMax,
-    idealPoint: [COMPARATOR_RAW_OBJECTIVE_BOUNDS.xMax, COMPARATOR_RAW_OBJECTIVE_BOUNDS.yMax],
   });
 }
 
@@ -7109,7 +7027,7 @@ function baseScatterOption(title, series, options = {}) {
       min: options.yAxisMin,
       max: options.yAxisMax,
     },
-    graphic: comparatorEmptyChartGraphic(renderedSeries, "Sin datos para las propuestas filtradas."),
+    graphic: comparatorEmptyChartGraphic(renderedSeries, "Sin puntos disponibles para las propuestas filtradas."),
     series: renderedSeries,
   };
 }
@@ -7244,21 +7162,6 @@ function comparatorScatterTooltipFormatter(params) {
     F1 norm.: ${formatOptionalNumber(value[0], 6)}<br>
     F2 norm.: ${formatOptionalNumber(value[1], 6)}${native}<br>
     Rank: ${escapeHtml(String(data.rank ?? "--"))}${frontNote}<br>
-    ${escapeHtml(String(data.labelText || "")).slice(0, 300)}
-  `;
-}
-
-function comparatorRawScatterTooltipFormatter(params) {
-  const data = params.data || {};
-  const value = params.value || [];
-  const normalized = Array.isArray(data.comparableObjectiveVector) && data.comparableObjectiveVector.length >= 2
-    ? `<br>Vector normalizado: [${formatOptionalNumber(data.comparableObjectiveVector[0], 6)}, ${formatOptionalNumber(data.comparableObjectiveVector[1], 6)}]`
-    : "";
-  return `
-    <strong>${escapeHtml(params.seriesName)}</strong><br>
-    Fidelidad raw: ${formatOptionalNumber(value[0], 6)}<br>
-    Diversidad raw: ${formatOptionalNumber(value[1], 6)}${normalized}<br>
-    Rank: ${escapeHtml(String(data.rank ?? "--"))}<br>
     ${escapeHtml(String(data.labelText || "")).slice(0, 300)}
   `;
 }
