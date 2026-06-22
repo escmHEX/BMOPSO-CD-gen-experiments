@@ -17,7 +17,7 @@ export function comparatorIsBinaryProposal(proposal) {
 }
 
 export function comparatorProposalColor(proposal, index = 0) {
-  if (comparatorIsBinaryProposal(proposal)) return "#14f195";
+  if (comparatorIsBinaryProposal(proposal)) return "#2A8C00";
   const palette = ["#2458b8", "#0f766e", "#b42318", "#7c3aed", "#ca8a04"];
   return palette[index % palette.length];
 }
@@ -131,10 +131,10 @@ export function comparatorMetricMetadata(metricKey) {
     return { description: "Mayor Unary Entropy indica mejor distribucion del frente comparable.", higherIsBetter: true };
   }
   if (metricKey === "globalInertia") {
-    return { description: "Mayor inercia indica mayor dispersion global de embeddings.", higherIsBetter: true };
+    return { description: "Mayor K-means inertia indica mayor dispersion global de embeddings.", higherIsBetter: true };
   }
   if (metricKey === "globalEntropy") {
-    return { description: "Mayor entropia indica mayor variedad conceptual o semantica.", higherIsBetter: true };
+    return { description: "Mayor entity entropy indica mayor variedad conceptual o semantica.", higherIsBetter: true };
   }
   return { description: "Mayor HV es mejor: mas area dominada respecto a [0,0].", higherIsBetter: true };
 }

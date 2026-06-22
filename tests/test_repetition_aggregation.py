@@ -7,7 +7,7 @@ import types
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from baselines import comparator as comparator_module
 from baselines.bootstrap import install_evolmd_bertscore_guard
@@ -1975,6 +1975,42 @@ class RepetitionAggregationTests(unittest.TestCase):
 
         self.assertAlmostEqual(score, 1.5 / comparator_module.math.log2(6))
 
+    def test_posthoc_entity_entropy_returns_none_when_spacy_model_is_missing(self):
+        service = ComparatorService(Path("."))
+        fake_spacy = types.SimpleNamespace(load=Mock(side_effect=OSError("missing model")))
+
+        with patch.dict(sys.modules, {"spacy": fake_spacy}):
+            score = service._posthoc_entity_entropy(["doc one", "doc two"])
+
+        self.assertIsNone(score)
+
+    def test_posthoc_population_diagnostics_preserves_inertia_when_entity_entropy_unavailable(self):
+        service = ComparatorService(Path("."))
+
+        class FakeSbertService:
+            def encode_texts(self, _model_name, texts):
+                return [[float(index)] for index, _text in enumerate(texts)], {}
+
+        class FakeKMeans:
+            inertia_ = 12.0
+
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def fit(self, _embeddings):
+                return self
+
+        fake_sklearn = types.SimpleNamespace()
+        fake_cluster = types.SimpleNamespace(KMeans=FakeKMeans)
+        with patch.object(comparator_module, "shared_sbert_service", return_value=FakeSbertService()), patch.dict(
+            sys.modules,
+            {"sklearn": fake_sklearn, "sklearn.cluster": fake_cluster},
+        ), patch.object(service, "_posthoc_entity_entropy", return_value=None):
+            metrics = service._posthoc_population_diagnostics(["a", "b", "c", "d", "e", "f"])
+
+        self.assertAlmostEqual(metrics["globalInertia"], 2.0)
+        self.assertIsNone(metrics["globalEntropy"])
+
     def test_binary_monitor_series_reads_inertia_and_entropy(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
@@ -2387,6 +2423,10 @@ class RepetitionAggregationTests(unittest.TestCase):
                 comparator_module,
                 "calculate_posthoc_semantic_scores",
                 return_value=[{"semanticFidelity": 0.0, "semanticDiversity": 1.5}],
+            ), patch.object(
+                service,
+                "_build_metric_series",
+                return_value=[{"generation": 1, "globalInertia": 0.3, "globalEntropy": 0.7}],
             ):
                 recomputed = service.recompute_run_metrics(run_id)
             proposal = recomputed["proposals"][0]
@@ -2395,6 +2435,8 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(recomputed["metricCoordinateSpace"], "comparable_normalized")
         self.assertFalse(recomputed["metricRecomputeStatus"]["recommended"])
         self.assertAlmostEqual(proposal["metrics"]["hypervolume"], 0.375)
+        self.assertAlmostEqual(proposal["metrics"]["globalInertia"], 0.3)
+        self.assertAlmostEqual(proposal["metrics"]["globalEntropy"], 0.7)
         self.assertEqual(proposal["rows"][0]["comparableObjectiveVector"], [0.5, 0.75])
         self.assertEqual(proposal["charts"]["pareto"][0]["coordinateSpace"], "comparable_normalized")
 

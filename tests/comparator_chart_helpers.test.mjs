@@ -160,21 +160,21 @@ test("diagnostic iteration metrics use higher-is-better metadata", () => {
     higherIsBetter: true,
   });
   assert.deepEqual(comparatorMetricMetadata("globalInertia"), {
-    description: "Mayor inercia indica mayor dispersion global de embeddings.",
+    description: "Mayor K-means inertia indica mayor dispersion global de embeddings.",
     higherIsBetter: true,
   });
   assert.deepEqual(comparatorMetricMetadata("globalEntropy"), {
-    description: "Mayor entropia indica mayor variedad conceptual o semantica.",
+    description: "Mayor entity entropy indica mayor variedad conceptual o semantica.",
     higherIsBetter: true,
   });
 });
 
-test("binary proposal always uses neon green chart color", () => {
+test("binary proposal always uses configured green chart color", () => {
   assert.equal(comparatorIsBinaryProposal({ proposalId: "binary-mopso-cd" }), true);
   assert.equal(comparatorIsBinaryProposal({ instanceId: "binary-mopso-cd:2", proposalId: "binary-mopso-cd" }), true);
-  assert.equal(comparatorProposalColor({ proposalId: "binary-mopso-cd" }, 3), "#14f195");
-  assert.equal(comparatorProposalColor({ instanceId: "binary-mopso-cd:2", proposalId: "binary-mopso-cd" }, 4), "#14f195");
-  assert.notEqual(comparatorProposalColor({ proposalId: "evolmd-mo" }, 0), "#14f195");
+  assert.equal(comparatorProposalColor({ proposalId: "binary-mopso-cd" }, 3), "#2A8C00");
+  assert.equal(comparatorProposalColor({ instanceId: "binary-mopso-cd:2", proposalId: "binary-mopso-cd" }, 4), "#2A8C00");
+  assert.notEqual(comparatorProposalColor({ proposalId: "evolmd-mo" }, 0), "#2A8C00");
 });
 
 test("quality winners do not depend on cost comparability", () => {

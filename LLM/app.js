@@ -745,7 +745,6 @@ const dom = {
   comparatorCombinedParetoChart: document.querySelector("#comparatorCombinedParetoChart"),
   comparatorContributionChart: document.querySelector("#comparatorContributionChart"),
   comparatorHvChart: document.querySelector("#comparatorHvChart"),
-  comparatorNonDominatedChart: document.querySelector("#comparatorNonDominatedChart"),
   comparatorExtentChart: document.querySelector("#comparatorExtentChart"),
   comparatorUnaryEntropyChart: document.querySelector("#comparatorUnaryEntropyChart"),
   comparatorContributionLineChart: document.querySelector("#comparatorContributionLineChart"),
@@ -4804,7 +4803,6 @@ function resetComparatorUi(options = {}) {
   dom.comparatorCombinedParetoChart.innerHTML = "";
   dom.comparatorContributionChart.innerHTML = "";
   dom.comparatorHvChart.innerHTML = "";
-  dom.comparatorNonDominatedChart.innerHTML = "";
   dom.comparatorExtentChart.innerHTML = "";
   dom.comparatorUnaryEntropyChart.innerHTML = "";
   dom.comparatorContributionLineChart.innerHTML = "";
@@ -6665,8 +6663,8 @@ function comparatorBenchmarkMetricDefinitions() {
     qualityMetric("contribution", "contributionLabel", "Contribution", "Aporte al frente combinado P*, con credito compartido entre puntos repetidos."),
     qualityMetric("extent", "extentLabel", "Extent", "Cobertura del frente no dominado en el espacio comparable."),
     qualityMetric("unaryEntropy", "unaryEntropyLabel", "Unary Entropy", "Entropia normalizada de la distribucion del frente comparable."),
-    qualityMetric("globalInertia", "globalInertiaLabel", "K-Means Inertia", "Dispersion geometrica promedio de embeddings SBERT por generacion final disponible."),
-    qualityMetric("globalEntropy", "globalEntropyLabel", "Entity Entropy", "Variedad conceptual por lemas NOUN/VERB/ADJ en la generacion final disponible."),
+    qualityMetric("globalInertia", "globalInertiaLabel", "K-means inertia", "Dispersion geometrica promedio de embeddings SBERT por generacion final disponible."),
+    qualityMetric("globalEntropy", "globalEntropyLabel", "Entity entropy", "Variedad conceptual por lemas NOUN/VERB/ADJ en la generacion final disponible."),
     {
       id: "process",
       label: "Wall-clock",
@@ -6803,13 +6801,12 @@ function renderComparatorCharts(run) {
   renderComparatorParetoCharts(filteredProposals);
   renderComparatorCombinedSelectedChart(filteredProposals);
   renderComparatorContributionChart(filteredProposals);
-  renderComparatorMetricLine(dom.comparatorHvChart, filteredProposals, "hypervolume", "HV por iteracion");
-  renderComparatorMetricLine(dom.comparatorNonDominatedChart, filteredProposals, "nonDominatedRows", "Soluciones no dominadas");
-  renderComparatorMetricLine(dom.comparatorExtentChart, filteredProposals, "extent", "Extent por iteracion");
-  renderComparatorMetricLine(dom.comparatorUnaryEntropyChart, filteredProposals, "unaryEntropy", "Unary Entropy por iteracion");
-  renderComparatorMetricLine(dom.comparatorContributionLineChart, filteredProposals, "contribution", "Contribution por iteracion");
-  renderComparatorMetricLine(dom.comparatorGlobalInertiaChart, filteredProposals, "globalInertia", "Inercia global por iteracion");
-  renderComparatorMetricLine(dom.comparatorGlobalEntropyChart, filteredProposals, "globalEntropy", "Entropia global por iteracion");
+  renderComparatorMetricLine(dom.comparatorHvChart, filteredProposals, "hypervolume", "HV");
+  renderComparatorMetricLine(dom.comparatorContributionLineChart, filteredProposals, "contribution", "Contribution");
+  renderComparatorMetricLine(dom.comparatorExtentChart, filteredProposals, "extent", "Extent");
+  renderComparatorMetricLine(dom.comparatorUnaryEntropyChart, filteredProposals, "unaryEntropy", "Unary Entropy");
+  renderComparatorMetricLine(dom.comparatorGlobalInertiaChart, filteredProposals, "globalInertia", "K-means inertia");
+  renderComparatorMetricLine(dom.comparatorGlobalEntropyChart, filteredProposals, "globalEntropy", "Entity entropy");
   installChartPanelMinimizers(dom.comparatorChartsTab || document.querySelector("#comparatorChartsTab"));
 }
 

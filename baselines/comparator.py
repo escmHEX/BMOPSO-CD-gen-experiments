@@ -2211,6 +2211,7 @@ class ComparatorService:
         self._mark_selected_rows(rows, selected_rows)
         metrics = self._summarize_rows(proposal, rows, output_dir)
         series = self._build_metric_series(proposal, output_dir, rows, reference_text)
+        attach_terminal_series_diagnostics(metrics, series)
         charts = self._build_chart_payload(proposal, rows, selected_rows, series)
         embedding_front_rows = embedding_front_rows_from_rows(rows, selected_rows)
         return {
@@ -4065,7 +4066,7 @@ class ComparatorService:
                 texts.append(text)
         return texts
 
-    def _posthoc_population_diagnostics(self, generated_texts: list[str]) -> dict[str, float] | None:
+    def _posthoc_population_diagnostics(self, generated_texts: list[str]) -> dict[str, float | None] | None:
         texts = [text.strip() for text in generated_texts if text and text.strip()]
         if not texts:
             return None
@@ -4081,14 +4082,15 @@ class ComparatorService:
                     KMeans(n_clusters=clusters, n_init=10, random_state=0).fit(embedding_rows).inertia_
                     / len(embedding_rows)
                 )
+            entity_entropy = self._posthoc_entity_entropy(texts)
             return {
                 "globalInertia": finite_float(inertia, 0.0),
-                "globalEntropy": self._posthoc_entity_entropy(texts),
+                "globalEntropy": entity_entropy,
             }
         except Exception:
             return None
 
-    def _posthoc_entity_entropy(self, generated_texts: list[str]) -> float:
+    def _posthoc_entity_entropy(self, generated_texts: list[str]) -> float | None:
         try:
             if self._posthoc_spacy_model is None:
                 import spacy
@@ -4111,7 +4113,7 @@ class ComparatorService:
             raw_entropy = -sum((count / total) * math.log2(count / total) for count in counts.values())
             return finite_float(raw_entropy / math.log2(total_tokens))
         except Exception:
-            return 0.0
+            return None
 
     def _read_binary_archive_metric_series(
         self,

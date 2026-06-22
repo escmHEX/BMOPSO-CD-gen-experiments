@@ -2218,18 +2218,18 @@ Context:
             </article>
             <section class="grid three-columns">
               <article class="panel">
-                <div class="panel-title"><h2>HV por iteracion</h2></div>
-                <p class="chart-help">Mayor HV es mejor: mide area dominada respecto a [0,0] en el espacio comparable.</p>
+                <div class="panel-title"><h2>HV</h2></div>
+                <p class="chart-help">Mayor HV es mejor: mide area dominada por iteracion respecto a [0,0] en el espacio comparable.</p>
                 <div id="comparatorHvChart" class="chart-surface small-chart"></div>
               </article>
               <article class="panel">
-                <div class="panel-title"><h2>No dominadas</h2></div>
-                <p class="chart-help">Mayor cantidad es mejor: indica cuantas soluciones Pareto conserva cada iteracion.</p>
-                <div id="comparatorNonDominatedChart" class="chart-surface small-chart"></div>
+                <div class="panel-title"><h2>Contribution</h2></div>
+                <p class="chart-help">Mayor es mejor: indica mayor aporte al frente combinado P* por iteracion.</p>
+                <div id="comparatorContributionLineChart" class="chart-surface small-chart"></div>
               </article>
               <article class="panel">
                 <div class="panel-title"><h2>Extent</h2></div>
-                <p class="chart-help">Mayor es mejor: mide cobertura del frente comparable.</p>
+                <p class="chart-help">Mayor es mejor: mide cobertura del frente comparable por iteracion.</p>
                 <div id="comparatorExtentChart" class="chart-surface small-chart"></div>
               </article>
             </section>
@@ -2240,20 +2240,13 @@ Context:
                 <div id="comparatorUnaryEntropyChart" class="chart-surface small-chart"></div>
               </article>
               <article class="panel">
-                <div class="panel-title"><h2>Contribution</h2></div>
-                <p class="chart-help">Mayor es mejor: indica mayor aporte al frente combinado P* por iteracion.</p>
-                <div id="comparatorContributionLineChart" class="chart-surface small-chart"></div>
-              </article>
-              <article class="panel">
-                <div class="panel-title"><h2>Inercia global por iteracion</h2></div>
-                <p class="chart-help">Mayor inercia indica mayor dispersion global de embeddings en la poblacion.</p>
+                <div class="panel-title"><h2>K-means inertia</h2></div>
+                <p class="chart-help">Mayor K-means inertia indica mayor dispersion global de embeddings en la poblacion por iteracion.</p>
                 <div id="comparatorGlobalInertiaChart" class="chart-surface small-chart"></div>
               </article>
-            </section>
-            <section class="grid two-columns">
               <article class="panel">
-                <div class="panel-title"><h2>Entropia global por iteracion</h2></div>
-                <p class="chart-help">Mayor entropia indica mayor variedad conceptual o semantica observada.</p>
+                <div class="panel-title"><h2>Entity entropy</h2></div>
+                <p class="chart-help">Mayor entity entropy indica mayor variedad conceptual observada por iteracion.</p>
                 <div id="comparatorGlobalEntropyChart" class="chart-surface small-chart"></div>
               </article>
             </section>
