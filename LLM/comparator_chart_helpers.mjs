@@ -10,6 +10,18 @@ export function comparatorProposalEntityId(proposal) {
   return proposal?.instanceId || proposal?.proposalId || "";
 }
 
+export function comparatorIsBinaryProposal(proposal) {
+  const proposalId = String(proposal?.proposalId || proposal?.baseProposalId || proposal || "");
+  const instanceId = String(proposal?.instanceId || "");
+  return proposalId === "binary-mopso-cd" || instanceId === "binary-mopso-cd" || instanceId.startsWith("binary-mopso-cd:");
+}
+
+export function comparatorProposalColor(proposal, index = 0) {
+  if (comparatorIsBinaryProposal(proposal)) return "#14f195";
+  const palette = ["#2458b8", "#0f766e", "#b42318", "#7c3aed", "#ca8a04"];
+  return palette[index % palette.length];
+}
+
 export function comparatorBenchmarkProposals(proposals = []) {
   return [...proposals].sort((left, right) => {
     const leftIsBinary = left?.proposalId === "binary-mopso-cd" ? 0 : 1;

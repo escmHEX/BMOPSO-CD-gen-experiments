@@ -14,6 +14,8 @@ SUPPORTED_SBERT_MODELS = {
     "Xenova/gte-small": "thenlper/gte-small",
 }
 
+SUPPORTED_PROJECTION_METHODS = {"pca", "tsne", "umap"}
+
 CANONICAL_SBERT_MODELS = {
     "sentence-transformers/all-MiniLM-L6-v2": "all-MiniLM-L6-v2",
     "thenlper/gte-small": "thenlper/gte-small",
@@ -28,6 +30,96 @@ def finite_float(value: Any, default: float = 0.0) -> float:
     if number != number or number in (float("inf"), float("-inf")):
         return default
     return number
+
+
+def normalize_projection_method(method: Any) -> str:
+    normalized = str(method or "pca").strip().lower()
+    if normalized not in SUPPORTED_PROJECTION_METHODS:
+        raise ValueError("method debe ser pca, tsne o umap.")
+    return normalized
+
+
+def _pad_projected_coordinates(projected: Any) -> list[list[float]]:
+    coordinates: list[list[float]] = []
+    for row in projected:
+        values = list(row)
+        x = finite_float(values[0] if len(values) > 0 else 0.0)
+        y = finite_float(values[1] if len(values) > 1 else 0.0)
+        coordinates.append([x, y])
+    return coordinates
+
+
+def project_embeddings_2d(embeddings: Any, method: Any = "pca") -> dict[str, Any]:
+    requested_method = normalize_projection_method(method)
+    import numpy as np
+
+    matrix = np.asarray(embeddings, dtype=float)
+    if matrix.ndim != 2 or matrix.shape[0] < 1 or matrix.shape[1] < 1:
+        raise ValueError("embeddings debe ser una matriz no vacia.")
+
+    sample_count = int(matrix.shape[0])
+    feature_count = int(matrix.shape[1])
+    warnings: list[str] = []
+
+    if sample_count == 1:
+        return {
+            "method": requested_method,
+            "effectiveMethod": "single-point",
+            "coordinates": [[0.0, 0.0]],
+            "warnings": ["Solo hay un punto; se grafica en el origen."],
+        }
+
+    if requested_method == "pca" or sample_count < 3:
+        if requested_method != "pca":
+            warnings.append(f"{requested_method} requiere al menos 3 puntos; se uso PCA.")
+        from sklearn.decomposition import PCA
+
+        component_count = min(2, sample_count, feature_count)
+        projected = PCA(n_components=component_count).fit_transform(matrix)
+        coordinates = _pad_projected_coordinates(projected)
+        return {
+            "method": requested_method,
+            "effectiveMethod": "pca",
+            "coordinates": coordinates,
+            "warnings": warnings,
+        }
+
+    if requested_method == "tsne":
+        from sklearn.manifold import TSNE
+
+        perplexity = min(30.0, max(1.0, (sample_count - 1) / 3.0))
+        projected = TSNE(
+            n_components=2,
+            perplexity=perplexity,
+            learning_rate="auto",
+            init="pca",
+            random_state=0,
+        ).fit_transform(matrix)
+        return {
+            "method": requested_method,
+            "effectiveMethod": "tsne",
+            "coordinates": _pad_projected_coordinates(projected),
+            "warnings": warnings,
+        }
+
+    try:
+        import umap.umap_ as umap_module
+    except ImportError as error:
+        raise ValueError("UMAP requiere instalar el paquete umap-learn.") from error
+
+    projected = umap_module.UMAP(
+        n_components=2,
+        n_neighbors=min(15, max(2, sample_count - 1)),
+        min_dist=0.1,
+        metric="cosine",
+        random_state=0,
+    ).fit_transform(matrix)
+    return {
+        "method": requested_method,
+        "effectiveMethod": "umap",
+        "coordinates": _pad_projected_coordinates(projected),
+        "warnings": warnings,
+    }
 
 
 class SbertSimilarityService:

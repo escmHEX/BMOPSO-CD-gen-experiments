@@ -79,6 +79,85 @@ button.compact {
   padding: 0 0.85rem;
 }
 
+.copyable-value {
+  display: inline-flex;
+  max-width: 100%;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.copy-source {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.copy-button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 0.55rem;
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+.context-cell .copyable-value,
+.long-cell .copyable-value {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.context-cell .copy-source,
+.long-cell .copy-source {
+  max-height: 120px;
+  overflow: auto;
+}
+
+.metric strong .copyable-value {
+  align-items: center;
+}
+
+.metric strong .copy-source {
+  color: var(--blue);
+  font-size: clamp(1.1rem, 2vw, 1.65rem);
+  line-height: 1.05;
+}
+
+.metric strong .copy-button {
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.status-badge {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 9px;
+  border: 1px solid transparent;
+  font-size: 0.78rem;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.status-ok {
+  border-color: #047857;
+  background: #d1fae5;
+  color: #064e3b;
+}
+
+.status-running {
+  border-color: #1d4ed8;
+  background: #dbeafe;
+  color: #1e3a8a;
+}
+
+.status-error {
+  border-color: #b91c1c;
+  background: #fee2e2;
+  color: #7f1d1d;
+}
+
 .has-abbreviation-tooltip {
   cursor: help;
   text-decoration: underline dotted rgba(97, 113, 131, 0.55);
@@ -588,6 +667,52 @@ label span,
   padding: 10px;
 }
 
+.proposal-git-config summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22px;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.proposal-git-config summary::-webkit-details-marker {
+  display: none;
+}
+
+.proposal-git-config summary b {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #b8c9d9;
+  border-radius: 999px;
+  background: #ffffff;
+}
+
+.proposal-git-config summary b::before,
+.proposal-git-config summary b::after {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 9px;
+  height: 2px;
+  border-radius: 2px;
+  background: #0f766e;
+  transform: translate(-50%, -50%);
+}
+
+.proposal-git-config summary b::after {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+.proposal-git-config[open] summary b::after {
+  transform: translate(-50%, -50%) rotate(0deg);
+}
+
+.proposal-git-config:not([open]) .proposal-git-fields {
+  display: none;
+}
+
 .proposal-git-config.compact .proposal-git-fields {
   grid-template-columns: 1fr;
 }
@@ -1084,6 +1209,50 @@ input[type="checkbox"]:disabled {
 .chart-surface {
   width: 100%;
   min-height: 400px;
+}
+
+.chart-panel {
+  position: relative;
+}
+
+.chart-minimize-button {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 3;
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+  border: 1px solid #b8c9d9;
+  background: #ffffff;
+  color: #0f2742;
+  font-weight: 900;
+}
+
+.chart-panel .panel-title {
+  padding-left: 36px;
+}
+
+.chart-panel.is-chart-minimized {
+  padding-bottom: 12px;
+}
+
+.chart-panel.is-chart-minimized .chart-surface,
+.chart-panel.is-chart-minimized .chart-help {
+  display: none;
+}
+
+.inline-select-field {
+  display: grid;
+  min-width: min(220px, 100%);
+  gap: 4px;
+  margin: 0;
+}
+
+.inline-select-field span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 .cli-ordered-fieldset {

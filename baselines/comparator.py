@@ -35,6 +35,8 @@ from baselines.comparator_metrics import entropy_weights
 from baselines.comparator_metrics import mark_non_dominated
 from baselines.comparator_metrics import normalized_objective_vector
 from baselines.comparator_metrics import topsis_scores
+from sbert_service import normalize_projection_method
+from sbert_service import project_embeddings_2d
 from sbert_service import shared_sbert_service
 
 
@@ -111,7 +113,7 @@ DEFAULT_SELECTED_PROPOSALS = tuple(COMPARATOR_DEFAULTS.get("selectedProposalIds"
 DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN = config_bool(COMPARATOR_DEFAULTS.get("updateRepositoriesBeforeRun"), False)
 DEFAULT_EXECUTION_MODE = str(COMPARATOR_DEFAULTS.get("executionMode") or EXECUTION_MODE_FAIR_SEQUENTIAL)
 COMPARATOR_TIMEOUT_MINUTES_MIN = 2400
-COMPARATOR_TIMEOUT_MINUTES_MAX = 10080
+COMPARATOR_TIMEOUT_MINUTES_MAX = 10800
 METRIC_SCHEMA_VERSION = 4
 METRIC_COORDINATE_SPACE = "comparable_normalized"
 POSTHOC_DIAGNOSTIC_KMEANS_CLUSTERS = 5
@@ -1267,6 +1269,94 @@ def latest_finite_series_value(series: list[dict[str, Any]], key: str) -> float 
     return None
 
 
+def embedding_front_rows_from_rows(
+    rows: list[dict[str, Any]],
+    selected_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    selected_rows = selected_rows or []
+    selected_texts = {canonical_generated_text(row.get("generatedText")) for row in selected_rows}
+    selected_ranks = {
+        canonical_generated_text(row.get("generatedText")): row.get("selectionRank")
+        for row in selected_rows
+    }
+    front_rows: list[dict[str, Any]] = []
+    for row in rows:
+        text = str(row.get("generatedText") or "").strip()
+        if not text or row.get("status") != "ok":
+            continue
+        if not (row.get("nonDominated") or row.get("postHocNonDominated")):
+            continue
+        key = canonical_generated_text(text)
+        selected = bool(row.get("selected")) or key in selected_texts
+        front_rows.append(
+            {
+                "text": text,
+                "selected": selected,
+                "rank": row.get("rank"),
+                "selectionRank": row.get("selectionRank") or selected_ranks.get(key),
+                "repetitionIndex": row.get("repetitionIndex"),
+                "repetitionSeed": row.get("repetitionSeed"),
+                "sourceIndex": row.get("sourceIndex"),
+                "objectiveLabel": row.get("comparableObjectiveLabel")
+                or row.get("diagnosticObjectiveLabel")
+                or row.get("objectiveLabel")
+                or "--",
+                "proposalId": row.get("proposalId") or "",
+                "instanceId": row.get("instanceId") or row.get("proposalId") or "",
+                "displayName": row.get("displayName") or "",
+            }
+        )
+    return front_rows
+
+
+def proposal_embedding_front_rows(proposal: dict[str, Any]) -> list[dict[str, Any]]:
+    existing = proposal.get("embeddingFrontRows")
+    if isinstance(existing, list):
+        rows = [row for row in existing if isinstance(row, dict) and str(row.get("text") or "").strip()]
+        if rows:
+            return rows
+
+    fallback_rows: list[dict[str, Any]] = []
+    selected_texts = {
+        canonical_generated_text(point.get("label") or point.get("text"))
+        for point in ((proposal.get("charts") or {}).get("selected") or [])
+        if isinstance(point, dict)
+    }
+    for point in ((proposal.get("charts") or {}).get("nonDominated") or []):
+        if not isinstance(point, dict):
+            continue
+        text = str(point.get("label") or point.get("text") or "").strip()
+        if not text:
+            continue
+        key = canonical_generated_text(text)
+        fallback_rows.append(
+            {
+                "text": text,
+                "selected": bool(point.get("selected")) or key in selected_texts,
+                "rank": point.get("rank"),
+                "selectionRank": point.get("selectionRank"),
+                "repetitionIndex": point.get("repetitionIndex"),
+                "sourceIndex": point.get("sourceIndex"),
+                "objectiveLabel": point.get("comparableObjectiveLabel")
+                or point.get("nativeObjectiveLabel")
+                or point.get("objectiveLabel")
+                or "--",
+                "proposalId": point.get("proposalId") or proposal.get("proposalId") or "",
+                "instanceId": point.get("instanceId") or proposal.get("instanceId") or proposal.get("proposalId") or "",
+                "displayName": point.get("displayName") or proposal.get("displayName") or "",
+            }
+        )
+    if fallback_rows:
+        return fallback_rows
+
+    rows = proposal.get("rows") if isinstance(proposal.get("rows"), list) else []
+    selected_rows = proposal.get("selectedRows") if isinstance(proposal.get("selectedRows"), list) else []
+    return embedding_front_rows_from_rows(
+        [row for row in rows if isinstance(row, dict)],
+        [row for row in selected_rows if isinstance(row, dict)],
+    )
+
+
 def aggregate_proposal_repetitions(
     proposal: ProposalDefinition,
     proposal_dir: Path,
@@ -1290,6 +1380,7 @@ def aggregate_proposal_repetitions(
             "status": status,
             "outputDir": str(proposal_dir),
             "rows": [],
+            "embeddingFrontRows": [],
             "metrics": aggregate_comparator_metrics([], proposal_dir),
             "cost": aggregate_comparator_costs(results),
             "error": failure.get("error") or "Todas las repeticiones fallaron.",
@@ -1300,6 +1391,7 @@ def aggregate_proposal_repetitions(
 
     rows: list[dict[str, Any]] = []
     selected_rows: list[dict[str, Any]] = []
+    embedding_front_rows: list[dict[str, Any]] = []
     for result in completed:
         repetition_index = result.get("repetitionIndex")
         repetition_seed = result.get("repetitionSeed")
@@ -1325,9 +1417,21 @@ def aggregate_proposal_repetitions(
                     "repetitionIndex": repetition_index,
                     "repetitionSeed": repetition_seed,
                 })
+        for row in result.get("embeddingFrontRows") or []:
+            if isinstance(row, dict):
+                embedding_front_rows.append({
+                    **row,
+                    "instanceId": row.get("instanceId") or identity.get("instanceId"),
+                    "proposalId": row.get("proposalId") or identity.get("proposalId"),
+                    "displayName": row.get("displayName") or identity.get("displayName"),
+                    "repetitionIndex": row.get("repetitionIndex") or repetition_index,
+                    "repetitionSeed": row.get("repetitionSeed") or repetition_seed,
+                })
 
     series = aggregate_series(completed)
     metrics = attach_terminal_series_diagnostics(aggregate_comparator_metrics(completed, proposal_dir), series)
+    if not embedding_front_rows:
+        embedding_front_rows = embedding_front_rows_from_rows(rows, selected_rows)
 
     return {
         **identity,
@@ -1335,6 +1439,7 @@ def aggregate_proposal_repetitions(
         "outputDir": str(proposal_dir),
         "rows": rows,
         "selectedRows": selected_rows,
+        "embeddingFrontRows": embedding_front_rows,
         "metrics": metrics,
         "series": series,
         "charts": build_charts_from_rows(rows, selected_rows, series),
@@ -1800,6 +1905,87 @@ class ComparatorService:
             return self._with_metric_recompute_status(read_json(summary_path))
         return None
 
+    def get_run_embedding_projection(self, run_id: str, method: str = "pca") -> dict[str, Any] | None:
+        requested_method = normalize_projection_method(method)
+        run = self.get_run(run_id)
+        if not run:
+            return None
+
+        reference_text = str((run.get("config") or {}).get("referenceText") or run.get("referenceText") or "").strip()
+        proposals: list[dict[str, Any]] = []
+        projection_rows: list[tuple[int, dict[str, Any]]] = []
+        warnings: list[str] = []
+
+        for proposal_index, proposal in enumerate(run.get("proposals") or []):
+            if not isinstance(proposal, dict) or proposal.get("status") != STATUS_COMPLETED:
+                continue
+            rows = proposal_embedding_front_rows(proposal)
+            proposal_payload = {
+                "instanceId": proposal.get("instanceId") or proposal.get("proposalId") or "",
+                "proposalId": proposal.get("proposalId") or "",
+                "displayName": proposal.get("displayName") or proposal.get("proposalId") or "",
+                "baseDisplayName": proposal.get("baseDisplayName") or proposal.get("displayName") or "",
+                "points": [],
+            }
+            proposals.append(proposal_payload)
+            for row in rows:
+                projection_rows.append((len(proposals) - 1, row))
+
+        if not projection_rows:
+            return {
+                "runId": run_id,
+                "method": requested_method,
+                "effectiveMethod": None,
+                "embeddingModel": POSTHOC_EMBEDDING_MODEL,
+                "reference": {"text": reference_text, "x": None, "y": None},
+                "proposals": proposals,
+                "warnings": ["No hay textos del frente final disponibles para proyectar."],
+            }
+
+        texts = [reference_text or "[texto referencia vacio]"]
+        texts.extend(str(row.get("text") or "").strip() or "[texto vacio]" for _index, row in projection_rows)
+        embeddings, cost = shared_sbert_service().encode_texts(POSTHOC_EMBEDDING_MODEL, texts)
+        projection = project_embeddings_2d(embeddings, requested_method)
+        coordinates = projection["coordinates"]
+        warnings.extend(projection.get("warnings") or [])
+
+        reference_coordinates = coordinates[0] if coordinates else [None, None]
+        for coordinate, (proposal_index, row) in zip(coordinates[1:], projection_rows):
+            proposals[proposal_index]["points"].append(
+                {
+                    "x": coordinate[0],
+                    "y": coordinate[1],
+                    "text": row.get("text") or "",
+                    "selected": bool(row.get("selected")),
+                    "rank": row.get("rank"),
+                    "selectionRank": row.get("selectionRank"),
+                    "repetitionIndex": row.get("repetitionIndex"),
+                    "repetitionSeed": row.get("repetitionSeed"),
+                    "sourceIndex": row.get("sourceIndex"),
+                    "objectiveLabel": row.get("objectiveLabel") or "--",
+                    "proposalId": row.get("proposalId") or proposals[proposal_index].get("proposalId") or "",
+                    "instanceId": row.get("instanceId") or proposals[proposal_index].get("instanceId") or "",
+                    "displayName": row.get("displayName") or proposals[proposal_index].get("displayName") or "",
+                }
+            )
+
+        return {
+            "runId": run_id,
+            "method": projection["method"],
+            "effectiveMethod": projection["effectiveMethod"],
+            "embeddingModel": cost["embeddingModel"],
+            "sourceModel": cost["sourceModel"],
+            "embeddingTexts": cost["embeddingTexts"],
+            "embeddingWallClockSeconds": cost["embeddingWallClockSeconds"],
+            "reference": {
+                "text": reference_text,
+                "x": reference_coordinates[0],
+                "y": reference_coordinates[1],
+            },
+            "proposals": proposals,
+            "warnings": warnings,
+        }
+
     def get_run_logs(self, run_id: str, offset: int = 0, limit: int | None = None) -> dict[str, Any] | None:
         run = self.get_run(run_id)
         if not run:
@@ -2026,11 +2212,13 @@ class ComparatorService:
         metrics = self._summarize_rows(proposal, rows, output_dir)
         series = self._build_metric_series(proposal, output_dir, rows, reference_text)
         charts = self._build_chart_payload(proposal, rows, selected_rows, series)
+        embedding_front_rows = embedding_front_rows_from_rows(rows, selected_rows)
         return {
             **result,
             "status": STATUS_COMPLETED,
             "rows": rows[:top_k],
             "selectedRows": selected_rows,
+            "embeddingFrontRows": embedding_front_rows,
             "metrics": metrics,
             "series": series,
             "charts": charts,
@@ -3539,12 +3727,14 @@ class ComparatorService:
             plot_started = time.perf_counter()
             charts = self._build_chart_payload(base_proposal, rows, selected_rows, series)
             add_cost_timing(cost, "plotPreparationSeconds", time.perf_counter() - plot_started)
+            embedding_front_rows = embedding_front_rows_from_rows(rows, selected_rows)
             return {
                 **self._result_identity(instance),
                 "status": STATUS_COMPLETED,
                 "outputDir": str(output_dir),
                 "rows": rows[: run["config"]["topK"]],
                 "selectedRows": selected_rows,
+                "embeddingFrontRows": embedding_front_rows,
                 "metrics": metrics,
                 "series": series,
                 "charts": charts,
@@ -4942,6 +5132,7 @@ class ComparatorService:
             "status": STATUS_FAILED,
             "outputDir": str(proposal_dir),
             "rows": [],
+            "embeddingFrontRows": [],
             "metrics": {
                 "totalRows": 0,
                 "completedRows": 0,

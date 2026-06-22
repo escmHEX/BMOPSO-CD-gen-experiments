@@ -13,6 +13,7 @@ from baselines import comparator as comparator_module
 from baselines.bootstrap import install_evolmd_bertscore_guard
 from baselines.comparator import ComparatorService, PROPOSALS, aggregate_proposal_repetitions
 from baselines.comparator import aggregate_series
+from baselines.comparator import embedding_front_rows_from_rows
 from baselines.comparator import mark_non_dominated
 from baselines.comparator_metrics import build_charts_from_rows
 from baselines.comparator_metrics import calculate_contribution
@@ -93,11 +94,11 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(parsed["repetitionsK"], 4)
         self.assertIn("binary-mopso-cd", parsed["selectedProposalIds"])
 
-    def test_comparator_config_timeout_defaults_to_2400_minutes(self):
+    def test_comparator_config_timeout_defaults_to_10800_minutes(self):
         service = ComparatorService(Path("."))
         parsed = service._read_config({"referenceText": "reference"})
 
-        self.assertEqual(parsed["timeoutMinutes"], 2400)
+        self.assertEqual(parsed["timeoutMinutes"], 10800)
 
     def test_comparator_config_rejects_timeout_below_2400_minutes(self):
         service = ComparatorService(Path("."))
@@ -1618,6 +1619,76 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(charts["nonDominated"][0]["x"], 0.85)
         self.assertEqual(charts["nonDominated"][0]["y"], 0.25)
 
+    def test_embedding_front_rows_are_built_from_full_front_before_top_k(self):
+        rows = [
+            {
+                "proposalId": "binary-mopso-cd",
+                "instanceId": "binary-mopso-cd",
+                "displayName": "Binary MOPSO-CD",
+                "status": "ok",
+                "generatedText": "front a",
+                "rank": 1,
+                "sourceIndex": 1,
+                "nonDominated": True,
+                "comparableObjectiveLabel": "[0.9, 0.4]",
+            },
+            {
+                "proposalId": "binary-mopso-cd",
+                "instanceId": "binary-mopso-cd",
+                "displayName": "Binary MOPSO-CD",
+                "status": "ok",
+                "generatedText": "front b",
+                "rank": 2,
+                "sourceIndex": 2,
+                "nonDominated": True,
+                "comparableObjectiveLabel": "[0.8, 0.6]",
+            },
+            {
+                "proposalId": "binary-mopso-cd",
+                "instanceId": "binary-mopso-cd",
+                "displayName": "Binary MOPSO-CD",
+                "status": "ok",
+                "generatedText": "dominated",
+                "rank": 3,
+                "sourceIndex": 3,
+                "nonDominated": False,
+            },
+        ]
+        selected_rows = [{"generatedText": "front b", "selectionRank": 1}]
+
+        front_rows = embedding_front_rows_from_rows(rows, selected_rows)
+
+        self.assertEqual([row["text"] for row in front_rows], ["front a", "front b"])
+        self.assertFalse(front_rows[0]["selected"])
+        self.assertTrue(front_rows[1]["selected"])
+        self.assertEqual(front_rows[1]["selectionRank"], 1)
+
+    def test_aggregate_repetitions_preserves_embedding_front_rows_beyond_visible_rows(self):
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        aggregated = aggregate_proposal_repetitions(
+            proposal,
+            Path("out"),
+            [
+                {
+                    "status": "completed",
+                    "repetitionIndex": 1,
+                    "rows": [{"generatedText": "visible only"}],
+                    "selectedRows": [],
+                    "embeddingFrontRows": [
+                        {"text": "front a", "proposalId": "binary-mopso-cd"},
+                        {"text": "front b", "proposalId": "binary-mopso-cd"},
+                    ],
+                    "metrics": {},
+                    "cost": {},
+                    "series": [],
+                }
+            ],
+            1,
+        )
+
+        self.assertEqual([row["text"] for row in aggregated["embeddingFrontRows"]], ["front a", "front b"])
+        self.assertEqual(aggregated["embeddingFrontRows"][0]["repetitionIndex"], 1)
+
     def test_binary_summary_uses_common_proxy_for_hypervolume(self):
         service = ComparatorService(Path("."))
         proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
@@ -2326,6 +2397,70 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertAlmostEqual(proposal["metrics"]["hypervolume"], 0.375)
         self.assertEqual(proposal["rows"][0]["comparableObjectiveVector"], [0.5, 0.75])
         self.assertEqual(proposal["charts"]["pareto"][0]["coordinateSpace"], "comparable_normalized")
+
+    def test_embedding_projection_payload_uses_front_rows_without_raw_embeddings(self):
+        class FakeSbertService:
+            def encode_texts(self, model_name, texts):
+                return (
+                    [
+                        [1.0, 0.0, 0.0],
+                        [0.8, 0.2, 0.0],
+                        [0.2, 0.8, 0.0],
+                    ],
+                    {
+                        "embeddingModel": model_name,
+                        "sourceModel": "sentence-transformers/all-MiniLM-L6-v2",
+                        "embeddingTexts": len(texts),
+                        "embeddingWallClockSeconds": 0.01,
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_id = "projection-run"
+            run_dir = root / "runs" / "comparator" / run_id
+            run_dir.mkdir(parents=True)
+            summary = {
+                "runId": run_id,
+                "status": "completed",
+                "runDir": str(run_dir),
+                "config": {"referenceText": "reference"},
+                "proposals": [
+                    {
+                        "proposalId": "binary-mopso-cd",
+                        "instanceId": "binary-mopso-cd",
+                        "displayName": "Binary MOPSO-CD",
+                        "status": "completed",
+                        "embeddingFrontRows": [
+                            {"text": "front a", "selected": True, "selectionRank": 1, "objectiveLabel": "[0.9, 0.4]"},
+                            {"text": "front b", "selected": False, "objectiveLabel": "[0.8, 0.6]"},
+                        ],
+                    }
+                ],
+            }
+            (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+            with patch.object(comparator_module, "shared_sbert_service", return_value=FakeSbertService()):
+                payload = service.get_run_embedding_projection(run_id, "pca")
+
+        self.assertEqual(payload["runId"], run_id)
+        self.assertEqual(payload["method"], "pca")
+        self.assertEqual(payload["effectiveMethod"], "pca")
+        self.assertEqual(payload["embeddingTexts"], 3)
+        self.assertIn("x", payload["reference"])
+        self.assertEqual(len(payload["proposals"][0]["points"]), 2)
+        self.assertNotIn("embeddings", payload)
+        self.assertNotIn("embedding", payload["proposals"][0]["points"][0])
+
+    def test_embedding_projection_returns_none_for_missing_run(self):
+        service = ComparatorService(Path("."))
+        self.assertIsNone(service.get_run_embedding_projection("missing-run", "pca"))
+
+    def test_embedding_projection_rejects_invalid_method(self):
+        service = ComparatorService(Path("."))
+        with self.assertRaises(ValueError):
+            service.get_run_embedding_projection("missing-run", "mds")
 
     def test_evolmd_bertscore_guard_assigns_zero_to_empty_outputs(self):
         with tempfile.TemporaryDirectory() as temp_dir:

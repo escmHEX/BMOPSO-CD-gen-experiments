@@ -8,10 +8,12 @@ import {
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
   comparatorHypervolumeArea,
+  comparatorIsBinaryProposal,
   comparatorIsGloballyNonDominated,
   comparatorMetricCellClassName,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
+  comparatorProposalColor,
 } from "../LLM/comparator_chart_helpers.mjs";
 
 test("global non-dominated front is computed from all proposal points", () => {
@@ -165,6 +167,14 @@ test("diagnostic iteration metrics use higher-is-better metadata", () => {
     description: "Mayor entropia indica mayor variedad conceptual o semantica.",
     higherIsBetter: true,
   });
+});
+
+test("binary proposal always uses neon green chart color", () => {
+  assert.equal(comparatorIsBinaryProposal({ proposalId: "binary-mopso-cd" }), true);
+  assert.equal(comparatorIsBinaryProposal({ instanceId: "binary-mopso-cd:2", proposalId: "binary-mopso-cd" }), true);
+  assert.equal(comparatorProposalColor({ proposalId: "binary-mopso-cd" }, 3), "#14f195");
+  assert.equal(comparatorProposalColor({ instanceId: "binary-mopso-cd:2", proposalId: "binary-mopso-cd" }, 4), "#14f195");
+  assert.notEqual(comparatorProposalColor({ proposalId: "evolmd-mo" }, 0), "#14f195");
 });
 
 test("quality winners do not depend on cost comparability", () => {

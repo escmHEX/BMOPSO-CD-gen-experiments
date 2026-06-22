@@ -1976,7 +1976,7 @@ Context:
             </div>
           </header>
 
-          <section class="grid two-columns">
+          <section class="grid">
             <article class="panel">
               <div class="panel-title">
                 <h2>Referencia y ejecucion</h2>
@@ -2018,6 +2018,16 @@ Context:
                   <small class="field-note">Cantidad maxima de soluciones por propuesta que se muestran en la tabla comparativa.</small>
                 </label>
                 <label>
+                  <span>N individuos</span>
+                  <input id="comparatorN" type="number" min="1" max="500" value="10">
+                  <small class="field-note">Tamano de poblacion o enjambre usado como parametro comun para las propuestas.</small>
+                </label>
+                <label>
+                  <span>Generaciones / iteraciones</span>
+                  <input id="comparatorGeneraciones" type="number" min="0" max="500" value="3">
+                  <small class="field-note">Cantidad de pasos del optimizador; se mantiene comun para comparabilidad.</small>
+                </label>
+                <label>
                   <span>Semilla</span>
                   <input id="comparatorSeed" type="number" min="0" max="2147483647" value="42">
                   <small class="field-note">Semilla base para reproducibilidad; en K repeticiones el comparador deriva semillas por repeticion.</small>
@@ -2042,7 +2052,7 @@ Context:
                 </label>
                 <label>
                   <span>Timeout por propuesta (min)</span>
-                  <input id="comparatorTimeoutMinutes" type="number" min="2400" max="10080" value="2400">
+                  <input id="comparatorTimeoutMinutes" type="number" min="2400" max="10800" value="10800">
                   <small class="field-note">Limite maximo por proceso Python de cada propuesta; por defecto se deja amplio para corridas largas.</small>
                 </label>
                 <label class="span-2 toggle-field">
@@ -2069,24 +2079,6 @@ Context:
                   <input id="comparatorResumeRunId" type="text" autocomplete="off" placeholder="20260603-182527-455acc4b">
                 </label>
                 <button id="resumeComparatorButton" class="secondary" type="button">Reanudar corrida</button>
-              </div>
-            </article>
-
-            <article class="panel">
-              <div class="panel-title">
-                <h2>Parametros comunes</h2>
-              </div>
-              <div class="form-grid">
-                <label>
-                  <span>N individuos</span>
-                  <input id="comparatorN" type="number" min="1" max="500" value="10">
-                  <small class="field-note">Tamano de poblacion o enjambre usado como parametro comun para las propuestas.</small>
-                </label>
-                <label>
-                  <span>Generaciones / iteraciones</span>
-                  <input id="comparatorGeneraciones" type="number" min="0" max="500" value="3">
-                  <small class="field-note">Cantidad de pasos del optimizador; se mantiene comun para comparabilidad.</small>
-                </label>
               </div>
             </article>
           </section>
@@ -2153,11 +2145,6 @@ Context:
               <p>Baselines clonados con salida normalizada.</p>
             </article>
             <article class="metric">
-              <span>Textos en tabla</span>
-              <strong id="comparatorShownRows">--</strong>
-              <p>Soluciones visibles segun el Top K configurado.</p>
-            </article>
-            <article class="metric">
               <span>Run ID</span>
               <strong id="comparatorRunId">--</strong>
               <p>Identificador de la carpeta en runs/comparator.</p>
@@ -2197,7 +2184,8 @@ Context:
           </section>
 
           <nav class="tab-strip" aria-label="Vistas del comparador">
-            <button class="secondary comparator-tab is-active" type="button" data-comparator-tab="charts" aria-selected="true">Graficos</button>
+            <button class="secondary comparator-tab is-active" type="button" data-comparator-tab="charts" aria-selected="true">Gráficos principales</button>
+            <button class="secondary comparator-tab" type="button" data-comparator-tab="otherCharts" aria-selected="false">Otros gráficos</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="table" aria-selected="false">Tabla</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="costs" aria-selected="false">Metricas</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="logs" aria-selected="false">Logs</button>
@@ -2271,6 +2259,24 @@ Context:
             </section>
           </section>
 
+          <section id="comparatorOtherChartsTab" class="comparator-tab-panel">
+            <article class="panel comparator-chart-filter-panel">
+              <div class="panel-title">
+                <h2>Exploración de diversidad</h2>
+                <label class="inline-select-field">
+                  <span>Método</span>
+                  <select id="comparatorProjectionMethod">
+                    <option value="pca" selected>PCA</option>
+                    <option value="tsne">t-SNE</option>
+                    <option value="umap">UMAP</option>
+                  </select>
+                </label>
+              </div>
+              <p id="comparatorProjectionStatus" class="chart-help">Proyecta embeddings SBERT del frente final de cada propuesta.</p>
+            </article>
+            <div id="comparatorEmbeddingProjectionCharts" class="chart-grid"></div>
+          </section>
+
           <section id="comparatorTableTab" class="panel comparator-tab-panel">
             <div class="panel-title">
               <h2>Tabla comparativa</h2>
@@ -2339,7 +2345,7 @@ Context:
               <div class="panel-title">
                 <h2>Contrato de integracion</h2>
               </div>
-              <dl id="comparatorIntegrationDetails" class="definition-grid"></dl>
+              <dl id="comparatorIntegrationDetails" class="definition-grid copyable-definition-grid"></dl>
             </article>
           </section>
         </section>

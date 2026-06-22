@@ -4,11 +4,13 @@ import {
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
   comparatorHypervolumeArea,
+  comparatorIsBinaryProposal,
   comparatorIsGloballyNonDominated,
   comparatorMetricCellClassName,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
   comparatorPointCoordinates,
+  comparatorProposalColor,
 } from "./comparator_chart_helpers.mjs";
 
 const EMBEDDING_MODELS = {
@@ -375,6 +377,9 @@ let comparatorInstancesInitialized = false;
 let comparatorInstanceModalState = null;
 let comparatorCharts = [];
 let comparatorChartSignature = "";
+let comparatorProjectionCharts = [];
+let comparatorProjectionSignature = "";
+let comparatorProjectionLoadToken = 0;
 let comparatorChoiceInstances = [];
 let comparatorChartFilterIds = new Set();
 let comparatorChartFilterSignature = "";
@@ -746,6 +751,9 @@ const dom = {
   comparatorContributionLineChart: document.querySelector("#comparatorContributionLineChart"),
   comparatorGlobalInertiaChart: document.querySelector("#comparatorGlobalInertiaChart"),
   comparatorGlobalEntropyChart: document.querySelector("#comparatorGlobalEntropyChart"),
+  comparatorProjectionMethod: document.querySelector("#comparatorProjectionMethod"),
+  comparatorProjectionStatus: document.querySelector("#comparatorProjectionStatus"),
+  comparatorEmbeddingProjectionCharts: document.querySelector("#comparatorEmbeddingProjectionCharts"),
   comparatorCostExplanation: document.querySelector("#comparatorCostExplanation"),
   comparatorCostTableHead: document.querySelector("#comparatorCostTableHead"),
   comparatorCostTableBody: document.querySelector("#comparatorCostTableBody"),
@@ -832,7 +840,6 @@ const ABBREVIATION_TOOLTIPS = Object.freeze({
   "mejor comp.": "Mejor vector comparable normalizado.",
   "mejor f.o.": "Mejor funcion objetivo.",
   "mejor f.o. comun": "Mejor funcion objetivo comun.",
-  "metricas web": "Metricas calculadas por el backend web despues de la ejecucion.",
   "mo comparable": "Comparacion multiobjetivo en el espacio objetivo normalizado comun.",
   "mteb average (56)": "Promedio MTEB sobre 56 tareas de evaluacion.",
   "n": "Tamano de poblacion o cantidad de individuos.",
@@ -1003,7 +1010,23 @@ function cosineDistance(similarity) {
   return 1 - similarity;
 }
 
+function copyableTextHtml(value, label = "Copiar") {
+  const text = value === null || value === undefined || value === "" ? "--" : String(value);
+  return `
+    <span class="copyable-value">
+      <span class="copy-source">${escapeHtml(text)}</span>
+      <button class="secondary compact copy-button" type="button" data-copy-button>${escapeHtml(label)}</button>
+    </span>
+  `;
+}
+
+function renderCopyableText(element, value, label = "Copiar") {
+  if (!element) return;
+  element.innerHTML = copyableTextHtml(value, label);
+}
+
 function renderDefinitionList(container, entries) {
+  const copyable = container?.classList?.contains("copyable-definition-grid");
   container.replaceChildren(
     ...entries.map(([term, description]) => {
       const wrapper = document.createElement("div");
@@ -1011,7 +1034,11 @@ function renderDefinitionList(container, entries) {
       const dd = document.createElement("dd");
       dt.textContent = term;
       applyAbbreviationTooltip(dt, term);
-      dd.textContent = description;
+      if (copyable) {
+        dd.innerHTML = copyableTextHtml(description);
+      } else {
+        dd.textContent = description;
+      }
       wrapper.append(dt, dd);
       return wrapper;
     }),
@@ -4548,6 +4575,28 @@ async function copyTextToClipboard(text) {
   textarea.remove();
 }
 
+async function handleCopyButtonClick(event) {
+  if (!(event.target instanceof Element)) return;
+  const button = event.target.closest("[data-copy-button]");
+  if (!button) return;
+  const wrapper = button.closest(".copyable-value");
+  const source = wrapper?.querySelector?.(".copy-source");
+  const text = source?.textContent || "";
+  const originalText = button.textContent;
+  button.disabled = true;
+  try {
+    await copyTextToClipboard(text);
+    button.textContent = "Copiado";
+  } catch (error) {
+    button.textContent = "Error";
+  } finally {
+    window.setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = false;
+    }, 1200);
+  }
+}
+
 function renderTurbulenceLogs(logs) {
   if (!logs.length) {
     dom.turbulenceLogOutput.textContent = "Sin logs todavía.";
@@ -4572,12 +4621,12 @@ function comparatorStatusLabel(status) {
 
 function comparatorStatusClass(status) {
   if (status === "completed" || status === "ok") {
-    return "valid";
+    return "status-badge status-ok";
   }
   if (status === "queued" || status === "running") {
-    return "in-progress";
+    return "status-badge status-running";
   }
-  return "invalid";
+  return "status-badge status-error";
 }
 
 function setComparatorRunning(isRunning, cancelRequested = false) {
@@ -4743,7 +4792,7 @@ function resetComparatorUi(options = {}) {
   dom.comparatorWallClock.textContent = "--";
   dom.comparatorLlmTime.textContent = "--";
   dom.comparatorCompletedProposals.textContent = "--";
-  dom.comparatorShownRows.textContent = "--";
+  if (dom.comparatorShownRows) dom.comparatorShownRows.textContent = "--";
   dom.comparatorRunId.textContent = "--";
   dom.comparatorConnectionText.textContent = "Sin ejecucion";
   dom.comparatorConnectionDot.classList.remove("is-busy", "is-error");
@@ -4761,11 +4810,20 @@ function resetComparatorUi(options = {}) {
   dom.comparatorContributionLineChart.innerHTML = "";
   dom.comparatorGlobalInertiaChart.innerHTML = "";
   dom.comparatorGlobalEntropyChart.innerHTML = "";
+  if (dom.comparatorEmbeddingProjectionCharts) {
+    dom.comparatorEmbeddingProjectionCharts.innerHTML = "";
+  }
+  if (dom.comparatorProjectionStatus) {
+    dom.comparatorProjectionStatus.textContent = "Proyecta embeddings SBERT del frente final de cada propuesta.";
+  }
   renderComparatorCostDetails(null);
   comparatorChartSignature = "";
+  comparatorProjectionSignature = "";
+  comparatorProjectionLoadToken += 1;
   comparatorChartFilterIds = new Set();
   comparatorChartFilterSignature = "";
   disposeComparatorCharts();
+  disposeComparatorProjectionCharts();
   dom.comparatorProposalCards.innerHTML = `
     <article class="proposal-card">
       <strong>Sin corrida</strong>
@@ -4790,6 +4848,35 @@ function resetComparatorUi(options = {}) {
 function disposeComparatorCharts() {
   comparatorCharts.forEach((chart) => chart.dispose());
   comparatorCharts = [];
+}
+
+function disposeComparatorProjectionCharts() {
+  comparatorProjectionCharts.forEach((chart) => chart.dispose());
+  comparatorProjectionCharts = [];
+}
+
+function installChartPanelMinimizers(container) {
+  container?.querySelectorAll?.(".panel").forEach((panel) => {
+    if (!panel.querySelector(".chart-surface") || panel.querySelector("[data-chart-minimize]")) return;
+    panel.classList.add("chart-panel");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary compact chart-minimize-button";
+    button.dataset.chartMinimize = "true";
+    button.textContent = "-";
+    button.setAttribute("aria-label", "Minimizar grafico");
+    button.addEventListener("click", () => {
+      const minimized = !panel.classList.contains("is-chart-minimized");
+      panel.classList.toggle("is-chart-minimized", minimized);
+      button.textContent = minimized ? "+" : "-";
+      button.setAttribute("aria-label", minimized ? "Expandir grafico" : "Minimizar grafico");
+      window.setTimeout(() => {
+        comparatorCharts.forEach((chart) => chart.resize());
+        comparatorProjectionCharts.forEach((chart) => chart.resize());
+      }, 0);
+    });
+    panel.prepend(button);
+  });
 }
 
 function disposeComparatorChoices() {
@@ -4931,11 +5018,14 @@ function renderComparatorProposalControls(proposals) {
           </div>
         </div>
         <p>${escapeHtml(proposal.description || "")}</p>
-        <div class="proposal-git-config compact">
-          <div class="proposal-config-section-title">
-            <strong>Git</strong>
-            <small>${escapeHtml(gitStatus)}</small>
-          </div>
+        <details class="proposal-git-config compact">
+          <summary class="proposal-config-section-title">
+            <span>
+              <strong>Git</strong>
+              <small>${escapeHtml(gitStatus)}</small>
+            </span>
+            <b aria-hidden="true"></b>
+          </summary>
           <div class="proposal-git-fields">
             <label>
               <span>Remote</span>
@@ -4952,7 +5042,7 @@ function renderComparatorProposalControls(proposals) {
               </select>
             </label>
           </div>
-        </div>
+        </details>
         <div class="proposal-catalog-actions">
           <button type="button" class="secondary" data-add-comparator-instance="${escapeHtml(proposal.proposalId)}" ${proposal.available ? "" : "disabled"}>${selectedCount ? "Agregar otra configuracion" : "Seleccionar propuesta"}</button>
           <button type="button" class="danger" data-remove-comparator-proposal="${escapeHtml(proposal.proposalId)}" ${selectedCount ? "" : "hidden"} ${proposal.available ? "" : "disabled"}>Deseleccionar</button>
@@ -5981,7 +6071,7 @@ function readComparatorConfig() {
     n: Math.floor(readClampedNumber(dom.comparatorN, "N individuos", 1, 500)),
     generaciones: Math.floor(readClampedNumber(dom.comparatorGeneraciones, "Generaciones", 0, 500)),
     proposalParallelism: Math.floor(readClampedNumber(dom.comparatorProposalParallelism, "Propuestas paralelas", 1, 8)),
-    timeoutMinutes: Math.floor(readClampedNumber(dom.comparatorTimeoutMinutes, "Timeout por propuesta", 2400, 10080)),
+    timeoutMinutes: Math.floor(readClampedNumber(dom.comparatorTimeoutMinutes, "Timeout por propuesta", 2400, 10800)),
   };
 }
 
@@ -6335,8 +6425,12 @@ function renderComparatorRun(run) {
 
   dom.comparatorRunStatus.textContent = status;
   dom.comparatorCompletedProposals.textContent = `${completedProposals}/${totalProposals}`;
-  dom.comparatorShownRows.textContent = String(rows.length);
-  dom.comparatorRunId.textContent = run.runId || "--";
+  if (dom.comparatorShownRows) dom.comparatorShownRows.textContent = String(rows.length);
+  if (run.runId) {
+    renderCopyableText(dom.comparatorRunId, run.runId);
+  } else {
+    dom.comparatorRunId.textContent = "--";
+  }
   dom.comparatorConnectionText.textContent = status;
   dom.comparatorConnectionDot.classList.toggle("is-busy", run.status === "queued" || run.status === "running");
   dom.comparatorConnectionDot.classList.toggle("is-error", run.status === "failed");
@@ -6348,6 +6442,7 @@ function renderComparatorRun(run) {
   renderComparatorRows(rows);
   renderComparatorCostDetails(run);
   renderComparatorCharts(run);
+  renderComparatorEmbeddingProjection(run);
   renderComparatorLogs(run);
 
   const detail = run.error
@@ -6393,12 +6488,6 @@ function comparatorProposalSummaryTooltip(label, metrics = {}) {
   if (key === "parametros") {
     return "Parametros comunes enviados por CLI: N es poblacion; G es generaciones o iteraciones.";
   }
-  if (key === "mejor f.o.") {
-    return "Vector nativo de la solucion rank 1. En MO: no dominadas primero y luego mayor suma de objetivos nativos; en uniobjetivo: mayor fitness.";
-  }
-  if (key === "mejor comp.") {
-    return "Vector comparable normalizado de la solucion con mayor suma f1_n + f2_n. Ambos objetivos se maximizan; no reemplaza el analisis Pareto.";
-  }
   if (key.startsWith("no dom")) {
     return `Cantidad de soluciones no dominadas: ninguna otra solucion es igual o mejor en todos los objetivos y mejor en al menos uno.${diagnosticSuffix}`;
   }
@@ -6422,12 +6511,6 @@ function comparatorProposalSummaryTooltip(label, metrics = {}) {
   }
   if (key === "total prop.") {
     return "Tiempo promedio por repeticion de la propuesta mas post-procesamiento externo del comparador.";
-  }
-  if (key === "post") {
-    return "Tiempo promedio por repeticion de seleccion o ranking externo posterior a la ejecucion.";
-  }
-  if (key === "metricas web") {
-    return "Tiempo promedio por repeticion de normalizacion y metricas calculadas por la web despues de ejecutar la propuesta.";
   }
   if (key === "llamadas llm") {
     return "Promedio de llamadas registradas al modelo LLM por repeticion completada.";
@@ -6504,8 +6587,8 @@ function renderComparatorCards(proposals, config = null) {
         <p title="${escapeHtml(repetitionProgress.title)}">${escapeHtml(repetitionProgress.text)}</p>
         <dl>
           ${term("Parametros")}<dd title="N: tamano de poblacion o cantidad de individuos; G: generaciones o iteraciones configuradas.">${escapeHtml(parameterLabel)}</dd>
-          ${term("Git")}<dd>${escapeHtml(gitLabel)}</dd>
-          ${term("Salida")}<dd>${escapeHtml(metrics.outputDir || proposal.outputDir || "--")}</dd>
+          ${term("Git")}<dd>${copyableTextHtml(gitLabel)}</dd>
+          ${term("Salida")}<dd>${copyableTextHtml(metrics.outputDir || proposal.outputDir || "--")}</dd>
         </dl>
       `;
       return article;
@@ -6693,10 +6776,10 @@ function renderComparatorCostTraceability(proposals) {
     return `
       <div class="semantic-artifact-group">
         <h3>${escapeHtml(proposal.displayName || proposal.proposalId)}</h3>
-        <dl class="definition-grid compact-definition-grid">
-          <div><dt>Comando</dt><dd>${escapeHtml(proposal.command || "--")}</dd></div>
-          <div><dt>Git</dt><dd>${escapeHtml(`${update.status || revision.status || "--"}; ${update.remote || revision.remote || "--"}/${update.branch || revision.configuredBranch || revision.branch || "--"}; commit ${revision.shortCommit || "--"}; ${update.message || ""}`)}</dd></div>
-          <div><dt>Salida</dt><dd>${escapeHtml(metrics.outputDir || proposal.outputDir || "--")}</dd></div>
+        <dl class="definition-grid compact-definition-grid copyable-definition-grid">
+          <div><dt>Comando</dt><dd>${copyableTextHtml(proposal.command || "--")}</dd></div>
+          <div><dt>Git</dt><dd>${copyableTextHtml(`${update.status || revision.status || "--"}; ${update.remote || revision.remote || "--"}/${update.branch || revision.configuredBranch || revision.branch || "--"}; commit ${revision.shortCommit || "--"}; ${update.message || ""}`)}</dd></div>
+          <div><dt>Salida</dt><dd>${copyableTextHtml(metrics.outputDir || proposal.outputDir || "--")}</dd></div>
         </dl>
       </div>
     `;
@@ -6727,6 +6810,209 @@ function renderComparatorCharts(run) {
   renderComparatorMetricLine(dom.comparatorContributionLineChart, filteredProposals, "contribution", "Contribution por iteracion");
   renderComparatorMetricLine(dom.comparatorGlobalInertiaChart, filteredProposals, "globalInertia", "Inercia global por iteracion");
   renderComparatorMetricLine(dom.comparatorGlobalEntropyChart, filteredProposals, "globalEntropy", "Entropia global por iteracion");
+  installChartPanelMinimizers(dom.comparatorChartsTab || document.querySelector("#comparatorChartsTab"));
+}
+
+async function renderComparatorEmbeddingProjection(run) {
+  if (!dom.comparatorEmbeddingProjectionCharts || !dom.comparatorProjectionMethod) return;
+  if (!window.echarts) {
+    dom.comparatorEmbeddingProjectionCharts.innerHTML = '<article class="panel"><p>ECharts no esta disponible.</p></article>';
+    return;
+  }
+  const completedProposals = (run?.proposals || []).filter((proposal) => proposal.status === "completed");
+  if (!run?.runId || !completedProposals.length) {
+    comparatorProjectionSignature = "";
+    disposeComparatorProjectionCharts();
+    dom.comparatorEmbeddingProjectionCharts.innerHTML = '<article class="panel"><p class="muted-text">Sin propuestas completadas para proyectar embeddings.</p></article>';
+    if (dom.comparatorProjectionStatus) {
+      dom.comparatorProjectionStatus.textContent = "Proyecta embeddings SBERT del frente final de cada propuesta.";
+    }
+    return;
+  }
+
+  const method = dom.comparatorProjectionMethod.value || "pca";
+  const signature = JSON.stringify({
+    runId: run.runId,
+    method,
+    filters: Array.from(comparatorChartFilterIds).sort(),
+    proposals: completedProposals.map((proposal) => ({
+      instanceId: comparatorEntityId(proposal),
+      proposalId: proposal.proposalId,
+      frontRows: (proposal.embeddingFrontRows || []).length,
+      fallbackFront: ((proposal.charts || {}).nonDominated || []).length,
+    })),
+  });
+  if (signature === comparatorProjectionSignature) return;
+  comparatorProjectionSignature = signature;
+  const token = ++comparatorProjectionLoadToken;
+  disposeComparatorProjectionCharts();
+  dom.comparatorEmbeddingProjectionCharts.innerHTML = '<article class="panel"><p class="muted-text">Calculando proyeccion de embeddings...</p></article>';
+  if (dom.comparatorProjectionStatus) {
+    dom.comparatorProjectionStatus.textContent = `Calculando ${projectionMethodLabel(method)} sobre el frente final.`;
+  }
+
+  try {
+    const payload = await requestComparatorJson(`/runs/${encodeURIComponent(run.runId)}/embedding-projection?method=${encodeURIComponent(method)}`);
+    if (token !== comparatorProjectionLoadToken) return;
+    renderComparatorEmbeddingProjectionPayload(payload);
+  } catch (error) {
+    if (token !== comparatorProjectionLoadToken) return;
+    comparatorProjectionSignature = "";
+    dom.comparatorEmbeddingProjectionCharts.innerHTML = `<article class="panel"><p class="invalid">No se pudo calcular la proyeccion: ${escapeHtml(error.message)}</p></article>`;
+    if (dom.comparatorProjectionStatus) {
+      dom.comparatorProjectionStatus.textContent = "No se pudo calcular la proyeccion seleccionada.";
+    }
+  }
+}
+
+function renderComparatorEmbeddingProjectionPayload(payload) {
+  const proposals = (payload.proposals || []).filter((proposal) => comparatorChartFilterIds.has(comparatorEntityId(proposal)));
+  const withPoints = proposals.filter((proposal) => (proposal.points || []).length > 0);
+  const warnings = (payload.warnings || []).filter(Boolean);
+  if (dom.comparatorProjectionStatus) {
+    const effective = payload.effectiveMethod && payload.effectiveMethod !== payload.method
+      ? ` (${projectionMethodLabel(payload.effectiveMethod)} efectivo)`
+      : "";
+    dom.comparatorProjectionStatus.textContent = [
+      `${projectionMethodLabel(payload.method)}${effective}; ${payload.embeddingTexts || 0} texto(s) embebidos con ${payload.embeddingModel || "--"}.`,
+      warnings.join(" "),
+    ].filter(Boolean).join(" ");
+  }
+  if (!withPoints.length) {
+    dom.comparatorEmbeddingProjectionCharts.innerHTML = '<article class="panel"><p class="muted-text">Sin puntos del frente final para las propuestas filtradas.</p></article>';
+    return;
+  }
+  const bounds = embeddingProjectionBounds(payload, withPoints);
+  dom.comparatorEmbeddingProjectionCharts.replaceChildren(
+    ...withPoints.map((proposal, index) => {
+      const article = document.createElement("article");
+      article.className = "panel";
+      article.innerHTML = `
+        <div class="panel-title">
+          <h2>${escapeHtml(proposal.displayName || proposal.proposalId)}</h2>
+          <span>${escapeHtml(String((proposal.points || []).length))} texto(s) del frente final</span>
+        </div>
+        <div class="chart-surface" data-embedding-projection-chart></div>
+      `;
+      const chartNode = article.querySelector("[data-embedding-projection-chart]");
+      window.queueMicrotask(() => {
+        const chart = window.echarts.init(chartNode);
+        comparatorProjectionCharts.push(chart);
+        chart.setOption(embeddingProjectionChartOption(
+          proposal,
+          payload.reference || {},
+          payload.effectiveMethod || payload.method,
+          comparatorProposalColor(proposal, index),
+          bounds,
+        ));
+      });
+      return article;
+    }),
+  );
+  installChartPanelMinimizers(dom.comparatorOtherChartsTab || document.querySelector("#comparatorOtherChartsTab"));
+}
+
+function embeddingProjectionBounds(payload, proposals) {
+  const values = [];
+  if (Number.isFinite(Number(payload.reference?.x)) && Number.isFinite(Number(payload.reference?.y))) {
+    values.push([Number(payload.reference.x), Number(payload.reference.y)]);
+  }
+  proposals.forEach((proposal) => {
+    (proposal.points || []).forEach((point) => {
+      if (Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))) {
+        values.push([Number(point.x), Number(point.y)]);
+      }
+    });
+  });
+  if (!values.length) return {};
+  const xs = values.map((point) => point[0]);
+  const ys = values.map((point) => point[1]);
+  const xPadding = Math.max(0.1, (Math.max(...xs) - Math.min(...xs)) * 0.08);
+  const yPadding = Math.max(0.1, (Math.max(...ys) - Math.min(...ys)) * 0.08);
+  return {
+    xAxisMin: Math.min(...xs) - xPadding,
+    xAxisMax: Math.max(...xs) + xPadding,
+    yAxisMin: Math.min(...ys) - yPadding,
+    yAxisMax: Math.max(...ys) + yPadding,
+  };
+}
+
+function embeddingProjectionChartOption(proposal, reference, method, color, bounds = {}) {
+  const points = (proposal.points || []).map((point) => ({
+    value: [point.x, point.y],
+    labelText: point.text,
+    selected: Boolean(point.selected),
+    rank: point.rank,
+    selectionRank: point.selectionRank,
+    objectiveLabel: point.objectiveLabel,
+    repetitionIndex: point.repetitionIndex,
+    sourceIndex: point.sourceIndex,
+  }));
+  const selected = points.filter((point) => point.selected || point.selectionRank);
+  const referencePoint = Number.isFinite(Number(reference.x)) && Number.isFinite(Number(reference.y))
+    ? [{
+      value: [Number(reference.x), Number(reference.y)],
+      labelText: reference.text || "Referencia",
+      rank: "ref",
+    }]
+    : [];
+  const axisName = projectionMethodLabel(method);
+  return baseScatterOption(`Embeddings ${axisName}`, [
+    {
+      name: "Referencia",
+      type: "scatter",
+      symbol: "star",
+      symbolSize: 22,
+      data: referencePoint,
+      itemStyle: { color: "#facc15", borderColor: "#92400e", borderWidth: 1.5 },
+      z: 6,
+    },
+    {
+      name: "Frente final",
+      type: "scatter",
+      symbolSize: 9,
+      data: points,
+      itemStyle: { color, opacity: 0.82, shadowBlur: comparatorIsBinaryProposal(proposal) ? 8 : 0, shadowColor: hexToRgba(color, 0.45) },
+    },
+    {
+      name: "Seleccionadas",
+      type: "scatter",
+      symbol: "circle",
+      symbolSize: 16,
+      data: selected,
+      itemStyle: { color: "#ffffff", borderColor: color, borderWidth: 2.5 },
+      z: 5,
+    },
+  ], {
+    description: "Coordenadas compartidas para todas las propuestas del run.",
+    xAxisName: `${axisName} 1`,
+    yAxisName: `${axisName} 2`,
+    tooltipFormatter: embeddingProjectionTooltipFormatter,
+    includeIdeal: false,
+    ...bounds,
+  });
+}
+
+function embeddingProjectionTooltipFormatter(params) {
+  const data = params.data || {};
+  const value = params.value || [];
+  const selected = data.selectionRank ? `<br>Seleccionada: #${escapeHtml(String(data.selectionRank))}` : "";
+  return `
+    <strong>${escapeHtml(params.seriesName)}</strong><br>
+    X: ${formatOptionalNumber(value[0], 6)}<br>
+    Y: ${formatOptionalNumber(value[1], 6)}<br>
+    Rank: ${escapeHtml(String(data.rank ?? "--"))}${selected}<br>
+    ${escapeHtml(String(data.objectiveLabel || "")).slice(0, 160)}<br>
+    ${escapeHtml(String(data.labelText || "")).slice(0, 300)}
+  `;
+}
+
+function projectionMethodLabel(method) {
+  const key = String(method || "pca").toLowerCase();
+  if (key === "tsne") return "t-SNE";
+  if (key === "umap") return "UMAP";
+  if (key === "single-point") return "Punto unico";
+  return "PCA";
 }
 
 function comparatorChartsSignature(run) {
@@ -6781,7 +7067,7 @@ function renderComparatorChartFilters(proposals) {
       label.className = "chart-filter-option";
       label.innerHTML = `
         <input type="checkbox" data-comparator-chart-filter="${escapeHtml(entityId)}" checked>
-        <span class="chart-filter-swatch" style="background: ${chartPalette(index)}"></span>
+        <span class="chart-filter-swatch" style="background: ${comparatorProposalColor(proposal, index)}"></span>
         <span>${escapeHtml(proposal.displayName || proposal.proposalId)}</span>
       `;
       return label;
@@ -6805,8 +7091,10 @@ function onComparatorChartFilterChange(event) {
     comparatorChartFilterIds.delete(proposalId);
   }
   comparatorChartSignature = "";
+  comparatorProjectionSignature = "";
   if (latestComparatorRun) {
     renderComparatorCharts(latestComparatorRun);
+    renderComparatorEmbeddingProjection(latestComparatorRun);
   }
 }
 
@@ -6816,7 +7104,8 @@ function renderComparatorParetoCharts(proposals) {
     return;
   }
   dom.comparatorParetoCharts.replaceChildren(
-    ...proposals.map((proposal) => {
+    ...proposals.map((proposal, index) => {
+      const color = comparatorProposalColor(proposal, index);
       const article = document.createElement("article");
       article.className = "panel";
       article.innerHTML = `
@@ -6830,7 +7119,7 @@ function renderComparatorParetoCharts(proposals) {
       window.queueMicrotask(() => {
         const normalizedChart = window.echarts.init(normalizedChartNode);
         comparatorCharts.push(normalizedChart);
-        normalizedChart.setOption(paretoChartOption("Frente comparable normalizado", proposal.charts || {}, proposal.metrics || {}));
+        normalizedChart.setOption(paretoChartOption("Frente comparable normalizado", proposal.charts || {}, proposal.metrics || {}, color));
       });
       return article;
     }),
@@ -6840,7 +7129,7 @@ function renderComparatorParetoCharts(proposals) {
 function renderComparatorCombinedSelectedChart(proposals) {
   const comparisonPool = comparatorAllNonDominatedPoints(proposals);
   const selectedSeries = proposals.map((proposal, index) => {
-    const color = chartPalette(index);
+    const color = comparatorProposalColor(proposal, index);
     return {
       name: proposal.displayName,
       type: "scatter",
@@ -6867,7 +7156,7 @@ function renderComparatorContributionChart(proposals) {
   const globalFront = comparatorGlobalNonDominatedPoints(proposals);
   const countsByProposal = comparatorCountByProposal(globalFront);
   const series = proposals.map((proposal, index) => {
-    const color = chartPalette(index);
+    const color = comparatorProposalColor(proposal, index);
     const entityId = comparatorEntityId(proposal);
     const points = globalFront.filter((point) => (point.instanceId || point.proposalId) === entityId);
     const contribution = Number(proposal.metrics?.contribution);
@@ -6902,7 +7191,8 @@ function renderComparatorMetricLine(container, proposals, metricKey, title) {
     data: (proposal.series || [])
       .filter((point) => point[metricKey] !== null && point[metricKey] !== undefined)
       .map((point) => [point.generation, point[metricKey]]),
-    itemStyle: { color: chartPalette(index) },
+    itemStyle: { color: comparatorProposalColor(proposal, index) },
+    lineStyle: { color: comparatorProposalColor(proposal, index), width: comparatorIsBinaryProposal(proposal) ? 3 : 2 },
   }));
   const metricValues = series.flatMap((item) => item.data.map((point) => point[1])).filter(Number.isFinite);
   const referenceTarget = series.find((item) => item.data.length > 0);
@@ -6928,7 +7218,7 @@ function renderComparatorMetricLine(container, proposals, metricKey, title) {
   });
 }
 
-function paretoChartOption(title, charts, metrics = {}) {
+function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa") {
   const allPoints = (charts.pareto || []).map((point) => ({
     value: [point.x, point.y],
     labelText: point.label,
@@ -6947,17 +7237,25 @@ function paretoChartOption(title, charts, metrics = {}) {
     comparableObjectiveVector: point.comparableObjectiveVector,
     coordinateSpace: point.coordinateSpace,
   }));
-  const hvAreaSeries = comparatorHypervolumeAreaSeries(charts.nonDominated || [], metrics.hypervolumeLabel || "");
+  const hvAreaSeries = comparatorHypervolumeAreaSeries(charts.nonDominated || [], metrics.hypervolumeLabel || "", proposalColor);
   return baseScatterOption(title, [
     ...hvAreaSeries,
-    { name: "Individuos", type: "scatter", symbolSize: 8, data: allPoints, label: { show: false }, itemStyle: { color: "#60a5fa", opacity: 0.72 } },
-    { name: "Seleccionadas", type: "scatter", symbol: "diamond", symbolSize: 15, data: selectedPoints, label: { show: false }, itemStyle: { color: "#b42318" } },
+    { name: "Individuos", type: "scatter", symbolSize: 8, data: allPoints, label: { show: false }, itemStyle: { color: proposalColor, opacity: 0.72 } },
+    {
+      name: "Seleccionadas",
+      type: "scatter",
+      symbol: "circle",
+      symbolSize: 15,
+      data: selectedPoints,
+      label: { show: false },
+      itemStyle: { color: "#ffffff", borderColor: proposalColor, borderWidth: 2.5 },
+    },
   ], {
     description: "Ejes normalizados comparables. Area sombreada: HV dominado respecto a [0, 0].",
   });
 }
 
-function comparatorHypervolumeAreaSeries(points, hypervolumeLabel) {
+function comparatorHypervolumeAreaSeries(points, hypervolumeLabel, color = "#2563eb") {
   if (!hypervolumeLabel || hypervolumeLabel === "No aplica") return [];
   const area = comparatorHypervolumeArea(points);
   if (!area) return [];
@@ -6969,8 +7267,8 @@ function comparatorHypervolumeAreaSeries(points, hypervolumeLabel) {
       showSymbol: false,
       silent: true,
       tooltip: { show: false },
-      lineStyle: { color: "#2563eb", width: 1.2, opacity: 0.5 },
-      areaStyle: { color: "rgba(37, 99, 235, 0.16)" },
+      lineStyle: { color, width: 1.2, opacity: 0.5 },
+      areaStyle: { color: hexToRgba(color, 0.16) },
       z: 0,
       markPoint: {
         silent: true,
@@ -6978,13 +7276,13 @@ function comparatorHypervolumeAreaSeries(points, hypervolumeLabel) {
         symbolSize: [92, 26],
         itemStyle: {
           color: "rgba(255, 255, 255, 0.9)",
-          borderColor: "#93c5fd",
+          borderColor: color,
           borderWidth: 1,
         },
         label: {
           show: true,
           formatter: `HV = ${hypervolumeLabel}`,
-          color: "#1e3a8a",
+          color,
           fontWeight: 700,
           fontSize: 11,
         },
@@ -6995,7 +7293,7 @@ function comparatorHypervolumeAreaSeries(points, hypervolumeLabel) {
 }
 
 function baseScatterOption(title, series, options = {}) {
-  const idealSeries = comparatorIdealSeries(series, options.idealPoint);
+  const idealSeries = options.includeIdeal === false ? null : comparatorIdealSeries(series, options.idealPoint);
   const renderedSeries = idealSeries ? [...series, idealSeries] : series;
   return {
     title: {
@@ -7176,8 +7474,14 @@ function comparatorLineTooltipFormatter(params) {
   }).join("<br>");
 }
 
-function chartPalette(index) {
-  return ["#2458b8", "#0f766e", "#b42318", "#7c3aed", "#ca8a04"][index % 5];
+function hexToRgba(hex, alpha) {
+  const normalized = String(hex || "").replace("#", "");
+  if (!/^[0-9a-f]{6}$/iu.test(normalized)) return `rgba(37, 99, 235, ${alpha})`;
+  const value = Number.parseInt(normalized, 16);
+  const red = (value >> 16) & 255;
+  const green = (value >> 8) & 255;
+  const blue = value & 255;
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
 function activateComparatorTab(tabName) {
@@ -7190,7 +7494,10 @@ function activateComparatorTab(tabName) {
     const expectedId = `comparator${tabName[0].toUpperCase()}${tabName.slice(1)}Tab`;
     panel.classList.toggle("is-active", panel.id === expectedId);
   });
-  window.setTimeout(() => comparatorCharts.forEach((chart) => chart.resize()), 0);
+  window.setTimeout(() => {
+    comparatorCharts.forEach((chart) => chart.resize());
+    comparatorProjectionCharts.forEach((chart) => chart.resize());
+  }, 0);
 }
 
 function renderComparatorRows(rows) {
@@ -7215,11 +7522,11 @@ function renderComparatorRows(rows) {
       tr.innerHTML = `
         <td>${escapeHtml(row.displayName || row.proposalId)}</td>
         <td>${escapeHtml(String(row.rank ?? "--"))}</td>
-        <td class="context-cell long-cell">${escapeHtml(referenceText)}</td>
-        <td class="context-cell long-cell">${escapeHtml(row.generatedText || "--")}</td>
+        <td class="context-cell long-cell">${copyableTextHtml(referenceText)}</td>
+        <td class="context-cell long-cell">${copyableTextHtml(row.generatedText || "--")}</td>
         <td>${escapeHtml(row.diagnosticObjectiveLabel || row.objectiveLabel || "--")}</td>
         <td>${escapeHtml(row.comparableObjectiveLabel || "--")}</td>
-        <td class="context-cell long-cell">${escapeHtml(row.prompt || "--")}</td>
+        <td class="context-cell long-cell">${copyableTextHtml(row.prompt || "--")}</td>
         <td><span class="${comparatorStatusClass(status)}">${escapeHtml(status)}</span></td>
         <td>${nonDominatedLabel}</td>
       `;
@@ -7836,6 +8143,7 @@ dom.navItems.forEach((button) => {
     dom.panels.forEach((panel) => panel.classList.toggle("is-active", panel.id === button.dataset.tool));
   });
 });
+document.addEventListener("click", handleCopyButtonClick);
 
 dom.loadModelsButton.addEventListener("click", fetchLmStudioModels);
 dom.previewPromptButton.addEventListener("click", () => {
@@ -7911,6 +8219,12 @@ dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
 dom.resumeComparatorButton?.addEventListener("click", resumeComparatorRun);
 dom.copyComparatorLogButton.addEventListener("click", copyComparatorLog);
 dom.comparatorChartProposalFilters?.addEventListener("change", onComparatorChartFilterChange);
+dom.comparatorProjectionMethod?.addEventListener("change", () => {
+  comparatorProjectionSignature = "";
+  if (latestComparatorRun) {
+    renderComparatorEmbeddingProjection(latestComparatorRun);
+  }
+});
 dom.comparatorExecutionMode.addEventListener("change", () => syncComparatorExecutionModeControls(false));
 dom.comparatorModel?.addEventListener("change", syncComparatorModelCustomField);
 dom.comparatorProposalSelector?.addEventListener("click", (event) => {
@@ -7955,6 +8269,7 @@ document.querySelectorAll(".comparator-tab").forEach((button) => {
 });
 window.addEventListener("resize", () => {
   comparatorCharts.forEach((chart) => chart.resize());
+  comparatorProjectionCharts.forEach((chart) => chart.resize());
   syncComparatorConfigGroupLayouts();
 });
 dom.solutionLlmModelSelect.addEventListener("change", () => {

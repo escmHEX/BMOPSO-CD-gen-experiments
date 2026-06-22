@@ -299,6 +299,22 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(200, run)
             return
 
+        if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "embedding-projection":
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            try:
+                payload = self.comparator_service.get_run_embedding_projection(
+                    path_parts[1],
+                    method=first_query_value(query, "method") or "pca",
+                )
+            except ValueError as error:
+                self.send_json(400, {"error": str(error)})
+                return
+            if not payload:
+                self.send_json(404, {"error": "Run not found."})
+                return
+            self.send_json(200, payload)
+            return
+
         if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "logs":
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             try:

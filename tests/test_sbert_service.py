@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from sbert_service import SbertSimilarityService
+from sbert_service import project_embeddings_2d, SbertSimilarityService
 
 
 class FakeEmbeddingVector:
@@ -90,6 +90,38 @@ class SbertSimilarityServiceTests(unittest.TestCase):
         self.assertEqual(result["dimension"], 3)
         self.assertAlmostEqual(result["similarity"], 0.5)
         self.assertAlmostEqual(result["distance"], 0.5)
+
+    def test_projects_embeddings_with_pca(self):
+        result = project_embeddings_2d(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.5, 0.5, 0.0],
+            ],
+            "pca",
+        )
+
+        self.assertEqual(result["method"], "pca")
+        self.assertEqual(result["effectiveMethod"], "pca")
+        self.assertEqual(len(result["coordinates"]), 3)
+        self.assertTrue(all(len(point) == 2 for point in result["coordinates"]))
+
+    def test_projection_falls_back_to_pca_for_small_tsne_inputs(self):
+        result = project_embeddings_2d(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
+            "tsne",
+        )
+
+        self.assertEqual(result["method"], "tsne")
+        self.assertEqual(result["effectiveMethod"], "pca")
+        self.assertIn("se uso PCA", result["warnings"][0])
+
+    def test_projection_rejects_unknown_method(self):
+        with self.assertRaises(ValueError):
+            project_embeddings_2d([[1.0, 0.0], [0.0, 1.0]], "mds")
 
 
 if __name__ == "__main__":
