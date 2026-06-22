@@ -130,6 +130,10 @@ BINARY_MANAGED_CONFIG_PATHS = {
     "runtime.outdir_base",
     "ollama.default_model",
 }
+BINARY_AUTO_PARALLELISM_PATHS = (
+    "parallelism.particle_update_max_concurrent",
+    "parallelism.initial_text_generation_max_concurrent",
+)
 BINARY_REMOVED_CLI_FLAGS = {
     "--n",
     "--iterations",
@@ -209,6 +213,8 @@ BINARY_VALUE_HELP = {
     "ollama.default_model": "Gestionado por el modelo comun del comparador; las tareas del router usan ese modelo salvo override explicito.",
     "logging.level": "Nivel minimo de logs emitidos por Binary. DEBUG es mas verboso; INFO es el nivel usual.",
     "parallelism.enabled": "Activa paralelismo interno de Binary. Para comparaciones de costo justas, recuerda usar modo secuencial del comparador.",
+    "parallelism.particle_update_max_concurrent": "Override opcional. Si lo dejas vacio, el comparador envia auto: N de la comparacion; si escribes un valor, fuerza ese limite.",
+    "parallelism.initial_text_generation_max_concurrent": "Override opcional. Si lo dejas vacio, el comparador envia auto: N de la comparacion; si escribes un valor, fuerza ese limite.",
     "selection.enabled": "Activa el modulo de seleccion final de Binary.",
     "selection.k": "Cantidad de soluciones seleccionadas al final. Binary exige un entero positivo.",
     "selection.lambda_mmr": "Peso MMR entre relevancia y diversidad. Binary valida el intervalo [0, 1].",
@@ -377,13 +383,30 @@ def load_binary_default_config(path: Path) -> dict[str, Any]:
 
 def parse_simple_yaml_mapping(text: str) -> dict[str, Any]:
     root: dict[str, Any] = {}
-    stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
+    stack: list[tuple[int, dict[str, Any] | list[Any], dict[str, Any] | None, str | None]] = [(-1, root, None, None)]
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
         indent = len(raw_line) - len(raw_line.lstrip(" "))
         stripped = raw_line.strip()
-        if ":" not in stripped or stripped.startswith("-"):
+        if stripped.startswith("-"):
+            value_text = stripped[1:].strip()
+            while stack and indent < stack[-1][0]:
+                stack.pop()
+            if not stack:
+                raise ValueError(f"Invalid YAML list indentation at line {line_number}.")
+            entry_indent, container, parent, parent_key = stack[-1]
+            if not isinstance(container, list):
+                if parent is None or parent_key is None:
+                    raise ValueError(f"Unsupported YAML sequence at line {line_number}.")
+                if isinstance(container, dict) and container:
+                    raise ValueError(f"Unsupported YAML sequence at line {line_number}.")
+                container = []
+                parent[parent_key] = container
+                stack[-1] = (entry_indent, container, parent, parent_key)
+            container.append(parse_simple_yaml_scalar(value_text))
+            continue
+        if ":" not in stripped:
             raise ValueError(f"Unsupported YAML syntax at line {line_number}.")
         key, raw_value = stripped.split(":", 1)
         key = key.strip()
@@ -393,10 +416,12 @@ def parse_simple_yaml_mapping(text: str) -> dict[str, Any]:
         if not stack:
             raise ValueError(f"Invalid YAML indentation at line {line_number}.")
         parent = stack[-1][1]
+        if not isinstance(parent, dict):
+            raise ValueError(f"Unsupported YAML mapping inside sequence at line {line_number}.")
         if not value_text:
             child: dict[str, Any] = {}
             parent[key] = child
-            stack.append((indent, child))
+            stack.append((indent, child, parent, key))
         else:
             parent[key] = parse_simple_yaml_scalar(value_text)
     return root
@@ -3424,7 +3449,19 @@ class ComparatorService:
                 "--reference-text",
                 run["config"]["referenceText"],
             ]
-            return command + self._binary_managed_set_args(run, base_proposal, output_base, random_seed) + structured_args + extra_args
+            return (
+                command
+                + self._binary_managed_set_args(
+                    run,
+                    base_proposal,
+                    output_base,
+                    random_seed,
+                    proposal_config_values.get("cliValues") or {},
+                    extra_args,
+                )
+                + structured_args
+                + extra_args
+            )
 
         if base_proposal.kind == "mesap":
             command = [
@@ -3467,9 +3504,13 @@ class ComparatorService:
         proposal: ProposalDefinition,
         output_base: Path,
         random_seed: int | None,
+        cli_values: dict[str, Any] | None = None,
+        extra_args: list[str] | None = None,
     ) -> list[str]:
         model = str(run["config"]["model"])
         seed = int(random_seed if random_seed is not None else run["config"]["seed"])
+        manual_paths = {str(path) for path in (cli_values or {})}
+        manual_paths.update(self._binary_set_paths_from_args(extra_args or []))
         overrides: list[tuple[str, Any, str]] = [
             ("experiment.n", int(run["config"]["n"]), "int"),
             ("experiment.iterations", int(run["config"]["generaciones"]), "int"),
@@ -3478,6 +3519,9 @@ class ComparatorService:
             ("runtime.outdir_base", str(output_base.resolve()), "path"),
             ("ollama.default_model", model, "string"),
         ]
+        for path in BINARY_AUTO_PARALLELISM_PATHS:
+            if path not in manual_paths:
+                overrides.append((path, int(run["config"]["n"]), "int"))
         for path in self._binary_task_model_paths(proposal):
             overrides.append((path, model, "string"))
         args: list[str] = []
@@ -3578,6 +3622,17 @@ class ComparatorService:
 
     def _validate_binary_manual_set_args(self, extra_args: list[str]) -> None:
         blocked_paths: list[str] = []
+        for path in self._binary_set_paths_from_args(extra_args):
+            if path in BINARY_MANAGED_CONFIG_PATHS or path.startswith(BINARY_TASK_MODEL_PREFIX):
+                blocked_paths.append(path)
+        if blocked_paths:
+            raise ValueError(
+                "Binary MOPSO-CD: these YAML paths are managed by the comparator or by the structured UI: "
+                + ", ".join(blocked_paths)
+            )
+
+    def _binary_set_paths_from_args(self, extra_args: list[str]) -> set[str]:
+        paths: set[str] = set()
         index = 0
         while index < len(extra_args):
             item = extra_args[index]
@@ -3593,14 +3648,9 @@ class ComparatorService:
                 path = target.split("=", 1)[0].strip()
                 if not path or "=" not in target:
                     raise ValueError("Binary MOPSO-CD: --set requires path=value.")
-                if path in BINARY_MANAGED_CONFIG_PATHS or path.startswith(BINARY_TASK_MODEL_PREFIX):
-                    blocked_paths.append(path)
+                paths.add(path)
             index += 1
-        if blocked_paths:
-            raise ValueError(
-                "Binary MOPSO-CD: these YAML paths are managed by the comparator or by the structured UI: "
-                + ", ".join(blocked_paths)
-            )
+        return paths
 
     def _execute_proposal_once(
         self,

@@ -15,6 +15,7 @@ from baselines.comparator import ComparatorService, PROPOSALS, aggregate_proposa
 from baselines.comparator import aggregate_series
 from baselines.comparator import embedding_front_rows_from_rows
 from baselines.comparator import mark_non_dominated
+from baselines.comparator import parse_simple_yaml_mapping
 from baselines.comparator_metrics import build_charts_from_rows
 from baselines.comparator_metrics import calculate_contribution
 from baselines.comparator_metrics import calculate_extent
@@ -47,6 +48,18 @@ def command_set_values(command: list[str]) -> dict[str, str]:
             path, value = item[len("--set="):].split("=", 1)
             values[path] = value
     return values
+
+
+def command_set_paths(command: list[str]) -> list[str]:
+    paths: list[str] = []
+    for index, item in enumerate(command):
+        if item == "--set" and index + 1 < len(command):
+            path, _value = command[index + 1].split("=", 1)
+            paths.append(path)
+        elif item.startswith("--set="):
+            path, _value = item[len("--set="):].split("=", 1)
+            paths.append(path)
+    return paths
 
 
 class RepetitionAggregationTests(unittest.TestCase):
@@ -730,6 +743,8 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(options_by_key["router.heuristics.word_replacement_candidates"]["type"], "bool")
         self.assertTrue(options_by_key["router.heuristics.word_replacement_candidates"]["allowFalse"])
         self.assertEqual(options_by_key["experiment.n"]["source"], "managed")
+        self.assertIn("auto: N", options_by_key["parallelism.particle_update_max_concurrent"]["valueHelp"])
+        self.assertIn("auto: N", options_by_key["parallelism.initial_text_generation_max_concurrent"]["valueHelp"])
         self.assertEqual(options_by_key["experiment.frozen_components"]["type"], "component_multi_select")
         self.assertIn("poblacion inicial", options_by_key["experiment.frozen_components"]["valueHelp"])
         self.assertNotIn("no permite", options_by_key["experiment.frozen_components"]["valueHelp"])
@@ -739,6 +754,20 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertFalse(options_by_key["logging.level"]["allowCustom"])
         self.assertIn("llama3.1:8b", options_by_key["router.task_models.synthetic_text_generation"]["choices"])
         self.assertTrue(options_by_key["router.task_models.synthetic_text_generation"]["allowCustom"])
+
+    def test_simple_yaml_parser_supports_nested_sequences(self):
+        parsed = parse_simple_yaml_mapping(
+            """
+            ollama:
+              model_options:
+                - "llama3.1:8b"
+                - "qwen3.5:2b"
+              stream: false
+            """
+        )
+
+        self.assertEqual(parsed["ollama"]["model_options"], ["llama3.1:8b", "qwen3.5:2b"])
+        self.assertFalse(parsed["ollama"]["stream"])
 
     def test_binary_mopso_float_overrides_accept_decimal_values(self):
         service = ComparatorService(Path("."))
@@ -1074,6 +1103,75 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertNotIn("--seed", command)
         self.assertEqual(command_set_values(command)["experiment.seed"], "777")
 
+    def test_binary_command_defaults_parallelism_to_comparison_particle_count(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "n": 30,
+                "selectedProposalIds": ["binary-mopso-cd"],
+            }
+        )
+
+        command = service._build_command({"config": config}, proposal, Path("."), Path("out"), Path("reference.txt"), 777)
+        values = command_set_values(command)
+
+        self.assertEqual(values["parallelism.particle_update_max_concurrent"], "30")
+        self.assertEqual(values["parallelism.initial_text_generation_max_concurrent"], "30")
+
+    def test_binary_command_respects_partial_manual_parallelism_override(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "n": 30,
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {
+                    "binary-mopso-cd": {
+                        "cliValues": {
+                            "parallelism.particle_update_max_concurrent": "10",
+                        }
+                    }
+                },
+            }
+        )
+
+        command = service._build_command({"config": config}, proposal, Path("."), Path("out"), Path("reference.txt"), 777)
+        values = command_set_values(command)
+
+        self.assertEqual(values["parallelism.particle_update_max_concurrent"], "10")
+        self.assertEqual(values["parallelism.initial_text_generation_max_concurrent"], "30")
+
+    def test_binary_command_respects_manual_parallelism_extra_args(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "n": 30,
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {
+                    "binary-mopso-cd": {
+                        "extraArgs": (
+                            "--set parallelism.particle_update_max_concurrent=12 "
+                            "--set=parallelism.initial_text_generation_max_concurrent=14"
+                        ),
+                    }
+                },
+            }
+        )
+
+        command = service._build_command({"config": config}, proposal, Path("."), Path("out"), Path("reference.txt"), 777)
+        values = command_set_values(command)
+        paths = command_set_paths(command)
+
+        self.assertEqual(values["parallelism.particle_update_max_concurrent"], "12")
+        self.assertEqual(values["parallelism.initial_text_generation_max_concurrent"], "14")
+        self.assertEqual(paths.count("parallelism.particle_update_max_concurrent"), 1)
+        self.assertEqual(paths.count("parallelism.initial_text_generation_max_concurrent"), 1)
+
     def test_binary_command_builds_structured_cli_values(self):
         service = ComparatorService(Path("."))
         proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
@@ -1166,6 +1264,47 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(command_set_values(second_command)["selection.k"], "5")
         self.assertEqual(command_set_values(first_command)["experiment.seed"], "777")
         self.assertEqual(command_set_values(second_command)["experiment.seed"], "778")
+
+    def test_binary_parallelism_auto_defaults_are_instance_specific(self):
+        service = ComparatorService(Path("."))
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "n": 30,
+                "proposalInstances": [
+                    {
+                        "instanceId": "binary-auto",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary Auto",
+                        "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                    },
+                    {
+                        "instanceId": "binary-manual",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary Manual",
+                        "proposalConfig": {
+                            "cliValues": {
+                                "selection.k": "5",
+                                "parallelism.particle_update_max_concurrent": "11",
+                            }
+                        },
+                    },
+                ],
+            }
+        )
+        first, second = service._selected_instances(config)
+
+        first_values = command_set_values(
+            service._build_command({"config": config}, first, Path("."), Path("out-a"), Path("reference.txt"), 777)
+        )
+        second_values = command_set_values(
+            service._build_command({"config": config}, second, Path("."), Path("out-b"), Path("reference.txt"), 778)
+        )
+
+        self.assertEqual(first_values["parallelism.particle_update_max_concurrent"], "30")
+        self.assertEqual(first_values["parallelism.initial_text_generation_max_concurrent"], "30")
+        self.assertEqual(second_values["parallelism.particle_update_max_concurrent"], "11")
+        self.assertEqual(second_values["parallelism.initial_text_generation_max_concurrent"], "30")
 
     def test_repository_update_skips_dirty_repository(self):
         service = ComparatorService(Path("."))
