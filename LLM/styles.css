@@ -913,6 +913,22 @@ label span,
   line-height: 1.35;
 }
 
+.cli-task-model-fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 12px;
+}
+
+.cli-task-model-fieldset legend,
+.cli-task-model-fieldset > .cli-field-help,
+.cli-task-model-fieldset > small {
+  grid-column: 1 / -1;
+}
+
+.cli-task-thinking-field small {
+  min-height: 1.2em;
+}
+
 .cli-field > span,
 .cli-field-checkbox strong,
 .cli-fieldset legend {

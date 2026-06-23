@@ -753,7 +753,36 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(options_by_key["logging.level"]["ui"], "select")
         self.assertFalse(options_by_key["logging.level"]["allowCustom"])
         self.assertIn("llama3.1:8b", options_by_key["router.task_models.synthetic_text_generation"]["choices"])
+        self.assertIn("qwen3:4b-instruct-2507-q4_K_M", options_by_key["router.task_models.synthetic_text_generation"]["choices"])
+        self.assertIn("phi4-mini", options_by_key["router.task_models.synthetic_text_generation"]["choices"])
+        self.assertIn("ministral-3:3b", options_by_key["router.task_models.synthetic_text_generation"]["choices"])
         self.assertTrue(options_by_key["router.task_models.synthetic_text_generation"]["allowCustom"])
+
+    def test_comparator_public_defaults_use_binary_model_options_and_capabilities(self):
+        service = ComparatorService(Path("."))
+
+        defaults = service.public_defaults()
+
+        self.assertIn("qwen3:4b-instruct-2507-q4_K_M", defaults["ollamaModelOptions"])
+        self.assertIn("phi4-mini", defaults["ollamaModelOptions"])
+        self.assertIn("ministral-3:3b", defaults["ollamaModelOptions"])
+        self.assertTrue(defaults["ollamaModelCapabilities"]["qwen3.5:2b"]["thinking"])
+        self.assertTrue(defaults["ollamaModelCapabilities"]["qwen3:4b-instruct-2507-q4_K_M"]["thinking"])
+        self.assertFalse(defaults["ollamaModelCapabilities"]["llama3.1:8b"]["thinking"])
+
+    def test_binary_task_thinking_options_are_generated_for_structured_ui(self):
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        options_by_key = {
+            str(option.get("key") or option.get("configPath") or option.get("flag")): option
+            for option in proposal.cli_options
+        }
+
+        thinking = options_by_key["router.task_thinking.synthetic_text_generation"]
+
+        self.assertEqual(thinking["flag"], "--set")
+        self.assertEqual(thinking["type"], "bool")
+        self.assertTrue(thinking["allowFalse"])
+        self.assertEqual(thinking["pairedModelPath"], "router.task_models.synthetic_text_generation")
 
     def test_simple_yaml_parser_supports_nested_sequences(self):
         parsed = parse_simple_yaml_mapping(
@@ -762,11 +791,15 @@ class RepetitionAggregationTests(unittest.TestCase):
               model_options:
                 - "llama3.1:8b"
                 - "qwen3.5:2b"
+              model_capabilities:
+                qwen3.5:2b:
+                  thinking: true
               stream: false
             """
         )
 
         self.assertEqual(parsed["ollama"]["model_options"], ["llama3.1:8b", "qwen3.5:2b"])
+        self.assertTrue(parsed["ollama"]["model_capabilities"]["qwen3.5:2b"]["thinking"])
         self.assertFalse(parsed["ollama"]["stream"])
 
     def test_binary_mopso_float_overrides_accept_decimal_values(self):
@@ -1083,6 +1116,7 @@ class RepetitionAggregationTests(unittest.TestCase):
             ["--set", "experiment.n=99"],
             ["--set=runtime.outdir_base=other"],
             ["--set", "router.task_models.synthetic_text_generation=other"],
+            ["--set", "router.task_thinking.synthetic_text_generation=true"],
         ]
         for args in bad_args:
             with self.subTest(args=args):
@@ -1194,6 +1228,7 @@ class RepetitionAggregationTests(unittest.TestCase):
                             "router.heuristics.semantic_component_influence_candidates": False,
                             "router.heuristics.word_replacement_candidates": False,
                             "router.task_models.synthetic_text_generation": "llama3.1:8b",
+                            "router.task_thinking.synthetic_text_generation": True,
                         }
                     }
                 },
@@ -1233,6 +1268,7 @@ class RepetitionAggregationTests(unittest.TestCase):
             self.assertEqual(set_values[key], "false")
         self.assertEqual(set_values["router.task_models.semantic_anchor_extraction"], '"llama3"')
         self.assertEqual(set_values["router.task_models.synthetic_text_generation"], '"llama3.1:8b"')
+        self.assertEqual(set_values["router.task_thinking.synthetic_text_generation"], "true")
 
     def test_binary_command_uses_instance_specific_cli_values(self):
         service = ComparatorService(Path("."))

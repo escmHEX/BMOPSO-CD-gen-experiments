@@ -378,6 +378,7 @@ let comparatorPollFailureCount = 0;
 let latestComparatorRun = null;
 let comparatorProposals = [];
 let comparatorInstances = [];
+let comparatorOllamaModelCapabilities = {};
 let comparatorInstancesInitialized = false;
 let comparatorInstanceModalState = null;
 let comparatorCharts = [];
@@ -816,6 +817,8 @@ const BINARY_ROUTER_HEURISTIC_KEYS = [
   "router.heuristics.word_replacement_candidates",
 ];
 const BINARY_ROUTER_HEURISTIC_KEY_SET = new Set(BINARY_ROUTER_HEURISTIC_KEYS);
+const BINARY_TASK_MODEL_PREFIX = "router.task_models.";
+const BINARY_TASK_THINKING_PREFIX = "router.task_thinking.";
 const INITIAL_POPULATION_API = "/api/initial-population";
 const INITIAL_POPULATION_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const INITIAL_POPULATION_COMPARISON_API = "/api/initial-population-comparison";
@@ -5109,9 +5112,17 @@ function comparatorInstanceConfigSummary(instance) {
   if (!summaryParts.length && !keys.length && !instance.proposalConfig?.extraArgs) {
     return "Configuracion por defecto de la propuesta.";
   }
-  const preview = keys.slice(0, 4).map((key) => `${key}=${comparatorPreviewValue(values[key])}`);
+  const preview = keys.slice(0, 4).map((key) => comparatorConfigSummaryEntry(key, values[key]));
   const remaining = keys.length > preview.length ? `; +${keys.length - preview.length} cambio(s)` : "";
   return `${[...summaryParts, ...preview].join("; ")}${remaining}`;
+}
+
+function comparatorConfigSummaryEntry(key, value) {
+  if (String(key).startsWith(BINARY_TASK_THINKING_PREFIX)) {
+    const task = String(key).slice(BINARY_TASK_THINKING_PREFIX.length).replace(/_/g, " ");
+    return `thinking ${task}=${value ? "activado" : "desactivado"}`;
+  }
+  return `${key}=${comparatorPreviewValue(value)}`;
 }
 
 function comparatorPreviewValue(value) {
@@ -5278,12 +5289,38 @@ function renderComparatorCliHelp(option) {
   return help ? `<p class="cli-field-help">${escapeHtml(help)}</p>` : "";
 }
 
+function isBinaryTaskModelOption(option) {
+  return comparatorOptionKey(option).startsWith(BINARY_TASK_MODEL_PREFIX);
+}
+
+function isBinaryTaskThinkingOption(option) {
+  return comparatorOptionKey(option).startsWith(BINARY_TASK_THINKING_PREFIX);
+}
+
+function comparatorTaskNameFromModelPath(path) {
+  return String(path || "").replace(BINARY_TASK_MODEL_PREFIX, "");
+}
+
+function comparatorTaskThinkingPathForModelOption(option) {
+  return `${BINARY_TASK_THINKING_PREFIX}${comparatorTaskNameFromModelPath(comparatorOptionKey(option))}`;
+}
+
+function comparatorModelSupportsThinking(model) {
+  const capabilities = comparatorOllamaModelCapabilities?.[String(model || "").trim()];
+  return Boolean(capabilities && capabilities.thinking === true);
+}
+
+function comparatorTaskModelDisplayName(path) {
+  return comparatorTaskNameFromModelPath(path).replace(/_/g, " ");
+}
+
 function renderComparatorCliFields(proposal, options) {
   if (proposal.kind !== "binary-mopso-cd") {
     return options.map((option) => renderComparatorCliOption(proposal, option));
   }
   const standalone = options.filter((option) => !option.configPath);
   const groupedOptions = options.filter((option) => option.configPath);
+  const optionsByKey = new Map(options.map((option) => [comparatorOptionKey(option), option]));
   const nodes = standalone.map((option) => renderComparatorCliOption(proposal, option));
   const groups = new Map();
   groupedOptions.forEach((option) => {
@@ -5296,24 +5333,100 @@ function renderComparatorCliFields(proposal, options) {
     .forEach(([group, groupOptions]) => {
       const details = document.createElement("details");
       details.className = "proposal-config-group";
+      const renderableOptions = groupOptions.filter((option) => !isBinaryTaskThinkingOption(option));
       details.innerHTML = `
         <summary>
           <span>
             <strong>${escapeHtml(group)}</strong>
-            <small>${escapeHtml(groupOptions.length)} parametro(s) desde default.yaml</small>
+            <small>${escapeHtml(renderableOptions.length)} parametro(s) desde default.yaml</small>
           </span>
           <b aria-hidden="true"></b>
         </summary>
         <div class="proposal-config-group-body"></div>
       `;
-      const renderedOptions = groupOptions.map((option) => renderComparatorCliOption(proposal, option));
+      const renderedOptions = renderableOptions.map((option) => {
+        if (!isBinaryTaskModelOption(option)) return renderComparatorCliOption(proposal, option);
+        const thinkingOption = optionsByKey.get(comparatorTaskThinkingPathForModelOption(option));
+        return renderComparatorTaskModelOption(proposal, option, thinkingOption);
+      });
       if (group === "router") {
         renderedOptions.unshift(renderComparatorNoRoutingPresetOption());
       }
       details.querySelector(".proposal-config-group-body").replaceChildren(...renderedOptions);
       nodes.push(details);
-    });
+  });
   return nodes;
+}
+
+function renderComparatorTaskModelOption(proposal, modelOption, thinkingOption) {
+  const fieldset = document.createElement("fieldset");
+  fieldset.className = "cli-fieldset cli-task-model-fieldset";
+  const modelPath = comparatorOptionKey(modelOption);
+  const thinkingPath = thinkingOption ? comparatorOptionKey(thinkingOption) : "";
+  fieldset.dataset.taskModelPath = modelPath;
+  if (thinkingPath) fieldset.dataset.taskThinkingPath = thinkingPath;
+  fieldset.innerHTML = `
+    <legend>${escapeHtml(comparatorOptionLabel(modelOption))}</legend>
+    ${renderComparatorCliHelp(modelOption)}
+    <small>${escapeHtml(comparatorOptionHelp(modelOption))}</small>
+  `;
+  const modelControl = renderComparatorCustomSelectOption(proposal, modelOption);
+  fieldset.append(modelControl);
+  if (thinkingOption) {
+    const thinkingLabel = document.createElement("label");
+    thinkingLabel.className = "cli-field cli-task-thinking-field";
+    thinkingLabel.innerHTML = `
+      <span>Thinking</span>
+      ${renderComparatorCliHelp(thinkingOption)}
+      <select class="cli-select" data-comparator-cli-value data-comparator-task-thinking-select data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(thinkingPath)}" data-cli-flag="${escapeHtml(thinkingOption.flag)}" data-cli-type="bool">
+        <option value="">Sin cambio</option>
+        <option value="false">Desactivado</option>
+        <option value="true">Activado</option>
+      </select>
+      <small data-comparator-task-thinking-status></small>
+    `;
+    fieldset.append(thinkingLabel);
+  }
+  const modelSelect = fieldset.querySelector("[data-comparator-cli-combo]");
+  const customInput = fieldset.querySelector("[data-comparator-cli-combo-custom]");
+  modelSelect?.addEventListener("change", () => syncComparatorTaskThinkingFieldset(fieldset));
+  customInput?.addEventListener("input", () => syncComparatorTaskThinkingFieldset(fieldset));
+  window.setTimeout(() => syncComparatorTaskThinkingFieldset(fieldset), 0);
+  return fieldset;
+}
+
+function comparatorTaskFieldsetEffectiveModel(fieldset) {
+  const modelSelect = fieldset?.querySelector?.("[data-comparator-cli-combo]");
+  const customInput = fieldset?.querySelector?.("[data-comparator-cli-combo-custom]");
+  if (!modelSelect) return readComparatorModelValue({ allowEmpty: true });
+  if (modelSelect.value === "__custom__") {
+    return String(customInput?.value || "").trim();
+  }
+  if (modelSelect.value) return modelSelect.value;
+  return readComparatorModelValue({ allowEmpty: true });
+}
+
+function syncComparatorTaskThinkingFieldset(fieldset) {
+  const thinkingSelect = fieldset?.querySelector?.("[data-comparator-task-thinking-select]");
+  if (!thinkingSelect) return;
+  const model = comparatorTaskFieldsetEffectiveModel(fieldset);
+  const supportsThinking = comparatorModelSupportsThinking(model);
+  const enabledOption = Array.from(thinkingSelect.options).find((option) => option.value === "true");
+  if (enabledOption) enabledOption.disabled = !supportsThinking;
+  if (!supportsThinking && thinkingSelect.value === "true") {
+    thinkingSelect.value = "";
+  }
+  const status = fieldset.querySelector("[data-comparator-task-thinking-status]");
+  if (status) {
+    status.textContent = supportsThinking
+      ? `Activable con ${model}.`
+      : `No activable con ${model || "modelo global/custom"} hasta declararlo compatible en Binary.`;
+  }
+  thinkingSelect.closest(".cli-field")?.classList.toggle("cli-field-disabled", !supportsThinking);
+}
+
+function syncComparatorTaskThinkingControls(container) {
+  container?.querySelectorAll?.(".cli-task-model-fieldset").forEach((fieldset) => syncComparatorTaskThinkingFieldset(fieldset));
 }
 
 function renderComparatorNoRoutingPresetOption() {
@@ -5873,6 +5986,7 @@ function openComparatorInstanceModal(proposalId, instanceId = null, duplicate = 
   if (configurableOptions.length) {
     fields.replaceChildren(...renderComparatorCliFields(proposal, configurableOptions));
     applyComparatorCliValues(fields, draft.proposalConfig?.cliValues || {});
+    syncComparatorTaskThinkingControls(fields);
     enhanceComparatorSelects(fields);
     bindComparatorConfigGroupLayouts(fields);
     bindComparatorNoRoutingPreset(fields);
@@ -6006,6 +6120,7 @@ function syncComparatorModelCustomField() {
   if (!custom) {
     dom.comparatorModelCustom.value = "";
   }
+  syncComparatorTaskThinkingControls(dom.comparatorInstanceModalBody);
 }
 
 function readComparatorModelValue(options = {}) {
@@ -6109,6 +6224,7 @@ async function loadComparatorProposals() {
       dom.comparatorExecutionMode.value = payload.defaults.executionMode;
       syncComparatorExecutionModeControls(false);
     }
+    comparatorOllamaModelCapabilities = payload.defaults?.ollamaModelCapabilities || {};
     setComparatorModelOptions(payload.defaults?.ollamaModelOptions || [], payload.defaults?.model || "llama3");
     if (dom.comparatorTimeoutMinutes && payload.defaults?.timeoutMinutes !== undefined) {
       dom.comparatorTimeoutMinutes.value = String(payload.defaults.timeoutMinutes);
@@ -8498,6 +8614,7 @@ dom.comparatorProjectionMethod?.addEventListener("change", () => {
 });
 dom.comparatorExecutionMode.addEventListener("change", () => syncComparatorExecutionModeControls(false));
 dom.comparatorModel?.addEventListener("change", syncComparatorModelCustomField);
+dom.comparatorModelCustom?.addEventListener("input", () => syncComparatorTaskThinkingControls(dom.comparatorInstanceModalBody));
 dom.comparatorProposalSelector?.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) return;
   const removeButton = event.target.closest("[data-remove-comparator-proposal]");

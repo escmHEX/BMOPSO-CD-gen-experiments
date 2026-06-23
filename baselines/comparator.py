@@ -122,6 +122,7 @@ PROXY_OBJECTIVE_NAMES = ["fidelity_sbert_proxy", "semantic_diversity_proxy"]
 MODULE_ROOT = Path(__file__).resolve().parents[1]
 BINARY_PROPOSAL_ID = "binary-mopso-cd"
 BINARY_TASK_MODEL_PREFIX = "router.task_models."
+BINARY_TASK_THINKING_PREFIX = "router.task_thinking."
 BINARY_MANAGED_CONFIG_PATHS = {
     "experiment.n",
     "experiment.iterations",
@@ -170,14 +171,6 @@ BINARY_FORCED_OPTION_TYPES = {
 }
 BINARY_STANDARD_COMPONENTS = ("role", "topic", "action")
 BINARY_OLLAMA_MODEL_CHOICES = ("llama3", "llama3.1:8b", "qwen3.5:2b")
-COMPARATOR_OLLAMA_MODEL_CHOICES = tuple(
-    dict.fromkeys(
-        [
-            str(COMPARATOR_DEFAULTS.get("model") or "llama3"),
-            *BINARY_OLLAMA_MODEL_CHOICES,
-        ]
-    )
-)
 BINARY_GUIDED_LIST_OPTIONS = {
     "experiment.frozen_components": {
         "type": "component_multi_select",
@@ -338,6 +331,9 @@ def binary_option_label(path: str) -> str:
     if path.startswith(BINARY_TASK_MODEL_PREFIX):
         task_name = path.removeprefix(BINARY_TASK_MODEL_PREFIX).replace("_", " ")
         return f"Modelo tarea: {task_name}"
+    if path.startswith(BINARY_TASK_THINKING_PREFIX):
+        task_name = path.removeprefix(BINARY_TASK_THINKING_PREFIX).replace("_", " ")
+        return f"Thinking tarea: {task_name}"
     return path.split(".")[-1].replace("_", " ")
 
 
@@ -349,6 +345,8 @@ def binary_option_type(path: str, value: Any) -> str:
     guided = BINARY_GUIDED_LIST_OPTIONS.get(path)
     if guided:
         return str(guided["type"])
+    if path.startswith(BINARY_TASK_THINKING_PREFIX):
+        return "bool"
     if path in BINARY_FORCED_OPTION_TYPES:
         return BINARY_FORCED_OPTION_TYPES[path]
     if isinstance(value, bool):
@@ -381,6 +379,48 @@ def load_binary_default_config(path: Path) -> dict[str, Any]:
     return payload
 
 
+def binary_model_options_from_config(config: dict[str, Any]) -> list[str]:
+    ollama = config.get("ollama") if isinstance(config.get("ollama"), dict) else {}
+    raw_options = ollama.get("model_options") if isinstance(ollama, dict) else None
+    if not isinstance(raw_options, list):
+        return list(BINARY_OLLAMA_MODEL_CHOICES)
+    options = [str(model).strip() for model in raw_options if str(model).strip()]
+    return options or list(BINARY_OLLAMA_MODEL_CHOICES)
+
+
+def binary_model_capabilities_from_config(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    ollama = config.get("ollama") if isinstance(config.get("ollama"), dict) else {}
+    raw_capabilities = ollama.get("model_capabilities") if isinstance(ollama, dict) else None
+    if not isinstance(raw_capabilities, dict):
+        return {}
+    capabilities: dict[str, dict[str, Any]] = {}
+    for model, values in raw_capabilities.items():
+        if isinstance(values, dict):
+            capabilities[str(model)] = dict(values)
+    return capabilities
+
+
+def load_binary_model_metadata() -> tuple[list[str], dict[str, dict[str, Any]]]:
+    config = load_binary_default_config(binary_default_config_path())
+    return binary_model_options_from_config(config), binary_model_capabilities_from_config(config)
+
+
+def comparator_ollama_model_choices() -> tuple[str, ...]:
+    try:
+        binary_choices, _capabilities = load_binary_model_metadata()
+    except Exception:
+        binary_choices = list(BINARY_OLLAMA_MODEL_CHOICES)
+    return tuple(dict.fromkeys([str(COMPARATOR_DEFAULTS.get("model") or "llama3"), *binary_choices]))
+
+
+def comparator_ollama_model_capabilities() -> dict[str, dict[str, Any]]:
+    try:
+        _binary_choices, capabilities = load_binary_model_metadata()
+    except Exception:
+        return {}
+    return capabilities
+
+
 def parse_simple_yaml_mapping(text: str) -> dict[str, Any]:
     root: dict[str, Any] = {}
     stack: list[tuple[int, dict[str, Any] | list[Any], dict[str, Any] | None, str | None]] = [(-1, root, None, None)]
@@ -406,9 +446,7 @@ def parse_simple_yaml_mapping(text: str) -> dict[str, Any]:
                 stack[-1] = (entry_indent, container, parent, parent_key)
             container.append(parse_simple_yaml_scalar(value_text))
             continue
-        if ":" not in stripped:
-            raise ValueError(f"Unsupported YAML syntax at line {line_number}.")
-        key, raw_value = stripped.split(":", 1)
+        key, raw_value = split_simple_yaml_mapping_line(stripped, line_number)
         key = key.strip()
         value_text = raw_value.strip()
         while stack and indent <= stack[-1][0]:
@@ -425,6 +463,20 @@ def parse_simple_yaml_mapping(text: str) -> dict[str, Any]:
         else:
             parent[key] = parse_simple_yaml_scalar(value_text)
     return root
+
+
+def split_simple_yaml_mapping_line(stripped: str, line_number: int) -> tuple[str, str]:
+    quote: str | None = None
+    for index, character in enumerate(stripped):
+        if character in {"'", '"'}:
+            if quote == character:
+                quote = None
+            elif quote is None:
+                quote = character
+            continue
+        if character == ":" and quote is None and (index == len(stripped) - 1 or stripped[index + 1].isspace()):
+            return stripped[:index], stripped[index + 1:]
+    raise ValueError(f"Unsupported YAML syntax at line {line_number}.")
 
 
 def parse_simple_yaml_scalar(value: str) -> Any:
@@ -468,8 +520,11 @@ def build_binary_cli_options() -> tuple[tuple[dict[str, Any], ...], str | None]:
         config = load_binary_default_config(binary_default_config_path())
     except Exception as exc:
         return tuple(base_options), str(exc)
+    binary_model_choices = binary_model_options_from_config(config)
 
     for path, default_value in sorted(flatten_mapping_leaves(config), key=lambda item: item[0]):
+        if path == "ollama.model_options" or path.startswith("ollama.model_capabilities."):
+            continue
         option_type = binary_option_type(path, default_value)
         option: dict[str, Any] = {
             "flag": "--set",
@@ -494,9 +549,19 @@ def build_binary_cli_options() -> tuple[tuple[dict[str, Any], ...], str | None]:
         if path in BINARY_PATH_CHOICES and "choices" not in option:
             option["choices"] = BINARY_PATH_CHOICES[path]
             option["allowCustom"] = path not in BINARY_SELECT_OPTION_PATHS
-        if path.startswith(BINARY_TASK_MODEL_PREFIX):
-            option["choices"] = BINARY_OLLAMA_MODEL_CHOICES
+        if path == "ollama.alternative_model":
+            option["choices"] = binary_model_choices
             option["allowCustom"] = True
+        if path.startswith(BINARY_TASK_MODEL_PREFIX):
+            option["choices"] = binary_model_choices
+            option["allowCustom"] = True
+        if path.startswith(BINARY_TASK_THINKING_PREFIX):
+            task_name = path.removeprefix(BINARY_TASK_THINKING_PREFIX)
+            option["pairedModelPath"] = f"{BINARY_TASK_MODEL_PREFIX}{task_name}"
+            option["allowFalse"] = True
+            option["valueHelp"] = (
+                "Activa thinking solo si el modelo efectivo de esta tarea esta declarado como compatible en Binary."
+            )
         base_options.append(option)
     return tuple(base_options), None
 
@@ -1829,7 +1894,8 @@ class ComparatorService:
     def public_defaults(self) -> dict[str, Any]:
         return {
             "model": str(COMPARATOR_DEFAULTS.get("model") or "llama3"),
-            "ollamaModelOptions": list(COMPARATOR_OLLAMA_MODEL_CHOICES),
+            "ollamaModelOptions": list(comparator_ollama_model_choices()),
+            "ollamaModelCapabilities": comparator_ollama_model_capabilities(),
             "timeoutMinutes": self._int_between(
                 COMPARATOR_DEFAULTS.get("timeoutMinutes", COMPARATOR_TIMEOUT_MINUTES_MIN),
                 "timeoutMinutes",
@@ -3623,7 +3689,11 @@ class ComparatorService:
     def _validate_binary_manual_set_args(self, extra_args: list[str]) -> None:
         blocked_paths: list[str] = []
         for path in self._binary_set_paths_from_args(extra_args):
-            if path in BINARY_MANAGED_CONFIG_PATHS or path.startswith(BINARY_TASK_MODEL_PREFIX):
+            if (
+                path in BINARY_MANAGED_CONFIG_PATHS
+                or path.startswith(BINARY_TASK_MODEL_PREFIX)
+                or path.startswith(BINARY_TASK_THINKING_PREFIX)
+            ):
                 blocked_paths.append(path)
         if blocked_paths:
             raise ValueError(
