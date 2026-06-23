@@ -21,6 +21,25 @@ import {
   comparatorProposalColor,
 } from "../LLM/comparator_chart_helpers.mjs";
 
+function rgbDistance(left, right) {
+  const leftRgb = hexToRgb(left);
+  const rightRgb = hexToRgb(right);
+  return Math.sqrt(
+    ((leftRgb.r - rightRgb.r) ** 2)
+    + ((leftRgb.g - rightRgb.g) ** 2)
+    + ((leftRgb.b - rightRgb.b) ** 2),
+  );
+}
+
+function hexToRgb(color) {
+  const value = String(color || "").replace("#", "");
+  return {
+    r: Number.parseInt(value.slice(0, 2), 16),
+    g: Number.parseInt(value.slice(2, 4), 16),
+    b: Number.parseInt(value.slice(4, 6), 16),
+  };
+}
+
 test("chart axis window expands the default data scale by the requested zoom factor", () => {
   const window = comparatorChartAxisWindow([
     { value: [2, 10] },
@@ -274,6 +293,31 @@ test("binary proposal always uses configured green chart color", () => {
   assert.equal(comparatorProposalColor({ proposalId: "binary-mopso-cd" }, 3), "#2A8C00");
   assert.equal(comparatorProposalColor({ instanceId: "binary-mopso-cd:2", proposalId: "binary-mopso-cd" }, 4), "#2A8C00");
   assert.notEqual(comparatorProposalColor({ proposalId: "evolmd-mo" }, 0), "#2A8C00");
+});
+
+test("non-binary proposals use the first twenty high-contrast colors without repeats", () => {
+  const colors = Array.from({ length: 20 }, (_unused, index) =>
+    comparatorProposalColor({ proposalId: `baseline-${index}` }, index),
+  );
+  const reservedColors = new Set(["#000000", "#FFFFFF", "#2A8C00"]);
+
+  assert.equal(new Set(colors).size, 20);
+  colors.forEach((color) => {
+    assert.match(color, /^#[0-9A-F]{6}$/);
+    assert.equal(reservedColors.has(color), false);
+  });
+});
+
+test("non-binary proposal palette keeps adjacent colors visually separated", () => {
+  const colors = Array.from({ length: 20 }, (_unused, index) =>
+    comparatorProposalColor({ proposalId: `baseline-${index}` }, index),
+  );
+  const minimumDistance = colors.reduce((minimum, color, index) => {
+    const distances = colors.slice(index + 1).map((otherColor) => rgbDistance(color, otherColor));
+    return Math.min(minimum, ...distances);
+  }, Number.POSITIVE_INFINITY);
+
+  assert.ok(minimumDistance >= 45, `minimum distance was ${minimumDistance}`);
 });
 
 test("quality winners do not depend on cost comparability", () => {

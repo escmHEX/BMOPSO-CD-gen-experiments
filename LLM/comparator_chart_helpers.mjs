@@ -17,6 +17,30 @@ function cleanAxisNumber(value) {
   return Number(Number(value).toPrecision(12));
 }
 
+const COMPARATOR_BINARY_COLOR = "#2A8C00";
+const COMPARATOR_NON_BINARY_PALETTE = Object.freeze([
+  "#1F77B4",
+  "#D62728",
+  "#9467BD",
+  "#FF7F0E",
+  "#17BECF",
+  "#F200F2",
+  "#F2DA61",
+  "#601773",
+  "#4B18F2",
+  "#8C7E38",
+  "#F26183",
+  "#731F00",
+  "#BF0093",
+  "#E961F2",
+  "#003673",
+  "#61F2F2",
+  "#F2DA00",
+  "#6196F2",
+  "#0041F2",
+  "#A218F2",
+]);
+
 export function comparatorExpandedAxisWindow(defaultMin, defaultMax, options = {}) {
   const rawMin = Number(defaultMin);
   const rawMax = Number(defaultMax);
@@ -84,9 +108,9 @@ export function comparatorIsBinaryProposal(proposal) {
 }
 
 export function comparatorProposalColor(proposal, index = 0) {
-  if (comparatorIsBinaryProposal(proposal)) return "#2A8C00";
-  const palette = ["#2458b8", "#0f766e", "#b42318", "#7c3aed", "#ca8a04"];
-  return palette[index % palette.length];
+  if (comparatorIsBinaryProposal(proposal)) return COMPARATOR_BINARY_COLOR;
+  const colorIndex = Math.abs(Math.trunc(Number(index) || 0)) % COMPARATOR_NON_BINARY_PALETTE.length;
+  return COMPARATOR_NON_BINARY_PALETTE[colorIndex];
 }
 
 export function comparatorBenchmarkProposals(proposals = []) {
