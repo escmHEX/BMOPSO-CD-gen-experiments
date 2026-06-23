@@ -414,6 +414,8 @@ let lmStudioModelOptions = [];
 const dom = {
   navItems: document.querySelectorAll(".nav-item"),
   panels: document.querySelectorAll(".tool-panel"),
+  portalRestartButton: document.querySelector("#portalRestartButton"),
+  portalRestartStatus: document.querySelector("#portalRestartStatus"),
   lmEndpoint: document.querySelector("#lmEndpoint"),
   lmApiMode: document.querySelector("#lmApiMode"),
   llmModelSelect: document.querySelector("#llmModelSelect"),
@@ -803,6 +805,10 @@ const DEFAULT_SYSTEM_PROMPT_TEMPLATES = {
 };
 
 const COMPARATOR_API = "/api/comparator";
+const PORTAL_API = "/api/portal";
+const PORTAL_RESTART_HEADER = "X-Tool-Portal-Restart";
+const PORTAL_RESTART_POLL_INTERVAL_MS = 500;
+const PORTAL_RESTART_TIMEOUT_MS = 30000;
 const COMPARATOR_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const COMPARATOR_MAX_TRANSIENT_POLL_FAILURES = 5;
 const COMPARATOR_LOG_CHUNK_LIMIT = 5000;
@@ -6308,6 +6314,106 @@ async function requestComparatorJson(path, options = {}) {
   return payload;
 }
 
+async function requestPortalJson(path, options = {}) {
+  const { headers = {}, ...fetchOptions } = options;
+  const response = await fetch(`${PORTAL_API}${path}`, {
+    ...fetchOptions,
+    headers: {
+      "Content-Type": "application/json",
+      ...headers,
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.error || `HTTP ${response.status}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
+}
+
+function portalDelay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function setPortalRestartState(state, message = "") {
+  const busy = state === "busy";
+  const label = dom.portalRestartButton?.querySelector?.("[data-portal-restart-label]");
+  if (dom.portalRestartButton) {
+    dom.portalRestartButton.disabled = busy;
+    dom.portalRestartButton.classList.toggle("is-loading", busy);
+    dom.portalRestartButton.setAttribute("aria-busy", busy ? "true" : "false");
+  }
+  if (label) {
+    label.textContent = busy ? "Reiniciando" : "Reiniciar";
+  }
+  if (dom.portalRestartStatus) {
+    dom.portalRestartStatus.textContent = message;
+    dom.portalRestartStatus.classList.toggle("is-ready", state === "ready");
+    dom.portalRestartStatus.classList.toggle("is-error", state === "error");
+  }
+}
+
+function portalRestartCompleted(previousHealth, currentHealth) {
+  if (!currentHealth) return false;
+  if (!previousHealth) return true;
+  return currentHealth.pid !== previousHealth.pid || currentHealth.startedAt !== previousHealth.startedAt;
+}
+
+async function waitForPortalRestart(previousHealth) {
+  const deadline = Date.now() + PORTAL_RESTART_TIMEOUT_MS;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const health = await requestPortalJson("/health", { cache: "no-store" });
+      if (portalRestartCompleted(previousHealth, health)) {
+        return health;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await portalDelay(PORTAL_RESTART_POLL_INTERVAL_MS);
+  }
+  throw new Error(lastError?.message || "El backend no volvio antes del timeout.");
+}
+
+function portalActiveRunsMessage(payload) {
+  const activeRuns = Array.isArray(payload?.activeRuns) ? payload.activeRuns : [];
+  if (!activeRuns.length) {
+    return payload?.error || "Hay corridas activas. Espera a que terminen antes de reiniciar.";
+  }
+  return `Hay ${activeRuns.length} corrida(s) activa(s). Espera a que terminen o cancelalas antes de reiniciar.`;
+}
+
+async function restartPortalBackend() {
+  if (!dom.portalRestartButton || dom.portalRestartButton.disabled) return;
+  let previousHealth = null;
+  setPortalRestartState("busy", "Preparando reinicio...");
+  try {
+    try {
+      previousHealth = await requestPortalJson("/health", { cache: "no-store" });
+    } catch (_error) {
+      previousHealth = null;
+    }
+    const restart = await requestPortalJson("/restart", {
+      method: "POST",
+      headers: {
+        [PORTAL_RESTART_HEADER]: "1",
+      },
+      body: "{}",
+    });
+    previousHealth = previousHealth || restart;
+    setPortalRestartState("busy", "Backend reiniciando...");
+    await waitForPortalRestart(previousHealth);
+    setPortalRestartState("ready", "Backend reiniciado.");
+    await loadComparatorProposals();
+  } catch (error) {
+    const message = error.status === 409 ? portalActiveRunsMessage(error.payload) : `No se pudo reiniciar: ${error.message}`;
+    setPortalRestartState("error", message);
+  }
+}
+
 async function loadComparatorProposals() {
   try {
     const payload = await requestComparatorJson("/proposals");
@@ -8627,6 +8733,7 @@ dom.navItems.forEach((button) => {
 });
 document.addEventListener("click", handleCopyButtonClick);
 
+dom.portalRestartButton?.addEventListener("click", restartPortalBackend);
 dom.loadModelsButton.addEventListener("click", fetchLmStudioModels);
 dom.previewPromptButton.addEventListener("click", () => {
   dom.renderedPromptPreview.textContent = renderPrompt();

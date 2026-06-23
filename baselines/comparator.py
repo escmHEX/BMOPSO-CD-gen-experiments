@@ -506,7 +506,7 @@ def parse_simple_yaml_scalar(value: str) -> Any:
         return text
 
 
-def build_binary_cli_options() -> tuple[tuple[dict[str, Any], ...], str | None]:
+def build_binary_cli_options(config: dict[str, Any] | None = None) -> tuple[tuple[dict[str, Any], ...], str | None]:
     base_options: list[dict[str, Any]] = [
         {"flag": "--reference-text", "type": "string", "source": "managed"},
         {
@@ -516,10 +516,11 @@ def build_binary_cli_options() -> tuple[tuple[dict[str, Any], ...], str | None]:
             "help": "Archivo YAML opcional que se mezcla sobre configs/default.yaml antes de aplicar overrides --set.",
         },
     ]
-    try:
-        config = load_binary_default_config(binary_default_config_path())
-    except Exception as exc:
-        return tuple(base_options), str(exc)
+    if config is None:
+        try:
+            config = load_binary_default_config(binary_default_config_path())
+        except Exception as exc:
+            return tuple(base_options), str(exc)
     binary_model_choices = binary_model_options_from_config(config)
 
     for path, default_value in sorted(flatten_mapping_leaves(config), key=lambda item: item[0]):
@@ -567,6 +568,10 @@ def build_binary_cli_options() -> tuple[tuple[dict[str, Any], ...], str | None]:
 
 
 BINARY_CLI_OPTIONS, BINARY_CONFIG_METADATA_ERROR = build_binary_cli_options()
+
+
+def current_binary_cli_options() -> tuple[tuple[dict[str, Any], ...], str | None]:
+    return build_binary_cli_options()
 
 
 def utc_now() -> str:
@@ -1856,14 +1861,15 @@ class ComparatorService:
                 "pythonExecutable": proposal_python_executable(self.root, repository, proposal),
                 "error": "Proposal entrypoint is missing.",
             }
-            if proposal.kind == "binary-mopso-cd" and BINARY_CONFIG_METADATA_ERROR:
+            cli_options, metadata_error = self._proposal_cli_options_with_error(proposal)
+            if proposal.kind == "binary-mopso-cd" and metadata_error:
                 dependencies = dict(dependencies)
                 missing = list(dependencies.get("missing") or [])
                 if "default.yaml" not in missing:
                     missing.append("default.yaml")
                 dependencies["ok"] = False
                 dependencies["missing"] = missing
-                dependencies["error"] = BINARY_CONFIG_METADATA_ERROR
+                dependencies["error"] = metadata_error
             git_config = self._default_git_config(proposal)
             proposals.append(
                 {
@@ -1881,7 +1887,7 @@ class ComparatorService:
                     "supportsHistoryExport": proposal.supports_history_export,
                     "entrypointAvailable": entrypoint_available,
                     "dependencyStatus": dependencies,
-                    "cliOptions": list(proposal.cli_options),
+                    "cliOptions": list(cli_options),
                     "git": {
                         **git_config,
                         "snapshot": self._repository_git_snapshot(repository, git_config),
@@ -1890,6 +1896,15 @@ class ComparatorService:
                 }
             )
         return proposals
+
+    def _proposal_cli_options_with_error(self, proposal: ProposalDefinition) -> tuple[tuple[dict[str, Any], ...], str | None]:
+        if proposal.kind != "binary-mopso-cd":
+            return proposal.cli_options, None
+        return current_binary_cli_options()
+
+    def _proposal_cli_options(self, proposal: ProposalDefinition) -> tuple[dict[str, Any], ...]:
+        options, _error = self._proposal_cli_options_with_error(proposal)
+        return options
 
     def public_defaults(self) -> dict[str, Any]:
         return {
@@ -2661,7 +2676,7 @@ class ComparatorService:
     def _configurable_cli_options(self, proposal: ProposalDefinition) -> dict[str, dict[str, Any]]:
         return {
             self._cli_option_key(option): option
-            for option in proposal.cli_options
+            for option in self._proposal_cli_options(proposal)
             if option.get("source") not in {"managed", "common"}
         }
 
@@ -3598,7 +3613,7 @@ class ComparatorService:
     def _binary_task_model_paths(self, proposal: ProposalDefinition) -> list[str]:
         paths = [
             str(option.get("configPath"))
-            for option in proposal.cli_options
+            for option in self._proposal_cli_options(proposal)
             if str(option.get("configPath") or "").startswith(BINARY_TASK_MODEL_PREFIX)
         ]
         return sorted(path for path in paths if path)
@@ -3657,7 +3672,7 @@ class ComparatorService:
     def _validate_extra_args(self, proposal: ProposalDefinition, extra_args: list[str]) -> None:
         managed_flags = {
             str(option["flag"])
-            for option in proposal.cli_options
+            for option in self._proposal_cli_options(proposal)
             if option.get("source") in {"managed", "common"}
         }
         if proposal.kind == "binary-mopso-cd":

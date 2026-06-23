@@ -12,8 +12,17 @@
     <div class="portal-shell">
       <aside class="sidebar">
         <div class="brand-block">
-          <span>Herramientas</span>
-          <strong>Tesis LLM</strong>
+          <div class="brand-heading">
+            <div class="brand-copy">
+              <span>Herramientas</span>
+              <strong>Tesis LLM</strong>
+            </div>
+            <button id="portalRestartButton" class="portal-restart-button" type="button" aria-label="Reiniciar backend" title="Reiniciar backend">
+              <span class="portal-restart-spinner" aria-hidden="true"></span>
+              <span data-portal-restart-label>Reiniciar</span>
+            </button>
+          </div>
+          <small id="portalRestartStatus" class="portal-restart-status" aria-live="polite"></small>
         </div>
         <nav class="tool-nav" aria-label="Herramientas disponibles">
           <button class="nav-item is-active" type="button" data-tool="templateChecker">Evaluador de plantillas</button>

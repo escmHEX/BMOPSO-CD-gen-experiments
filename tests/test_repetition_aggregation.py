@@ -758,6 +758,53 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertIn("ministral-3:3b", options_by_key["router.task_models.synthetic_text_generation"]["choices"])
         self.assertTrue(options_by_key["router.task_models.synthetic_text_generation"]["allowCustom"])
 
+    def test_binary_proposal_cli_options_refresh_model_choices_from_default_yaml(self):
+        service = ComparatorService(Path("."))
+        config = comparator_module.load_binary_default_config(comparator_module.binary_default_config_path())
+        config["ollama"]["model_options"] = list(config["ollama"]["model_options"]) + ["hot-model:7b"]
+
+        with patch.object(comparator_module, "load_binary_default_config", return_value=config):
+            proposals = service.list_proposals()
+        binary = next(item for item in proposals if item["proposalId"] == "binary-mopso-cd")
+        options_by_key = {
+            str(option.get("key") or option.get("configPath") or option.get("flag")): option
+            for option in binary["cliOptions"]
+        }
+
+        choices = options_by_key["router.task_models.synthetic_text_generation"]["choices"]
+        self.assertIn("hot-model:7b", choices)
+
+    def test_binary_cli_options_rebuild_from_current_default_yaml(self):
+        config = {
+            "ollama": {
+                "alternative_model": "llama3",
+                "model_options": ["llama3", "fresh-model:1b"],
+                "model_capabilities": {
+                    "fresh-model:1b": {
+                        "thinking": True,
+                    },
+                },
+            },
+            "router": {
+                "task_models": {
+                    "synthetic_text_generation": "llama3",
+                },
+                "task_thinking": {
+                    "synthetic_text_generation": None,
+                },
+            },
+        }
+
+        options, error = comparator_module.build_binary_cli_options(config)
+        self.assertIsNone(error)
+        options_by_key = {
+            str(option.get("key") or option.get("configPath") or option.get("flag")): option
+            for option in options
+        }
+
+        self.assertIn("fresh-model:1b", options_by_key["ollama.alternative_model"]["choices"])
+        self.assertIn("fresh-model:1b", options_by_key["router.task_models.synthetic_text_generation"]["choices"])
+
     def test_comparator_public_defaults_use_binary_model_options_and_capabilities(self):
         service = ComparatorService(Path("."))
 

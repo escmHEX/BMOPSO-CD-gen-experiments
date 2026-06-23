@@ -209,6 +209,19 @@ pre:focus-visible {
 
 .brand-block {
   display: grid;
+  gap: 8px;
+}
+
+.brand-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.brand-copy {
+  display: grid;
+  min-width: 0;
   gap: 6px;
 }
 
@@ -233,6 +246,65 @@ label span,
 
 .brand-block strong {
   font-size: 1.35rem;
+}
+
+.portal-restart-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0 0.65rem;
+}
+
+.portal-restart-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+  transform: none;
+}
+
+.portal-restart-button.is-loading {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.portal-restart-spinner {
+  display: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  border-radius: 999px;
+}
+
+.portal-restart-button.is-loading .portal-restart-spinner {
+  display: inline-block;
+  animation: portal-spin 760ms linear infinite;
+}
+
+.portal-restart-status {
+  min-height: 16px;
+  color: var(--sidebar-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.portal-restart-status.is-ready {
+  color: #bbf7d0;
+}
+
+.portal-restart-status.is-error {
+  color: #fecaca;
+}
+
+@keyframes portal-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .tool-nav {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import http.server
 import json
 import mimetypes
@@ -8,10 +9,12 @@ import os
 import socketserver
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 from baselines.comparator import ComparatorService
@@ -38,6 +41,11 @@ REFERENCE_TEXTS_PREFIX = "/api/reference-texts"
 TURBULENCE_COMPARISON_PREFIX = "/api/turbulence-comparison"
 SBERT_PREFIX = "/api/sbert"
 LM_STUDIO_API_PREFIX = "/api/lm-studio"
+PORTAL_API_PREFIX = "/api/portal"
+PORTAL_RESTART_HEADER = "X-Tool-Portal-Restart"
+PORTAL_ACTIVE_STATUSES = {"queued", "running"}
+PORTAL_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+PORTAL_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def release_existing_server_port(host: str, port: int) -> None:
@@ -49,7 +57,7 @@ def release_existing_server_port(host: str, port: int) -> None:
         return
 
     command_line = windows_process_command_line(process_id)
-    if "server.py" not in command_line:
+    if "server.py" not in command_line and not is_tool_portal_listener(host, port):
         raise RuntimeError(
             f"Port {port} is already in use by a different process: PID {process_id}, {command_line}"
         )
@@ -61,13 +69,7 @@ def release_existing_server_port(host: str, port: int) -> None:
         if "server.py" in parent_command_line and ("py.exe" in parent_command_line or "\\py " in parent_command_line):
             target_process_id = parent_process_id
 
-    subprocess.run(
-        ["taskkill", "/PID", str(target_process_id), "/T", "/F"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
-    )
+    terminate_windows_process_tree(target_process_id)
     wait_for_port_release(host, port)
 
 
@@ -99,29 +101,100 @@ def find_windows_listener_pid(host: str, port: int) -> int | None:
 
 def windows_process_command_line(process_id: int) -> str:
     script = f"(Get-CimInstance Win32_Process -Filter \"ProcessId = {process_id}\").CommandLine"
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", script],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return ""
     return result.stdout.strip()
 
 
 def windows_process_parent_id(process_id: int) -> int | None:
     script = f"(Get-CimInstance Win32_Process -Filter \"ProcessId = {process_id}\").ParentProcessId"
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", script],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None
     try:
         return int(result.stdout.strip())
     except ValueError:
         return None
+
+
+def is_tool_portal_listener(host: str, port: int) -> bool:
+    probe_host = "127.0.0.1" if host in {"0.0.0.0", "::", ""} else host
+    static_url = f"http://{probe_host}:{port}/LLM/"
+    try:
+        with urllib.request.urlopen(static_url, timeout=3) as response:
+            if response.status == 200 and is_tool_portal_html(response.read().decode("utf-8", errors="ignore")):
+                return True
+    except Exception:
+        pass
+
+    url = f"http://{probe_host}:{port}{COMPARATOR_PREFIX}/proposals"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return False
+    return isinstance(payload, dict) and isinstance(payload.get("proposals"), list) and isinstance(payload.get("defaults"), dict)
+
+
+def is_tool_portal_html(text: str) -> bool:
+    return "Portal de herramientas LLM" in text and "Tesis LLM" in text
+
+
+def terminate_windows_process_tree(process_id: int) -> None:
+    try:
+        subprocess.run(
+            ["taskkill", "/PID", str(process_id), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        try:
+            stop_windows_process(process_id)
+        except subprocess.TimeoutExpired:
+            terminate_windows_process_direct(process_id)
+
+
+def stop_windows_process(process_id: int) -> None:
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", f"Stop-Process -Id {process_id} -Force"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+
+def terminate_windows_process_direct(process_id: int) -> None:
+    if sys.platform != "win32":
+        return
+    kernel32 = ctypes.windll.kernel32
+    process_terminate = 0x0001
+    handle = kernel32.OpenProcess(process_terminate, False, int(process_id))
+    if not handle:
+        return
+    try:
+        kernel32.TerminateProcess(handle, 1)
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def wait_for_port_release(host: str, port: int) -> None:
@@ -141,8 +214,94 @@ def first_query_value(query: dict[str, list[str]], key: str) -> str | None:
     return values[0]
 
 
+def portal_health_payload(host: str, port: int, lm_studio_base: str, started_at: str) -> dict:
+    return {
+        "status": "ok",
+        "pid": os.getpid(),
+        "startedAt": started_at,
+        "host": host,
+        "port": port,
+        "lmStudio": lm_studio_base,
+    }
+
+
+def portal_active_work_summary(services: dict[str, object]) -> list[dict]:
+    active: list[dict] = []
+    for service_name, service in services.items():
+        runs = getattr(service, "_runs", {})
+        lock = getattr(service, "_lock", None)
+        if lock:
+            with lock:
+                snapshot = dict(runs)
+        else:
+            snapshot = dict(runs)
+        for fallback_run_id, run in snapshot.items():
+            if not isinstance(run, dict):
+                continue
+            status = str(run.get("status") or "")
+            cancel_pending = bool(run.get("cancelRequested")) and status not in PORTAL_TERMINAL_STATUSES
+            if status not in PORTAL_ACTIVE_STATUSES and not cancel_pending:
+                continue
+            active.append(
+                {
+                    "service": service_name,
+                    "runId": str(run.get("runId") or fallback_run_id),
+                    "status": status,
+                }
+            )
+    return active
+
+
+def build_portal_restart_command(root: Path, host: str, port: int, lm_studio_base: str) -> list[str]:
+    return [
+        sys.executable,
+        str(root / "server.py"),
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--lm-studio",
+        lm_studio_base,
+    ]
+
+
+def schedule_portal_restart(
+    command: list[str],
+    cwd: Path,
+    delay_seconds: float = 0.35,
+    launcher=None,
+) -> threading.Thread:
+    process_launcher = launcher or subprocess.Popen
+
+    def restart() -> None:
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        kwargs = {
+            "cwd": str(cwd),
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "close_fds": True,
+        }
+        if creationflags:
+            kwargs["creationflags"] = creationflags
+        process_launcher(command, **kwargs)
+
+    thread = threading.Thread(target=restart, name="portal-backend-restart", daemon=True)
+    thread.start()
+    return thread
+
+
 class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
     lm_studio_base = DEFAULT_LM_STUDIO
+    portal_root = Path(__file__).resolve().parent
+    portal_host = DEFAULT_HOST
+    portal_port = DEFAULT_PORT
+    portal_started_at = PORTAL_STARTED_AT
     comparator_service: ComparatorService
     initial_population_service: InitialPopulationService
     initial_population_comparison_service: InitialPopulationComparisonService
@@ -159,6 +318,9 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         super().do_OPTIONS()
 
     def do_GET(self) -> None:
+        if self.path.startswith(PORTAL_API_PREFIX):
+            self.handle_portal_get()
+            return
         if self.path.startswith(REFERENCE_TEXTS_PREFIX):
             self.handle_reference_texts_get()
             return
@@ -180,6 +342,9 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self) -> None:
+        if self.path.startswith(PORTAL_API_PREFIX):
+            self.handle_portal_post()
+            return
         if self.path.startswith(REFERENCE_TEXTS_PREFIX):
             self.handle_reference_texts_post()
             return
@@ -222,12 +387,75 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             or self.path.startswith(TURBULENCE_COMPARISON_PREFIX)
             or self.path.startswith(SBERT_PREFIX)
             or self.path.startswith(LM_STUDIO_API_PREFIX)
+            or self.path.startswith(PORTAL_API_PREFIX)
         )
 
     def send_cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+    def handle_portal_get(self) -> None:
+        path_parts = self.portal_path_parts()
+        if path_parts == ["health"]:
+            self.send_json(
+                200,
+                portal_health_payload(
+                    self.portal_host,
+                    self.portal_port,
+                    self.lm_studio_base,
+                    self.portal_started_at,
+                ),
+            )
+            return
+        self.send_json(404, {"error": "Not found."})
+
+    def handle_portal_post(self) -> None:
+        path_parts = self.portal_path_parts()
+        if path_parts != ["restart"]:
+            self.send_json(404, {"error": "Not found."})
+            return
+        self.read_request_body()
+        if self.headers.get(PORTAL_RESTART_HEADER) != "1":
+            self.send_json(403, {"error": "Missing portal restart header."})
+            return
+        active_work = portal_active_work_summary(self.portal_services())
+        if active_work:
+            self.send_json(
+                409,
+                {
+                    "error": "No se puede reiniciar el backend mientras hay corridas activas.",
+                    "activeRuns": active_work,
+                },
+            )
+            return
+        command = build_portal_restart_command(
+            self.portal_root,
+            self.portal_host,
+            self.portal_port,
+            self.lm_studio_base,
+        )
+        self.send_json(
+            202,
+            {
+                "status": "restarting",
+                "pid": os.getpid(),
+                "startedAt": self.portal_started_at,
+            },
+        )
+        try:
+            self.wfile.flush()
+        except OSError:
+            pass
+        schedule_portal_restart(command, self.portal_root)
+
+    def portal_services(self) -> dict[str, object]:
+        return {
+            "comparator": self.comparator_service,
+            "initialPopulation": self.initial_population_service,
+            "initialPopulationComparison": self.initial_population_comparison_service,
+            "turbulenceComparison": self.turbulence_comparison_service,
+        }
 
     def proxy_to_lm_studio(self) -> None:
         target_url = self.build_target_url()
@@ -604,6 +832,13 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             return []
         return [urllib.parse.unquote(part) for part in api_path.split("/") if part]
 
+    def portal_path_parts(self) -> list[str]:
+        parsed = urllib.parse.urlsplit(self.path)
+        api_path = parsed.path.removeprefix(PORTAL_API_PREFIX).strip("/")
+        if not api_path:
+            return []
+        return [urllib.parse.unquote(part) for part in api_path.split("/") if part]
+
     def initial_population_path_parts(self) -> list[str]:
         parsed = urllib.parse.urlsplit(self.path)
         api_path = parsed.path.removeprefix(INITIAL_POPULATION_PREFIX).strip("/")
@@ -667,6 +902,10 @@ def main() -> None:
         **handler_kwargs,
     )
     ToolPortalHandler.lm_studio_base = args.lm_studio.rstrip("/")
+    ToolPortalHandler.portal_root = root
+    ToolPortalHandler.portal_host = args.host
+    ToolPortalHandler.portal_port = args.port
+    ToolPortalHandler.portal_started_at = PORTAL_STARTED_AT
     ToolPortalHandler.comparator_service = ComparatorService(root)
     ToolPortalHandler.initial_population_service = InitialPopulationService(root)
     ToolPortalHandler.initial_population_comparison_service = InitialPopulationComparisonService(root)
