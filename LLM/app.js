@@ -17,6 +17,9 @@ import {
   comparatorPointCoordinates,
   comparatorProposalColor,
 } from "./comparator_chart_helpers.mjs";
+import {
+  comparatorHistoricalInstancesFromRun,
+} from "./comparator_instance_helpers.mjs";
 
 const EMBEDDING_MODELS = {
   "all-MiniLM-L6-v2": {
@@ -380,6 +383,8 @@ let comparatorProposals = [];
 let comparatorInstances = [];
 let comparatorOllamaModelCapabilities = {};
 let comparatorInstancesInitialized = false;
+let comparatorInstancesReadOnly = false;
+let comparatorInstancesSourceRunId = null;
 let comparatorInstanceModalState = null;
 let comparatorCharts = [];
 let comparatorChartSignature = "";
@@ -4643,7 +4648,8 @@ function comparatorStatusClass(status) {
 }
 
 function setComparatorRunning(isRunning, cancelRequested = false) {
-  dom.runComparatorButton.disabled = isRunning;
+  const configLocked = isRunning || comparatorInstancesReadOnly;
+  dom.runComparatorButton.disabled = configLocked;
   dom.cancelComparatorButton.disabled = !isRunning || !currentComparatorRunId || cancelRequested;
   dom.cancelComparatorButton.textContent = cancelRequested ? "Cancelando..." : "Cancelar";
   if (dom.recomputeComparatorMetricsButton && isRunning) {
@@ -4675,10 +4681,10 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
   dom.comparatorProposalSelector.querySelectorAll("input, select, button").forEach((field) => {
     const card = field.closest("[data-proposal-catalog-card]");
     const unavailable = card?.dataset.available === "0";
-    field.disabled = isRunning || unavailable;
+    field.disabled = configLocked || unavailable;
   });
   dom.comparatorProposalConfigPanels.querySelectorAll("input, select, textarea, button").forEach((field) => {
-    field.disabled = isRunning;
+    field.disabled = configLocked;
   });
   comparatorChoiceInstances.forEach((choice) => {
     if (isRunning) {
@@ -4691,6 +4697,17 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
   if (!isRunning) {
     syncComparatorRecomputeButton(latestComparatorRun);
   }
+}
+
+function syncComparatorHistoricalInstanceControls() {
+  if (!comparatorInstancesReadOnly) return;
+  dom.runComparatorButton.disabled = true;
+  dom.comparatorProposalSelector.querySelectorAll("input, select, button").forEach((field) => {
+    field.disabled = true;
+  });
+  dom.comparatorProposalConfigPanels.querySelectorAll("input, select, textarea, button").forEach((field) => {
+    field.disabled = true;
+  });
 }
 
 function syncComparatorExecutionModeControls(isRunning = false) {
@@ -4794,6 +4811,13 @@ function resetComparatorUi(options = {}) {
   currentComparatorRunId = null;
   comparatorPollFailureCount = 0;
   latestComparatorRun = null;
+  const resetHistoricalInstances = comparatorInstancesReadOnly;
+  exitComparatorHistoricalInstanceMode({ resetToDefaults: true });
+  if (resetHistoricalInstances && comparatorProposals.length) {
+    renderComparatorProposalControls(comparatorProposals);
+  } else if (resetHistoricalInstances) {
+    renderComparatorInstanceList();
+  }
   if (clearStoredRunId) {
     clearStoredComparatorRunId();
   }
@@ -4945,6 +4969,26 @@ function comparatorDefaultInstances(proposals) {
     }));
 }
 
+function resetComparatorInstancesToDefaults() {
+  if (!comparatorProposals.length) {
+    comparatorInstances = [];
+    comparatorInstancesInitialized = false;
+    return;
+  }
+  comparatorInstances = comparatorDefaultInstances(comparatorProposals);
+  comparatorInstancesInitialized = true;
+}
+
+function exitComparatorHistoricalInstanceMode(options = {}) {
+  const resetToDefaults = Boolean(options.resetToDefaults);
+  const wasReadOnly = comparatorInstancesReadOnly;
+  comparatorInstancesReadOnly = false;
+  comparatorInstancesSourceRunId = null;
+  if (resetToDefaults && wasReadOnly) {
+    resetComparatorInstancesToDefaults();
+  }
+}
+
 function normalizeComparatorInstance(instance, index = 0) {
   const proposal = comparatorProposalById(instance.proposalId);
   const proposalId = proposal?.proposalId || instance.proposalId;
@@ -4962,14 +5006,35 @@ function normalizeComparatorInstance(instance, index = 0) {
 }
 
 function ensureComparatorInstances() {
+  if (comparatorInstancesReadOnly) {
+    comparatorInstances = comparatorInstances.map((instance, index) => ({
+      ...instance,
+      orderIndex: Number.isFinite(instance.orderIndex) ? instance.orderIndex : index,
+    }));
+    comparatorInstancesInitialized = true;
+    return;
+  }
   const availableIds = new Set(comparatorProposals.filter((proposal) => proposal.available).map((proposal) => proposal.proposalId));
   comparatorInstances = comparatorInstances
     .filter((instance) => availableIds.has(instance.proposalId))
     .map((instance, index) => normalizeComparatorInstance(instance, index));
   if (!comparatorInstancesInitialized && !comparatorInstances.length) {
-    comparatorInstances = comparatorDefaultInstances(comparatorProposals);
+    resetComparatorInstancesToDefaults();
+    return;
   }
   comparatorInstancesInitialized = true;
+}
+
+function hydrateComparatorInstancesFromRun(run) {
+  const instances = comparatorHistoricalInstancesFromRun(run);
+  if (!instances.length) return;
+  const runId = String(run?.runId || "");
+  if (comparatorInstancesReadOnly && comparatorInstancesSourceRunId === runId) return;
+  comparatorInstances = instances;
+  comparatorInstancesInitialized = true;
+  comparatorInstancesReadOnly = true;
+  comparatorInstancesSourceRunId = runId;
+  renderComparatorProposalControls(comparatorProposals);
 }
 
 function comparatorProposalInstanceCount(proposalId) {
@@ -5064,6 +5129,7 @@ function renderComparatorProposalControls(proposals) {
     }),
   );
   renderComparatorInstanceList();
+  syncComparatorHistoricalInstanceControls();
 }
 
 function renderComparatorInstanceList() {
@@ -5081,40 +5147,68 @@ function renderComparatorInstanceList() {
     ...comparatorInstances.map((instance) => {
       const proposal = comparatorProposalById(instance.proposalId);
       const article = document.createElement("article");
-      article.className = "proposal-config-card comparator-instance-card";
+      article.className = `proposal-config-card comparator-instance-card${comparatorInstancesReadOnly ? " is-readonly" : ""}`;
       article.dataset.comparatorInstanceCard = instance.instanceId;
       article.dataset.proposalId = instance.proposalId;
       article.innerHTML = `
         <div>
           <span class="eyebrow">${escapeHtml(proposal?.displayName || instance.proposalId)}</span>
           <h3>${escapeHtml(instance.displayName || instance.instanceId)}</h3>
-          <p>${escapeHtml(comparatorInstanceConfigSummary(instance))}</p>
+          ${comparatorInstancesReadOnly
+            ? comparatorInstanceConfigDetailsHtml(instance)
+            : `<p>${escapeHtml(comparatorInstanceConfigSummary(instance))}</p>`}
         </div>
-        <div class="instance-card-actions">
-          <button type="button" class="secondary" data-edit-comparator-instance="${escapeHtml(instance.instanceId)}">Editar</button>
-          <button type="button" class="secondary" data-duplicate-comparator-instance="${escapeHtml(instance.instanceId)}">Duplicar</button>
-          <button type="button" class="danger" data-delete-comparator-instance="${escapeHtml(instance.instanceId)}">Eliminar</button>
-        </div>
+        ${comparatorInstancesReadOnly ? "" : `
+          <div class="instance-card-actions">
+            <button type="button" class="secondary" data-edit-comparator-instance="${escapeHtml(instance.instanceId)}">Editar</button>
+            <button type="button" class="secondary" data-duplicate-comparator-instance="${escapeHtml(instance.instanceId)}">Duplicar</button>
+            <button type="button" class="danger" data-delete-comparator-instance="${escapeHtml(instance.instanceId)}">Eliminar</button>
+          </div>
+        `}
       `;
       return article;
     }),
   );
+  syncComparatorHistoricalInstanceControls();
+}
+
+function comparatorInstanceConfigEntries(instance) {
+  const values = instance.proposalConfig?.cliValues || {};
+  let keys = Object.keys(values);
+  const entries = [];
+  if (instance.proposalId === "binary-mopso-cd" && comparatorUsesNoRoutingPreset(values)) {
+    entries.push("Sin enrutamiento");
+    keys = keys.filter((key) => !BINARY_ROUTER_HEURISTIC_KEY_SET.has(key));
+  }
+  if (instance.proposalConfig?.extraArgs) {
+    entries.push(`extraArgs=${instance.proposalConfig.extraArgs}`);
+  }
+  keys.forEach((key) => {
+    entries.push(comparatorConfigSummaryEntry(key, values[key]));
+  });
+  return entries;
+}
+
+function comparatorInstanceConfigDetailsHtml(instance) {
+  const entries = comparatorInstanceConfigEntries(instance);
+  if (!entries.length) {
+    return '<p>Configuracion por defecto de la propuesta.</p>';
+  }
+  return `
+    <ul class="comparator-instance-config-list">
+      ${entries.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}
+    </ul>
+  `;
 }
 
 function comparatorInstanceConfigSummary(instance) {
-  const values = instance.proposalConfig?.cliValues || {};
-  let keys = Object.keys(values);
-  const summaryParts = [];
-  if (instance.proposalId === "binary-mopso-cd" && comparatorUsesNoRoutingPreset(values)) {
-    summaryParts.push("Sin enrutamiento");
-    keys = keys.filter((key) => !BINARY_ROUTER_HEURISTIC_KEY_SET.has(key));
-  }
-  if (!summaryParts.length && !keys.length && !instance.proposalConfig?.extraArgs) {
+  const entries = comparatorInstanceConfigEntries(instance);
+  if (!entries.length) {
     return "Configuracion por defecto de la propuesta.";
   }
-  const preview = keys.slice(0, 4).map((key) => comparatorConfigSummaryEntry(key, values[key]));
-  const remaining = keys.length > preview.length ? `; +${keys.length - preview.length} cambio(s)` : "";
-  return `${[...summaryParts, ...preview].join("; ")}${remaining}`;
+  const preview = entries.slice(0, 4);
+  const remaining = entries.length > preview.length ? `; +${entries.length - preview.length} cambio(s)` : "";
+  return `${preview.join("; ")}${remaining}`;
 }
 
 function comparatorConfigSummaryEntry(key, value) {
@@ -6541,6 +6635,7 @@ function renderComparatorCostSummary(costSummary) {
 function renderComparatorRun(run) {
   latestComparatorRun = run;
   storeComparatorRunId(run.runId);
+  hydrateComparatorInstancesFromRun(run);
   const rows = flattenComparatorRows(run);
   const progress = run.progress || {};
   const completedProposals = progress.completedProposals ?? (run.proposals || []).filter((proposal) => proposal.status === "completed").length;
@@ -8617,6 +8712,7 @@ dom.comparatorModel?.addEventListener("change", syncComparatorModelCustomField);
 dom.comparatorModelCustom?.addEventListener("input", () => syncComparatorTaskThinkingControls(dom.comparatorInstanceModalBody));
 dom.comparatorProposalSelector?.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) return;
+  if (comparatorInstancesReadOnly) return;
   const removeButton = event.target.closest("[data-remove-comparator-proposal]");
   if (removeButton) {
     removeComparatorProposalInstances(removeButton.dataset.removeComparatorProposal);
@@ -8628,6 +8724,7 @@ dom.comparatorProposalSelector?.addEventListener("click", (event) => {
 });
 dom.comparatorProposalConfigPanels?.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) return;
+  if (comparatorInstancesReadOnly) return;
   const editButton = event.target.closest("[data-edit-comparator-instance]");
   if (editButton) {
     const instance = comparatorInstances.find((item) => item.instanceId === editButton.dataset.editComparatorInstance);

@@ -751,6 +751,10 @@ label span,
   padding: 14px;
 }
 
+.comparator-instance-card.is-readonly {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .comparator-instance-card h3 {
   margin: 2px 0 5px;
   font-size: 1rem;
@@ -768,6 +772,17 @@ label span,
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.comparator-instance-config-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: #52687c;
+  font-size: 0.84rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .comparator-instance-empty {
