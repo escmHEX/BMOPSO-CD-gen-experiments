@@ -8,13 +8,88 @@ import {
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
   comparatorHypervolumeArea,
+  comparatorChartAxisWindow,
+  comparatorExpandedAxisWindow,
   comparatorIsBinaryProposal,
   comparatorIsGloballyNonDominated,
   comparatorMetricCellClassName,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
+  comparatorMetricReferenceLinePatch,
   comparatorProposalColor,
 } from "../LLM/comparator_chart_helpers.mjs";
+
+test("chart axis window expands the default data scale by the requested zoom factor", () => {
+  const window = comparatorChartAxisWindow([
+    { value: [2, 10] },
+    { value: [4, 20] },
+  ], "x", { paddingRatio: 0.1, zoomFactor: 100 });
+
+  assert.deepEqual(window, {
+    defaultMin: 1.8,
+    defaultMax: 4.2,
+    zoomMin: -117,
+    zoomMax: 123,
+  });
+});
+
+test("chart axis window gives a non-zero default range for a single point", () => {
+  const window = comparatorChartAxisWindow([{ x: 5, y: 0.5 }], "y", {
+    paddingRatio: 0.1,
+    zoomFactor: 100,
+    minSpan: 0.2,
+  });
+
+  assert.equal(window.defaultMin, 0.4);
+  assert.equal(window.defaultMax, 0.6);
+  assert.equal(window.zoomMax - window.zoomMin, 20);
+});
+
+test("chart axis window ignores non-finite values", () => {
+  const window = comparatorChartAxisWindow([
+    { value: [Number.NaN, 1] },
+    { value: [3, 2] },
+    { value: [Number.POSITIVE_INFINITY, 3] },
+  ], "x", { paddingRatio: 0, zoomFactor: 10 });
+
+  assert.deepEqual(window, {
+    defaultMin: 2.5,
+    defaultMax: 3.5,
+    zoomMin: -2,
+    zoomMax: 8,
+  });
+});
+
+test("expanded chart axis window uses explicit default bounds", () => {
+  const window = comparatorExpandedAxisWindow(10, 12, { zoomFactor: 100 });
+
+  assert.deepEqual(window, {
+    defaultMin: 10,
+    defaultMax: 12,
+    zoomMin: -89,
+    zoomMax: 111,
+  });
+});
+
+test("metric reference line patch hides and restores the target series markLine", () => {
+  const referenceLines = {
+    symbol: "none",
+    silent: true,
+    data: [{ name: "Mejor", yAxis: 0.8 }, { name: "Peor", yAxis: 0.2 }],
+  };
+
+  assert.deepEqual(comparatorMetricReferenceLinePatch("hv:evolmd", referenceLines, true), [{
+    id: "hv:evolmd",
+    markLine: {
+      ...referenceLines,
+      data: [],
+    },
+  }]);
+  assert.deepEqual(comparatorMetricReferenceLinePatch("hv:evolmd", referenceLines, false), [{
+    id: "hv:evolmd",
+    markLine: referenceLines,
+  }]);
+});
 
 test("global non-dominated front is computed from all proposal points", () => {
   const points = [

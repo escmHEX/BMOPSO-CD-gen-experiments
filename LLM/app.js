@@ -1,7 +1,9 @@
 import {
   comparatorBenchmarkProposals,
   comparatorBestMetricProposalIds,
+  comparatorChartAxisWindow,
   comparatorCountByProposal,
+  comparatorExpandedAxisWindow,
   comparatorGlobalNonDominatedFront,
   comparatorHypervolumeArea,
   comparatorIsBinaryProposal,
@@ -9,6 +11,7 @@ import {
   comparatorMetricCellClassName,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
+  comparatorMetricReferenceLinePatch,
   comparatorPointCoordinates,
   comparatorProposalColor,
 } from "./comparator_chart_helpers.mjs";
@@ -796,6 +799,12 @@ const COMPARATOR_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"
 const COMPARATOR_MAX_TRANSIENT_POLL_FAILURES = 5;
 const COMPARATOR_LOG_CHUNK_LIMIT = 5000;
 const COMPARATOR_LAST_RUN_ID_STORAGE_KEY = "comparator:lastRunId";
+const COMPARATOR_CHART_ZOOM_FACTOR = 100;
+const COMPARATOR_CHART_PADDING_RATIO = 0.08;
+const COMPARATOR_METRIC_REFERENCE_TOOL_KEY = "myComparatorMetricReferenceLines";
+const COMPARATOR_METRIC_REFERENCE_HIDE_TITLE = "Ocultar lineas mejor/peor";
+const COMPARATOR_METRIC_REFERENCE_SHOW_TITLE = "Mostrar lineas mejor/peor";
+const COMPARATOR_METRIC_REFERENCE_ICON = "path://M4,7H20M4,12H20M4,17H20M5,20L19,4";
 const BINARY_ROUTER_HEURISTIC_KEYS = [
   "router.heuristics.semantic_anchor_extraction",
   "router.heuristics.central_anchor_selection",
@@ -7181,6 +7190,7 @@ function renderComparatorContributionChart(proposals) {
 function renderComparatorMetricLine(container, proposals, metricKey, title) {
   const metadata = comparatorMetricMetadata(metricKey);
   const series = proposals.map((proposal, index) => ({
+    id: `comparator-metric-${metricKey}-${comparatorEntityId(proposal) || index}`,
     name: proposal.displayName,
     type: "line",
     connectNulls: false,
@@ -7193,20 +7203,83 @@ function renderComparatorMetricLine(container, proposals, metricKey, title) {
   }));
   const metricValues = series.flatMap((item) => item.data.map((point) => point[1])).filter(Number.isFinite);
   const referenceTarget = series.find((item) => item.data.length > 0);
-  if (referenceTarget && metricValues.length > 0) {
-    referenceTarget.markLine = comparatorMetricReferenceLines(metricValues, metadata.higherIsBetter);
+  const referenceLines = referenceTarget && metricValues.length > 0
+    ? comparatorMetricReferenceLines(metricValues, metadata.higherIsBetter)
+    : null;
+  if (referenceTarget && referenceLines) {
+    referenceTarget.markLine = referenceLines;
   }
+  const chartPoints = series.flatMap((item) => (item.data || []).map((point) => ({ value: point })));
+  const xAxisWindow = comparatorChartAxisWindow(chartPoints, "x", {
+    paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
+    zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
+    minSpan: 1,
+  });
+  const yAxisWindow = comparatorChartAxisWindow(chartPoints, "y", {
+    paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
+    zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
+  });
+  const dataZoom = [
+    xAxisWindow ? {
+      type: "inside",
+      xAxisIndex: 0,
+      filterMode: "none",
+      startValue: xAxisWindow.defaultMin,
+      endValue: xAxisWindow.defaultMax,
+    } : null,
+    yAxisWindow ? {
+      type: "inside",
+      yAxisIndex: 0,
+      filterMode: "none",
+      startValue: yAxisWindow.defaultMin,
+      endValue: yAxisWindow.defaultMax,
+    } : null,
+    xAxisWindow ? {
+      type: "slider",
+      xAxisIndex: 0,
+      filterMode: "none",
+      height: 18,
+      bottom: 10,
+      startValue: xAxisWindow.defaultMin,
+      endValue: xAxisWindow.defaultMax,
+    } : null,
+  ].filter(Boolean);
   const chart = window.echarts.init(container);
   comparatorCharts.push(chart);
+  const toolboxFeature = {
+    saveAsImage: {},
+    dataZoom: {},
+    restore: { title: "Reset" },
+  };
+  if (referenceTarget && referenceLines) {
+    toolboxFeature.myComparatorMetricReferenceLines = comparatorMetricReferenceLineToggleFeature(
+      chart,
+      referenceTarget.id,
+      referenceLines,
+    );
+  }
   chart.setOption({
     title: { text: title, subtext: metadata.description, left: 8, top: 6, textStyle: { fontSize: 13 }, subtextStyle: { fontSize: 11, color: "#64748b" } },
     tooltip: safeChartTooltip("axis", comparatorLineTooltipFormatter),
     legend: { top: 60, type: "scroll" },
     grid: { left: 52, right: 22, top: 106, bottom: 70, containLabel: true },
-    toolbox: { feature: { saveAsImage: {}, dataZoom: {} }, right: 8, top: 38 },
-    dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 10 }],
-    xAxis: { type: "value", name: "Iteracion", nameLocation: "middle", nameGap: 34, minInterval: 1 },
-    yAxis: { type: "value", scale: true },
+    toolbox: { feature: toolboxFeature, right: 8, top: 38 },
+    dataZoom,
+    xAxis: {
+      type: "value",
+      name: "Iteracion",
+      nameLocation: "middle",
+      nameGap: 34,
+      minInterval: 1,
+      min: xAxisWindow?.zoomMin,
+      max: xAxisWindow?.zoomMax,
+    },
+    yAxis: {
+      type: "value",
+      scale: true,
+      min: yAxisWindow?.zoomMin,
+      max: yAxisWindow?.zoomMax,
+    },
     graphic: comparatorEmptyChartGraphic(
       series,
       proposals.length ? "Sin serie disponible para las propuestas filtradas." : "Sin propuestas filtradas.",
@@ -7292,6 +7365,52 @@ function comparatorHypervolumeAreaSeries(points, hypervolumeLabel, color = "#256
 function baseScatterOption(title, series, options = {}) {
   const idealSeries = options.includeIdeal === false ? null : comparatorIdealSeries(series, options.idealPoint);
   const renderedSeries = idealSeries ? [...series, idealSeries] : series;
+  const chartPoints = renderedSeries.flatMap((item) => (item.data || []).map((point) =>
+    Array.isArray(point) ? { value: point } : point,
+  ));
+  const hasExplicitXBounds = Number.isFinite(Number(options.xAxisMin)) && Number.isFinite(Number(options.xAxisMax));
+  const hasExplicitYBounds = Number.isFinite(Number(options.yAxisMin)) && Number.isFinite(Number(options.yAxisMax));
+  const xAxisWindow = hasExplicitXBounds
+    ? comparatorExpandedAxisWindow(Number(options.xAxisMin), Number(options.xAxisMax), {
+        zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
+      })
+    : comparatorChartAxisWindow(chartPoints, "x", {
+        paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
+        zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
+      });
+  const yAxisWindow = hasExplicitYBounds
+    ? comparatorExpandedAxisWindow(Number(options.yAxisMin), Number(options.yAxisMax), {
+        zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
+      })
+    : comparatorChartAxisWindow(chartPoints, "y", {
+        paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
+        zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
+      });
+  const dataZoom = [
+    xAxisWindow ? {
+      type: "inside",
+      xAxisIndex: 0,
+      filterMode: "none",
+      startValue: xAxisWindow.defaultMin,
+      endValue: xAxisWindow.defaultMax,
+    } : null,
+    yAxisWindow ? {
+      type: "inside",
+      yAxisIndex: 0,
+      filterMode: "none",
+      startValue: yAxisWindow.defaultMin,
+      endValue: yAxisWindow.defaultMax,
+    } : null,
+    xAxisWindow ? {
+      type: "slider",
+      xAxisIndex: 0,
+      filterMode: "none",
+      height: 18,
+      bottom: 12,
+      startValue: xAxisWindow.defaultMin,
+      endValue: xAxisWindow.defaultMax,
+    } : null,
+  ].filter(Boolean);
   return {
     title: {
       text: title,
@@ -7304,16 +7423,16 @@ function baseScatterOption(title, series, options = {}) {
     tooltip: safeChartTooltip("item", options.tooltipFormatter || comparatorScatterTooltipFormatter),
     legend: { top: 62, type: "scroll" },
     grid: { left: 58, right: 24, top: 112, bottom: 78, containLabel: true },
-    toolbox: { feature: { saveAsImage: {}, dataZoom: {} }, right: 8, top: 38 },
-    dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 12 }],
+    toolbox: { feature: { saveAsImage: {}, dataZoom: {}, restore: { title: "Reset" } }, right: 8, top: 38 },
+    dataZoom,
     xAxis: {
       type: "value",
       name: options.xAxisName || "Fidelidad normalizada",
       nameLocation: "middle",
       nameGap: 42,
       scale: true,
-      min: options.xAxisMin,
-      max: options.xAxisMax,
+      min: xAxisWindow?.zoomMin,
+      max: xAxisWindow?.zoomMax,
     },
     yAxis: {
       type: "value",
@@ -7321,8 +7440,8 @@ function baseScatterOption(title, series, options = {}) {
       nameLocation: "middle",
       nameGap: 44,
       scale: true,
-      min: options.yAxisMin,
-      max: options.yAxisMax,
+      min: yAxisWindow?.zoomMin,
+      max: yAxisWindow?.zoomMax,
     },
     graphic: comparatorEmptyChartGraphic(renderedSeries, "Sin puntos disponibles para las propuestas filtradas."),
     series: renderedSeries,
@@ -7408,6 +7527,36 @@ function comparatorMetricReferenceLines(values, higherIsBetter) {
       },
     ],
   };
+}
+
+function comparatorMetricReferenceLineToggleFeature(chart, seriesId, referenceLines) {
+  return {
+    show: true,
+    title: COMPARATOR_METRIC_REFERENCE_HIDE_TITLE,
+    icon: COMPARATOR_METRIC_REFERENCE_ICON,
+    onclick: () => toggleComparatorMetricReferenceLines(chart, seriesId, referenceLines),
+  };
+}
+
+function comparatorMetricReferenceLinesHidden(chart, seriesId) {
+  const option = chart.getOption();
+  const target = (option.series || []).find((series) => series.id === seriesId);
+  const markLine = Array.isArray(target?.markLine) ? target.markLine[0] : target?.markLine;
+  return Array.isArray(markLine?.data) && markLine.data.length === 0;
+}
+
+function toggleComparatorMetricReferenceLines(chart, seriesId, referenceLines) {
+  const nextHidden = !comparatorMetricReferenceLinesHidden(chart, seriesId);
+  chart.setOption({
+    toolbox: {
+      feature: {
+        [COMPARATOR_METRIC_REFERENCE_TOOL_KEY]: {
+          title: nextHidden ? COMPARATOR_METRIC_REFERENCE_SHOW_TITLE : COMPARATOR_METRIC_REFERENCE_HIDE_TITLE,
+        },
+      },
+    },
+    series: comparatorMetricReferenceLinePatch(seriesId, referenceLines, nextHidden),
+  });
 }
 
 function comparatorEmptyChartGraphic(series, message) {

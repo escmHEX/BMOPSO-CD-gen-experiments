@@ -6,6 +6,73 @@ export function comparatorPointCoordinates(point) {
   return { x, y };
 }
 
+function finiteAxisValue(point, axis) {
+  const coordinates = comparatorPointCoordinates(point);
+  if (!coordinates) return null;
+  const value = axis === "y" ? coordinates.y : coordinates.x;
+  return Number.isFinite(value) ? value : null;
+}
+
+function cleanAxisNumber(value) {
+  return Number(Number(value).toPrecision(12));
+}
+
+export function comparatorExpandedAxisWindow(defaultMin, defaultMax, options = {}) {
+  const rawMin = Number(defaultMin);
+  const rawMax = Number(defaultMax);
+  if (!Number.isFinite(rawMin) || !Number.isFinite(rawMax)) return null;
+
+  const zoomFactor = Math.max(1, Number(options.zoomFactor) || 100);
+  const minSpan = Math.max(0, Number(options.minSpan) || 1);
+  let visibleMin = Math.min(rawMin, rawMax);
+  let visibleMax = Math.max(rawMin, rawMax);
+
+  if (visibleMin === visibleMax) {
+    const center = visibleMin;
+    const span = minSpan || Math.max(1, Math.abs(center) * 0.1);
+    visibleMin = center - (span / 2);
+    visibleMax = center + (span / 2);
+  }
+
+  const visibleSpan = visibleMax - visibleMin;
+  const center = (visibleMin + visibleMax) / 2;
+  const zoomSpan = visibleSpan * zoomFactor;
+  const zoomMin = center - (zoomSpan / 2);
+  const zoomMax = center + (zoomSpan / 2);
+
+  return {
+    defaultMin: cleanAxisNumber(visibleMin),
+    defaultMax: cleanAxisNumber(visibleMax),
+    zoomMin: cleanAxisNumber(zoomMin),
+    zoomMax: cleanAxisNumber(zoomMax),
+  };
+}
+
+export function comparatorChartAxisWindow(points, axis = "x", options = {}) {
+  const values = (points || [])
+    .map((point) => finiteAxisValue(point, axis))
+    .filter((value) => value !== null);
+  if (!values.length) return null;
+
+  const dataMin = Math.min(...values);
+  const dataMax = Math.max(...values);
+  if (dataMin === dataMax) {
+    return comparatorExpandedAxisWindow(dataMin, dataMax, options);
+  }
+
+  const paddingRatio = Math.max(0, Number(options.paddingRatio) || 0);
+  const padding = (dataMax - dataMin) * paddingRatio;
+  return comparatorExpandedAxisWindow(dataMin - padding, dataMax + padding, options);
+}
+
+export function comparatorMetricReferenceLinePatch(seriesId, referenceLines, hidden) {
+  if (!seriesId || !referenceLines) return [];
+  return [{
+    id: String(seriesId),
+    markLine: hidden ? { ...referenceLines, data: [] } : referenceLines,
+  }];
+}
+
 export function comparatorProposalEntityId(proposal) {
   return proposal?.instanceId || proposal?.proposalId || "";
 }
