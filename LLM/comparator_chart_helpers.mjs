@@ -249,3 +249,24 @@ export function comparatorMetricCellClassName({ primaryColumn = false, best = fa
     best ? "metric-best comparator-cost-best comparator-metric-best-cell" : "",
   ].filter(Boolean).join(" ");
 }
+
+export function comparatorMetricDeltaPercent(primaryValue, comparisonValue, direction = "max") {
+  const baseline = Number(primaryValue);
+  const current = Number(comparisonValue);
+  if (!Number.isFinite(baseline) || !Number.isFinite(current) || baseline === 0) return null;
+
+  const denominator = Math.abs(baseline);
+  const delta = direction === "min"
+    ? ((baseline - current) / denominator) * 100
+    : ((current - baseline) / denominator) * 100;
+  const cleanDelta = cleanAxisNumber(delta);
+  return Object.is(cleanDelta, -0) ? 0 : cleanDelta;
+}
+
+export function comparatorMetricDeltaLabel(deltaPercent) {
+  const value = Number(deltaPercent);
+  if (!Number.isFinite(value)) return "";
+  const rounded = Math.round(Math.abs(value));
+  if (rounded === 0) return "0%";
+  return `${value > 0 ? "+" : "-"}${rounded}%`;
+}

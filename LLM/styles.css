@@ -1842,6 +1842,12 @@ table.wide-table {
   border-bottom-right-radius: 8px;
 }
 
+.comparator-cost-table .is-primary-proposal.comparator-cost-best,
+.comparator-cost-table .is-primary-proposal.comparator-metric-best-cell,
+.comparator-cost-table td.is-primary-proposal.metric-best {
+  background: #f7ded4 !important;
+}
+
 .comparator-cost-best,
 .comparator-metric-best-cell {
   background: transparent !important;
@@ -1861,6 +1867,31 @@ table.wide-table {
 
 .comparator-cost-table td.metric-best {
   background: transparent;
+}
+
+.comparator-metric-value {
+  display: inline;
+}
+
+.comparator-metric-delta {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.comparator-metric-delta.is-positive {
+  color: #047857;
+}
+
+.comparator-metric-delta.is-negative {
+  color: #b42318;
+}
+
+.comparator-metric-delta.is-neutral {
+  color: #64748b;
 }
 
 .comparator-traceability {

@@ -9,6 +9,8 @@ import {
   comparatorIsBinaryProposal,
   comparatorIsGloballyNonDominated,
   comparatorMetricCellClassName,
+  comparatorMetricDeltaLabel,
+  comparatorMetricDeltaPercent,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
   comparatorMetricReferenceLinePatch,
@@ -6725,12 +6727,14 @@ function comparatorCostHasTokenReport(cost = {}) {
 function renderComparatorCostTable(proposals, policy) {
   if (!dom.comparatorCostTableHead || !dom.comparatorCostTableBody) return;
   const orderedProposals = comparatorBenchmarkProposals(proposals);
+  const primaryProposal = orderedProposals.find((proposal) => comparatorIsBinaryProposal(proposal));
+  const primaryProposalId = primaryProposal ? comparatorEntityId(primaryProposal) : "";
   dom.comparatorCostTableHead.innerHTML = `
     <tr>
       <th>Metrica</th>
       <th>Detalle</th>
-      ${orderedProposals.map((proposal, index) => `
-        <th class="${index === 0 ? "is-primary-proposal" : ""}">
+      ${orderedProposals.map((proposal) => `
+        <th class="${primaryProposalId && comparatorEntityId(proposal) === primaryProposalId ? "is-primary-proposal" : ""}">
           <span>${escapeHtml(proposal.displayName || proposal.proposalId)}</span>
           <small class="${comparatorStatusClass(proposal.status)}">${escapeHtml(comparatorStatusLabel(proposal.status))}</small>
         </th>
@@ -6746,11 +6750,16 @@ function renderComparatorCostTable(proposals, policy) {
   dom.comparatorCostTableBody.replaceChildren(
     ...metrics.map((metric) => {
       const winners = comparatorBestMetricProposalIds(orderedProposals, metric, { costsComparable });
+      const primaryMetric = primaryProposal ? comparatorMetricValue(primaryProposal, metric) : null;
+      const primaryValue = primaryMetric?.reported ? primaryMetric.value : null;
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <th scope="row">${escapeHtml(metric.label)}</th>
         <td>${escapeHtml(metric.detail)}</td>
-        ${orderedProposals.map((proposal, index) => comparatorCostMetricCell(proposal, metric, winners, index === 0)).join("")}
+        ${orderedProposals.map((proposal) => {
+          const primaryColumn = Boolean(primaryProposalId && comparatorEntityId(proposal) === primaryProposalId);
+          return comparatorCostMetricCell(proposal, metric, winners, { primaryColumn, primaryValue });
+        }).join("")}
       `;
       return tr;
     }),
@@ -6758,15 +6767,40 @@ function renderComparatorCostTable(proposals, policy) {
   decorateAbbreviationTooltips(document.getElementById("comparatorCostsTab") || dom.comparatorCostTableBody);
 }
 
-function comparatorCostMetricCell(proposal, metric, winners, primaryColumn = false) {
+function comparatorMetricValue(proposal, metric) {
   const cost = proposal.cost || {};
   const rawValue = metric.value(proposal, cost);
   const value = rawValue === null || rawValue === undefined || rawValue === "" ? NaN : Number(rawValue);
   const reported = Number.isFinite(value) && (!metric.isReported || metric.isReported(proposal, cost));
+  return { cost, value, reported };
+}
+
+function comparatorCostMetricCell(proposal, metric, winners, options = {}) {
+  const { cost, value, reported } = comparatorMetricValue(proposal, metric);
+  const primaryColumn = Boolean(options.primaryColumn);
   const best = proposal.status === "completed" && reported && winners.has(comparatorEntityId(proposal));
   const label = reported ? metric.format(proposal, cost) : "No reportado";
   const className = comparatorMetricCellClassName({ primaryColumn, best });
-  return `<td class="${className}">${best ? `<strong>${escapeHtml(label)}</strong>` : escapeHtml(label)}</td>`;
+  const deltaHtml = primaryColumn || !reported
+    ? ""
+    : comparatorMetricDeltaHtml(options.primaryValue, value, metric.direction);
+  const valueHtml = best
+    ? `<strong>${escapeHtml(label)}</strong>`
+    : escapeHtml(label);
+  return `<td class="${className}"><span class="comparator-metric-value">${valueHtml}</span>${deltaHtml}</td>`;
+}
+
+function comparatorMetricDeltaHtml(primaryValue, comparisonValue, direction) {
+  const delta = comparatorMetricDeltaPercent(primaryValue, comparisonValue, direction);
+  if (delta === null) return "";
+  const label = comparatorMetricDeltaLabel(delta);
+  if (!label) return "";
+  const className = delta > 0
+    ? "comparator-metric-delta is-positive"
+    : delta < 0
+      ? "comparator-metric-delta is-negative"
+      : "comparator-metric-delta is-neutral";
+  return `<span class="${className}">(${escapeHtml(label)})</span>`;
 }
 
 function renderComparatorCostTraceability(proposals) {
@@ -6890,6 +6924,12 @@ function renderComparatorEmbeddingProjectionPayload(payload) {
   }
   const bounds = embeddingProjectionBounds(payload, withPoints);
   dom.comparatorEmbeddingProjectionCharts.replaceChildren(
+    embeddingProjectionOverlayPanel(
+      withPoints,
+      payload.reference || {},
+      payload.effectiveMethod || payload.method,
+      bounds,
+    ),
     ...withPoints.map((proposal, index) => {
       const article = document.createElement("article");
       article.className = "panel";
@@ -6918,6 +6958,26 @@ function renderComparatorEmbeddingProjectionPayload(payload) {
   installChartPanelMinimizers(dom.comparatorOtherChartsTab || document.querySelector("#comparatorOtherChartsTab"));
 }
 
+function embeddingProjectionOverlayPanel(proposals, reference, method, bounds = {}) {
+  const totalPoints = proposals.reduce((total, proposal) => total + (proposal.points || []).length, 0);
+  const article = document.createElement("article");
+  article.className = "panel";
+  article.innerHTML = `
+    <div class="panel-title">
+      <h2>Search space overlay</h2>
+      <span>${escapeHtml(String(proposals.length))} propuesta(s); ${escapeHtml(String(totalPoints))} texto(s) del frente final</span>
+    </div>
+    <div class="chart-surface" data-embedding-projection-chart></div>
+  `;
+  const chartNode = article.querySelector("[data-embedding-projection-chart]");
+  window.queueMicrotask(() => {
+    const chart = window.echarts.init(chartNode);
+    comparatorProjectionCharts.push(chart);
+    chart.setOption(embeddingProjectionOverlayChartOption(proposals, reference, method, bounds));
+  });
+  return article;
+}
+
 function embeddingProjectionBounds(payload, proposals) {
   const values = [];
   if (Number.isFinite(Number(payload.reference?.x)) && Number.isFinite(Number(payload.reference?.y))) {
@@ -6943,8 +7003,8 @@ function embeddingProjectionBounds(payload, proposals) {
   };
 }
 
-function embeddingProjectionChartOption(proposal, reference, method, color, bounds = {}) {
-  const points = (proposal.points || []).map((point) => ({
+function embeddingProjectionPointData(point) {
+  return {
     value: [point.x, point.y],
     labelText: point.text,
     selected: Boolean(point.selected),
@@ -6953,15 +7013,80 @@ function embeddingProjectionChartOption(proposal, reference, method, color, boun
     objectiveLabel: point.objectiveLabel,
     repetitionIndex: point.repetitionIndex,
     sourceIndex: point.sourceIndex,
-  }));
-  const selected = points.filter((point) => point.selected || point.selectionRank);
-  const referencePoint = Number.isFinite(Number(reference.x)) && Number.isFinite(Number(reference.y))
+  };
+}
+
+function embeddingProjectionReferencePoint(reference) {
+  return Number.isFinite(Number(reference.x)) && Number.isFinite(Number(reference.y))
     ? [{
       value: [Number(reference.x), Number(reference.y)],
       labelText: reference.text || "Referencia",
       rank: "ref",
     }]
     : [];
+}
+
+function embeddingProjectionOverlayChartOption(proposals, reference, method, bounds = {}) {
+  const axisName = projectionMethodLabel(method);
+  const referencePoint = embeddingProjectionReferencePoint(reference);
+  const proposalSeries = proposals.map((proposal, index) => {
+    const color = comparatorProposalColor(proposal, index);
+    return {
+      name: proposal.displayName || proposal.proposalId,
+      type: "scatter",
+      symbolSize: comparatorIsBinaryProposal(proposal) ? 11 : 9,
+      data: (proposal.points || []).map(embeddingProjectionPointData),
+      itemStyle: {
+        color,
+        opacity: comparatorIsBinaryProposal(proposal) ? 0.86 : 0.68,
+        shadowBlur: comparatorIsBinaryProposal(proposal) ? 8 : 0,
+        shadowColor: hexToRgba(color, 0.42),
+      },
+      z: 2,
+    };
+  });
+  const selectedSeries = proposals.map((proposal, index) => {
+    const color = comparatorProposalColor(proposal, index);
+    const selected = (proposal.points || [])
+      .map(embeddingProjectionPointData)
+      .filter((point) => point.selected || point.selectionRank);
+    if (!selected.length) return null;
+    return {
+      name: `Seleccionadas - ${proposal.displayName || proposal.proposalId}`,
+      type: "scatter",
+      symbol: "circle",
+      symbolSize: 16,
+      data: selected,
+      itemStyle: { color: "#ffffff", borderColor: color, borderWidth: 2.5 },
+      z: 5,
+    };
+  }).filter(Boolean);
+  return baseScatterOption("Search space overlay", [
+    {
+      name: "Referencia",
+      type: "scatter",
+      symbol: "star",
+      symbolSize: 22,
+      data: referencePoint,
+      itemStyle: { color: "#facc15", borderColor: "#92400e", borderWidth: 1.5 },
+      z: 6,
+    },
+    ...proposalSeries,
+    ...selectedSeries,
+  ], {
+    description: "Superposicion del frente final proyectado por propuesta.",
+    xAxisName: `${axisName} 1`,
+    yAxisName: `${axisName} 2`,
+    tooltipFormatter: embeddingProjectionTooltipFormatter,
+    includeIdeal: false,
+    ...bounds,
+  });
+}
+
+function embeddingProjectionChartOption(proposal, reference, method, color, bounds = {}) {
+  const points = (proposal.points || []).map(embeddingProjectionPointData);
+  const selected = points.filter((point) => point.selected || point.selectionRank);
+  const referencePoint = embeddingProjectionReferencePoint(reference);
   const axisName = projectionMethodLabel(method);
   return baseScatterOption(`Embeddings ${axisName}`, [
     {

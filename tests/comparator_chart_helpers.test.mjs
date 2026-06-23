@@ -13,6 +13,8 @@ import {
   comparatorIsBinaryProposal,
   comparatorIsGloballyNonDominated,
   comparatorMetricCellClassName,
+  comparatorMetricDeltaLabel,
+  comparatorMetricDeltaPercent,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
   comparatorMetricReferenceLinePatch,
@@ -156,6 +158,28 @@ test("benchmark metric winner cell uses strong visual classes", () => {
   );
   assert.equal(comparatorMetricCellClassName({ primaryColumn: false, best: true }), "metric-best comparator-cost-best comparator-metric-best-cell");
   assert.equal(comparatorMetricCellClassName({ primaryColumn: true, best: false }), "is-primary-proposal");
+});
+
+test("metric delta percent treats higher values as better for max metrics", () => {
+  assert.equal(comparatorMetricDeltaPercent(0.5, 0.6, "max"), 20);
+  assert.equal(comparatorMetricDeltaPercent(0.5, 0.4, "max"), -20);
+});
+
+test("metric delta percent treats lower values as better for min metrics", () => {
+  assert.equal(comparatorMetricDeltaPercent(100, 80, "min"), 20);
+  assert.equal(comparatorMetricDeltaPercent(100, 125, "min"), -25);
+});
+
+test("metric delta percent returns null for invalid or zero baselines", () => {
+  assert.equal(comparatorMetricDeltaPercent(0, 1, "max"), null);
+  assert.equal(comparatorMetricDeltaPercent(Number.NaN, 1, "max"), null);
+  assert.equal(comparatorMetricDeltaPercent(1, Number.POSITIVE_INFINITY, "max"), null);
+});
+
+test("metric delta label keeps explicit improvement signs", () => {
+  assert.equal(comparatorMetricDeltaLabel(20), "+20%");
+  assert.equal(comparatorMetricDeltaLabel(-8.4), "-8%");
+  assert.equal(comparatorMetricDeltaLabel(0), "0%");
 });
 
 test("hypervolume area uses stepped front from reference origin", () => {
