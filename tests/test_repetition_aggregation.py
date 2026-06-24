@@ -884,34 +884,49 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(values["mopso.alpha"], "1.25")
         self.assertEqual(values["mopso.archive_multiplier"], "0.5")
 
-    def test_binary_task_thinking_rejects_unvalidated_model_task_before_run(self):
-        payload = {
-            "referenceText": "reference",
-            "model": "qwen3.5:9b",
-            "proposalInstances": [
+    def test_binary_task_thinking_allows_supported_model_even_without_task_validation(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "model": "qwen3.5:9b",
+                "proposalInstances": [
+                    {
+                        "instanceId": "binary-mopso-cd-3",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary MOPSO-CD 3",
+                        "proposalConfig": {
+                            "cliValues": {
+                                "router.task_models.semantic_pool_generation": "qwen3.5:9b",
+                                "router.task_thinking.semantic_pool_generation": "low",
+                            }
+                        },
+                    }
+                ],
+            }
+        )
+
+        values = parsed["proposalInstances"][0]["proposalConfig"]["cliValues"]
+        self.assertEqual(values["router.task_thinking.semantic_pool_generation"], "low")
+
+    def test_binary_task_thinking_rejects_model_without_thinking_support(self):
+        service = ComparatorService(Path("."))
+        with self.assertRaisesRegex(ValueError, "llama3.*semantic_pool_generation.*does not support thinking"):
+            service._read_config(
                 {
-                    "instanceId": "binary-mopso-cd-3",
-                    "proposalId": "binary-mopso-cd",
-                    "displayName": "Binary MOPSO-CD 3",
-                    "proposalConfig": {
-                        "cliValues": {
-                            "router.task_models.semantic_pool_generation": "qwen3.5:9b",
-                            "router.task_thinking.semantic_pool_generation": "low",
+                    "referenceText": "reference",
+                    "model": "llama3",
+                    "selectedProposalIds": ["binary-mopso-cd"],
+                    "proposalConfigs": {
+                        "binary-mopso-cd": {
+                            "cliValues": {
+                                "router.task_models.semantic_pool_generation": "llama3",
+                                "router.task_thinking.semantic_pool_generation": "low",
+                            }
                         }
                     },
                 }
-            ],
-        }
-
-        service = ComparatorService(Path("."))
-        with self.assertRaisesRegex(ValueError, "qwen3\\.5:9b.*semantic_pool_generation.*not validated"):
-            service._read_config(payload)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_service = ComparatorService(Path(temp_dir))
-            with self.assertRaisesRegex(ValueError, "semantic_pool_generation"):
-                temp_service.start_run(payload)
-            self.assertFalse(temp_service.runs_root.exists())
+            )
 
     def test_binary_task_thinking_allows_validated_model_task(self):
         service = ComparatorService(Path("."))
@@ -935,7 +950,7 @@ class RepetitionAggregationTests(unittest.TestCase):
         values = parsed["proposalConfigs"]["binary-mopso-cd"]["cliValues"]
         self.assertEqual(values["router.task_thinking.semantic_pool_generation"], "medium")
 
-    def test_binary_task_thinking_accepts_legacy_true_but_validates_task(self):
+    def test_binary_task_thinking_accepts_legacy_true_for_supported_model(self):
         service = ComparatorService(Path("."))
 
         parsed = service._read_config(

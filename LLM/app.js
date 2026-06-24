@@ -5460,9 +5460,12 @@ function comparatorTaskThinkingValidation(model, task) {
   }
   const validatedTasks = comparatorModelValidatedThinkingTasks(model);
   if (!validatedTasks.includes(task)) {
-    return { valid: false, reason: `Thinking no validado para ${task} con ${model}.` };
+    return {
+      valid: true,
+      reason: `Sugerencia: no hay prueba registrada de thinking para ${task} con ${model}; puede ejecutarse igual.`,
+    };
   }
-  return { valid: true, reason: `Thinking validado para ${task} con ${model}.` };
+  return { valid: true, reason: `Thinking probado previamente para ${task} con ${model}.` };
 }
 
 function comparatorTaskModelDisplayName(path) {

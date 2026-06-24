@@ -573,7 +573,8 @@ def build_binary_cli_options(config: dict[str, Any] | None = None) -> tuple[tupl
             option["choices"] = list(BINARY_THINKING_MODE_CHOICES)
             option["allowFalse"] = True
             option["valueHelp"] = (
-                "Activa thinking solo si el modelo efectivo de esta tarea esta declarado y validado en Binary."
+                "Activa thinking si el modelo efectivo de esta tarea lo soporta. "
+                "Las tareas validadas se muestran solo como referencia."
             )
         base_options.append(option)
     return tuple(base_options), None
@@ -2493,14 +2494,6 @@ class ComparatorService:
             )
         if model_capabilities.get("thinking") is not True:
             raise ValueError(f"{model} for {task_name} does not support thinking in Binary.")
-        raw_tasks = model_capabilities.get("validated_thinking_tasks")
-        validated_tasks = {
-            str(task).strip()
-            for task in raw_tasks
-            if str(task).strip()
-        } if isinstance(raw_tasks, list) else set()
-        if task_name not in validated_tasks:
-            raise ValueError(f"{model} for {task_name} is not validated for thinking in Binary.")
 
     def _execution_mode(self, value: Any) -> str:
         mode = str(value or EXECUTION_MODE_FAIR_SEQUENTIAL).strip()
