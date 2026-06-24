@@ -5429,13 +5429,40 @@ function comparatorTaskNameFromModelPath(path) {
   return String(path || "").replace(BINARY_TASK_MODEL_PREFIX, "");
 }
 
+function comparatorTaskNameFromThinkingPath(path) {
+  return String(path || "").replace(BINARY_TASK_THINKING_PREFIX, "");
+}
+
 function comparatorTaskThinkingPathForModelOption(option) {
   return `${BINARY_TASK_THINKING_PREFIX}${comparatorTaskNameFromModelPath(comparatorOptionKey(option))}`;
 }
 
+function comparatorModelCapabilities(model) {
+  return comparatorOllamaModelCapabilities?.[String(model || "").trim()] || null;
+}
+
 function comparatorModelSupportsThinking(model) {
-  const capabilities = comparatorOllamaModelCapabilities?.[String(model || "").trim()];
+  const capabilities = comparatorModelCapabilities(model);
   return Boolean(capabilities && capabilities.thinking === true);
+}
+
+function comparatorModelValidatedThinkingTasks(model) {
+  const capabilities = comparatorModelCapabilities(model);
+  return Array.isArray(capabilities?.validated_thinking_tasks)
+    ? capabilities.validated_thinking_tasks.map((task) => String(task || "").trim()).filter(Boolean)
+    : [];
+}
+
+function comparatorTaskThinkingValidation(model, task) {
+  if (!model) return { valid: false, reason: "Selecciona un modelo para esta tarea." };
+  if (!comparatorModelSupportsThinking(model)) {
+    return { valid: false, reason: `No activable con ${model}: Binary no declara thinking para este modelo.` };
+  }
+  const validatedTasks = comparatorModelValidatedThinkingTasks(model);
+  if (!validatedTasks.includes(task)) {
+    return { valid: false, reason: `Thinking no validado para ${task} con ${model}.` };
+  }
+  return { valid: true, reason: `Thinking validado para ${task} con ${model}.` };
 }
 
 function comparatorTaskModelDisplayName(path) {
@@ -5506,10 +5533,13 @@ function renderComparatorTaskModelOption(proposal, modelOption, thinkingOption) 
     thinkingLabel.innerHTML = `
       <span>Thinking</span>
       ${renderComparatorCliHelp(thinkingOption)}
-      <select class="cli-select" data-comparator-cli-value data-comparator-task-thinking-select data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(thinkingPath)}" data-cli-flag="${escapeHtml(thinkingOption.flag)}" data-cli-type="bool">
+      <select class="cli-select" data-comparator-cli-value data-comparator-task-thinking-select data-proposal-id="${escapeHtml(proposal.proposalId)}" data-cli-key="${escapeHtml(thinkingPath)}" data-cli-flag="${escapeHtml(thinkingOption.flag)}" data-cli-type="thinking_mode">
         <option value="">Sin cambio</option>
         <option value="false">Desactivado</option>
-        <option value="true">Activado</option>
+        <option value="low">Bajo</option>
+        <option value="medium">Medio</option>
+        <option value="high">Alto</option>
+        <option value="true" hidden>Activado (legacy)</option>
       </select>
       <small data-comparator-task-thinking-status></small>
     `;
@@ -5538,19 +5568,20 @@ function syncComparatorTaskThinkingFieldset(fieldset) {
   const thinkingSelect = fieldset?.querySelector?.("[data-comparator-task-thinking-select]");
   if (!thinkingSelect) return;
   const model = comparatorTaskFieldsetEffectiveModel(fieldset);
-  const supportsThinking = comparatorModelSupportsThinking(model);
-  const enabledOption = Array.from(thinkingSelect.options).find((option) => option.value === "true");
-  if (enabledOption) enabledOption.disabled = !supportsThinking;
-  if (!supportsThinking && thinkingSelect.value === "true") {
+  const task = comparatorTaskNameFromThinkingPath(fieldset.dataset.taskThinkingPath);
+  const validation = comparatorTaskThinkingValidation(model, task);
+  Array.from(thinkingSelect.options).forEach((option) => {
+    if (!["true", "low", "medium", "high"].includes(option.value)) return;
+    option.disabled = !validation.valid;
+  });
+  if (!validation.valid && ["true", "low", "medium", "high"].includes(thinkingSelect.value)) {
     thinkingSelect.value = "";
   }
   const status = fieldset.querySelector("[data-comparator-task-thinking-status]");
   if (status) {
-    status.textContent = supportsThinking
-      ? `Activable con ${model}.`
-      : `No activable con ${model || "modelo global/custom"} hasta declararlo compatible en Binary.`;
+    status.textContent = validation.reason;
   }
-  thinkingSelect.closest(".cli-field")?.classList.toggle("cli-field-disabled", !supportsThinking);
+  thinkingSelect.closest(".cli-field")?.classList.toggle("cli-field-disabled", !validation.valid);
 }
 
 function syncComparatorTaskThinkingControls(container) {
@@ -5873,7 +5904,7 @@ function collectComparatorCliValues(container) {
     if (!key) return;
     const type = field.dataset.cliType || "string";
     let value;
-    if (type === "bool" && field.tagName === "SELECT") {
+    if ((type === "bool" || type === "thinking_mode") && field.tagName === "SELECT") {
       value = field.value;
     } else if (type === "bool") {
       value = field.checked;
@@ -5881,9 +5912,14 @@ function collectComparatorCliValues(container) {
       value = field.value.trim();
     }
     const isBoolSelect = type === "bool" && field.tagName === "SELECT";
-    const shouldInclude = isBoolSelect ? value !== "" : type === "bool" ? value : value !== "";
+    const isThinkingMode = type === "thinking_mode";
+    const shouldInclude = isBoolSelect || isThinkingMode ? value !== "" : type === "bool" ? value : value !== "";
     if (shouldInclude) {
-      cliValues[key] = type === "bool" && typeof value === "string" ? value === "true" : value;
+      if (isThinkingMode) {
+        cliValues[key] = value === "false" ? false : value === "true" ? true : value;
+      } else {
+        cliValues[key] = type === "bool" && typeof value === "string" ? value === "true" : value;
+      }
     }
   });
   container.querySelectorAll("[data-comparator-cli-combo]").forEach((field) => {
@@ -5971,6 +6007,11 @@ function applyComparatorCliValues(container, cliValues = {}) {
     const type = field.dataset.cliType || "string";
     if (type === "bool" && field.tagName === "SELECT") {
       field.value = value === true ? "true" : value === false ? "false" : "";
+    } else if (type === "thinking_mode") {
+      if (value === false) field.value = "false";
+      else if (value === true) field.value = "true";
+      else if (["low", "medium", "high"].includes(String(value))) field.value = String(value);
+      else field.value = "";
     } else if (type === "bool") {
       field.checked = Boolean(value);
     } else {
@@ -6759,9 +6800,11 @@ function renderComparatorCostSummary(costSummary) {
 
   const successful = costSummary.llmSuccessfulCalls ?? 0;
   const failed = costSummary.llmFailedCalls ?? 0;
+  const empty = costSummary.llmEmptyContentCalls ?? 0;
+  const emptyLabel = empty ? `, ${empty} vacia(s)` : "";
   const tokenLabel = costSummary.hasTokenReport ? `${costSummary.totalTokens ?? 0} tokens reportados` : "tokens no reportados";
   dom.comparatorLlmCalls.textContent = String(costSummary.llmCalls ?? 0);
-  dom.comparatorLlmCallsDetail.textContent = `${successful} ok, ${failed} fallida(s), ${tokenLabel}.`;
+  dom.comparatorLlmCallsDetail.textContent = `${successful} ok, ${failed} fallida(s)${emptyLabel}, ${tokenLabel}.`;
   dom.comparatorWallClock.textContent = costSummary.runWallClockLabel || "--";
   dom.comparatorLlmTime.textContent = costSummary.llmClientWallClockLabel || "--";
 }

@@ -816,6 +816,14 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertTrue(defaults["ollamaModelCapabilities"]["qwen3.5:2b"]["thinking"])
         self.assertTrue(defaults["ollamaModelCapabilities"]["qwen3:4b-instruct-2507-q4_K_M"]["thinking"])
         self.assertFalse(defaults["ollamaModelCapabilities"]["llama3.1:8b"]["thinking"])
+        self.assertEqual(
+            defaults["ollamaModelCapabilities"]["qwen3.5:9b"]["validated_thinking_tasks"],
+            ["semantic_anchor_extraction"],
+        )
+        self.assertEqual(
+            defaults["ollamaModelCapabilities"]["lfm2.5:8b"]["validated_thinking_tasks"],
+            ["semantic_anchor_extraction", "semantic_pool_generation"],
+        )
 
     def test_binary_task_thinking_options_are_generated_for_structured_ui(self):
         proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
@@ -827,7 +835,8 @@ class RepetitionAggregationTests(unittest.TestCase):
         thinking = options_by_key["router.task_thinking.synthetic_text_generation"]
 
         self.assertEqual(thinking["flag"], "--set")
-        self.assertEqual(thinking["type"], "bool")
+        self.assertEqual(thinking["type"], "thinking_mode")
+        self.assertEqual(thinking["choices"], ["false", "low", "medium", "high"])
         self.assertTrue(thinking["allowFalse"])
         self.assertEqual(thinking["pairedModelPath"], "router.task_models.synthetic_text_generation")
 
@@ -841,12 +850,18 @@ class RepetitionAggregationTests(unittest.TestCase):
               model_capabilities:
                 qwen3.5:2b:
                   thinking: true
+                  validated_thinking_tasks:
+                    - semantic_anchor_extraction
               stream: false
             """
         )
 
         self.assertEqual(parsed["ollama"]["model_options"], ["llama3.1:8b", "qwen3.5:2b"])
         self.assertTrue(parsed["ollama"]["model_capabilities"]["qwen3.5:2b"]["thinking"])
+        self.assertEqual(
+            parsed["ollama"]["model_capabilities"]["qwen3.5:2b"]["validated_thinking_tasks"],
+            ["semantic_anchor_extraction"],
+        )
         self.assertFalse(parsed["ollama"]["stream"])
 
     def test_binary_mopso_float_overrides_accept_decimal_values(self):
@@ -868,6 +883,79 @@ class RepetitionAggregationTests(unittest.TestCase):
         values = parsed["proposalConfigs"]["binary-mopso-cd"]["cliValues"]
         self.assertEqual(values["mopso.alpha"], "1.25")
         self.assertEqual(values["mopso.archive_multiplier"], "0.5")
+
+    def test_binary_task_thinking_rejects_unvalidated_model_task_before_run(self):
+        payload = {
+            "referenceText": "reference",
+            "model": "qwen3.5:9b",
+            "proposalInstances": [
+                {
+                    "instanceId": "binary-mopso-cd-3",
+                    "proposalId": "binary-mopso-cd",
+                    "displayName": "Binary MOPSO-CD 3",
+                    "proposalConfig": {
+                        "cliValues": {
+                            "router.task_models.semantic_pool_generation": "qwen3.5:9b",
+                            "router.task_thinking.semantic_pool_generation": "low",
+                        }
+                    },
+                }
+            ],
+        }
+
+        service = ComparatorService(Path("."))
+        with self.assertRaisesRegex(ValueError, "qwen3\\.5:9b.*semantic_pool_generation.*not validated"):
+            service._read_config(payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_service = ComparatorService(Path(temp_dir))
+            with self.assertRaisesRegex(ValueError, "semantic_pool_generation"):
+                temp_service.start_run(payload)
+            self.assertFalse(temp_service.runs_root.exists())
+
+    def test_binary_task_thinking_allows_validated_model_task(self):
+        service = ComparatorService(Path("."))
+
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "model": "lfm2.5:8b",
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {
+                    "binary-mopso-cd": {
+                        "cliValues": {
+                            "router.task_models.semantic_pool_generation": "lfm2.5:8b",
+                            "router.task_thinking.semantic_pool_generation": "medium",
+                        }
+                    }
+                },
+            }
+        )
+
+        values = parsed["proposalConfigs"]["binary-mopso-cd"]["cliValues"]
+        self.assertEqual(values["router.task_thinking.semantic_pool_generation"], "medium")
+
+    def test_binary_task_thinking_accepts_legacy_true_but_validates_task(self):
+        service = ComparatorService(Path("."))
+
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "model": "qwen3.5:9b",
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {
+                    "binary-mopso-cd": {
+                        "cliValues": {
+                            "router.task_models.semantic_anchor_extraction": "qwen3.5:9b",
+                            "router.task_thinking.semantic_anchor_extraction": True,
+                        }
+                    }
+                },
+            }
+        )
+
+        values = parsed["proposalConfigs"]["binary-mopso-cd"]["cliValues"]
+        self.assertIs(values["router.task_thinking.semantic_anchor_extraction"], True)
 
     def test_binary_cli_metadata_matches_real_config_casts_for_core_groups(self):
         proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
@@ -1274,8 +1362,8 @@ class RepetitionAggregationTests(unittest.TestCase):
                             "router.heuristics.semantic_pool_expansion": False,
                             "router.heuristics.semantic_component_influence_candidates": False,
                             "router.heuristics.word_replacement_candidates": False,
-                            "router.task_models.synthetic_text_generation": "llama3.1:8b",
-                            "router.task_thinking.synthetic_text_generation": True,
+                            "router.task_models.semantic_pool_generation": "lfm2.5:8b",
+                            "router.task_thinking.semantic_pool_generation": "low",
                         }
                     }
                 },
@@ -1314,8 +1402,8 @@ class RepetitionAggregationTests(unittest.TestCase):
         ):
             self.assertEqual(set_values[key], "false")
         self.assertEqual(set_values["router.task_models.semantic_anchor_extraction"], '"llama3"')
-        self.assertEqual(set_values["router.task_models.synthetic_text_generation"], '"llama3.1:8b"')
-        self.assertEqual(set_values["router.task_thinking.synthetic_text_generation"], "true")
+        self.assertEqual(set_values["router.task_models.semantic_pool_generation"], '"lfm2.5:8b"')
+        self.assertEqual(set_values["router.task_thinking.semantic_pool_generation"], '"low"')
 
     def test_binary_command_uses_instance_specific_cli_values(self):
         service = ComparatorService(Path("."))
@@ -1534,7 +1622,12 @@ class RepetitionAggregationTests(unittest.TestCase):
                     "externalArchiveUpdateCountTotal": 4,
                     "externalArchivePruneCountTotal": 1,
                 },
-                "cost": {"llmCalls": 2, "llmClientWallClockSeconds": 1.0, "totalTokens": 20},
+                "cost": {
+                    "llmCalls": 2,
+                    "llmEmptyContentCalls": 1,
+                    "llmClientWallClockSeconds": 1.0,
+                    "totalTokens": 20,
+                },
             },
             {
                 "status": "completed",
@@ -1559,7 +1652,12 @@ class RepetitionAggregationTests(unittest.TestCase):
                     "externalArchiveUpdateCountTotal": 8,
                     "externalArchivePruneCountTotal": 3,
                 },
-                "cost": {"llmCalls": 3, "llmClientWallClockSeconds": 2.0, "totalTokens": 30},
+                "cost": {
+                    "llmCalls": 3,
+                    "llmEmptyContentCalls": 1,
+                    "llmClientWallClockSeconds": 2.0,
+                    "totalTokens": 30,
+                },
             },
         ]
         aggregated = aggregate_proposal_repetitions(proposal, Path("out"), results, 2)
@@ -1574,6 +1672,8 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(aggregated["metrics"]["externalArchivePruneCountTotal"], 4)
         self.assertAlmostEqual(aggregated["cost"]["llmCalls"], 2.5)
         self.assertEqual(aggregated["cost"]["llmCallsTotal"], 5)
+        self.assertAlmostEqual(aggregated["cost"]["llmEmptyContentCalls"], 1.0)
+        self.assertEqual(aggregated["cost"]["llmEmptyContentCallsTotal"], 2)
         self.assertAlmostEqual(aggregated["cost"]["llmClientWallClockSeconds"], 1.5)
         self.assertAlmostEqual(aggregated["cost"]["llmClientWallClockSecondsTotal"], 3.0)
         self.assertAlmostEqual(aggregated["cost"]["llmAverageCallSeconds"], 0.6)
@@ -1583,6 +1683,7 @@ class RepetitionAggregationTests(unittest.TestCase):
 
         summary = comparator_module.summarize_costs([{"cost": aggregated["cost"]}], run_elapsed_seconds=9.0)
         self.assertEqual(summary["llmCalls"], 5)
+        self.assertEqual(summary["llmEmptyContentCalls"], 2)
         self.assertEqual(summary["totalTokens"], 50)
         self.assertAlmostEqual(summary["llmClientWallClockSeconds"], 3.0)
 
@@ -2881,6 +2982,30 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertAlmostEqual(cost["ollamaTotalDurationSeconds"], 1.2)
         self.assertTrue(cost["hasTokenReport"])
         self.assertTrue(cost["hasOllamaDurationReport"])
+
+    def test_binary_costs_report_empty_content_calls(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "llm_calls.jsonl").write_text(
+                "\n".join(
+                    [
+                        '{"semantic_task": "semantic_pool_generation", "elapsed_seconds": 1, "content_chars": 0, "thinking_chars": 14416, "empty_content": true}',
+                        '{"semantic_task": "semantic_anchor_extraction", "elapsed_seconds": 2, "content_chars": 25}',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            cost = comparator_module.build_binary_cost_metrics(
+                {"processWallClockSeconds": 4.0, "returnCode": 1},
+                output_dir,
+                False,
+            )
+
+        self.assertEqual(cost["llmCalls"], 2)
+        self.assertEqual(cost["llmEmptyContentCalls"], 1)
+        self.assertEqual(cost["llmTaskBreakdown"]["semantic_pool_generation"]["emptyContentCalls"], 1)
+        self.assertEqual(cost["llmTaskBreakdown"]["semantic_anchor_extraction"]["emptyContentCalls"], 0)
 
     def test_process_failure_message_uses_python_exception_log_detail(self):
         service = ComparatorService(Path("."))

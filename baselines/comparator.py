@@ -123,6 +123,7 @@ MODULE_ROOT = Path(__file__).resolve().parents[1]
 BINARY_PROPOSAL_ID = "binary-mopso-cd"
 BINARY_TASK_MODEL_PREFIX = "router.task_models."
 BINARY_TASK_THINKING_PREFIX = "router.task_thinking."
+BINARY_THINKING_MODE_CHOICES = ("false", "low", "medium", "high")
 BINARY_MANAGED_CONFIG_PATHS = {
     "experiment.n",
     "experiment.iterations",
@@ -346,7 +347,7 @@ def binary_option_type(path: str, value: Any) -> str:
     if guided:
         return str(guided["type"])
     if path.startswith(BINARY_TASK_THINKING_PREFIX):
-        return "bool"
+        return "thinking_mode"
     if path in BINARY_FORCED_OPTION_TYPES:
         return BINARY_FORCED_OPTION_TYPES[path]
     if isinstance(value, bool):
@@ -396,7 +397,17 @@ def binary_model_capabilities_from_config(config: dict[str, Any]) -> dict[str, d
     capabilities: dict[str, dict[str, Any]] = {}
     for model, values in raw_capabilities.items():
         if isinstance(values, dict):
-            capabilities[str(model)] = dict(values)
+            normalized = dict(values)
+            tasks = values.get("validated_thinking_tasks")
+            if isinstance(tasks, list):
+                normalized["validated_thinking_tasks"] = [
+                    str(task).strip()
+                    for task in tasks
+                    if str(task).strip()
+                ]
+            else:
+                normalized["validated_thinking_tasks"] = []
+            capabilities[str(model)] = normalized
     return capabilities
 
 
@@ -559,9 +570,10 @@ def build_binary_cli_options(config: dict[str, Any] | None = None) -> tuple[tupl
         if path.startswith(BINARY_TASK_THINKING_PREFIX):
             task_name = path.removeprefix(BINARY_TASK_THINKING_PREFIX)
             option["pairedModelPath"] = f"{BINARY_TASK_MODEL_PREFIX}{task_name}"
+            option["choices"] = list(BINARY_THINKING_MODE_CHOICES)
             option["allowFalse"] = True
             option["valueHelp"] = (
-                "Activa thinking solo si el modelo efectivo de esta tarea esta declarado como compatible en Binary."
+                "Activa thinking solo si el modelo efectivo de esta tarea esta declarado y validado en Binary."
             )
         base_options.append(option)
     return tuple(base_options), None
@@ -822,6 +834,7 @@ def empty_cost_metrics() -> dict[str, Any]:
         "llmCalls": 0,
         "llmSuccessfulCalls": 0,
         "llmFailedCalls": 0,
+        "llmEmptyContentCalls": 0,
         "llmClientWallClockSeconds": 0.0,
         "llmClientWallClockLabel": "0s",
         "llmAverageCallSeconds": None,
@@ -881,6 +894,7 @@ def build_cost_metrics(
             "llmCalls": llm_calls,
             "llmSuccessfulCalls": int(finite_float(summary.get("successfulCalls"))),
             "llmFailedCalls": int(finite_float(summary.get("failedCalls"))),
+            "llmEmptyContentCalls": int(finite_float(summary.get("emptyContentCalls"))),
             "llmClientWallClockSeconds": llm_client_seconds,
             "llmClientWallClockLabel": label_from_seconds(llm_client_seconds),
             "llmAverageCallSeconds": average_call_seconds,
@@ -946,6 +960,16 @@ def call_int_metric(call: dict[str, Any], *keys: str) -> int:
     return 0
 
 
+def call_empty_content(call: dict[str, Any]) -> bool:
+    if call.get("empty_content") is True or call.get("emptyContent") is True:
+        return True
+    if "content_chars" in call:
+        return int(finite_float(call.get("content_chars"))) == 0
+    if "contentChars" in call:
+        return int(finite_float(call.get("contentChars"))) == 0
+    return False
+
+
 def call_ollama_total_duration_seconds(call: dict[str, Any]) -> float:
     if "ollamaTotalDurationSeconds" in call:
         return finite_float(call.get("ollamaTotalDurationSeconds"))
@@ -967,6 +991,7 @@ def build_binary_cost_metrics(
     llm_calls = len(calls)
     prompt_eval_count = sum(call_int_metric(call, "promptEvalCount", "prompt_eval_count") for call in calls)
     eval_count = sum(call_int_metric(call, "evalCount", "eval_count") for call in calls)
+    empty_content_calls = sum(1 for call in calls if call_empty_content(call))
     ollama_duration_seconds = sum(call_ollama_total_duration_seconds(call) for call in calls)
     algorithm_runtime = runtime.get("runtime_seconds") or runtime.get("total_sec") or runtime.get("grand_total_sec")
     cost = empty_cost_metrics()
@@ -981,6 +1006,7 @@ def build_binary_cost_metrics(
             "llmCalls": llm_calls,
             "llmSuccessfulCalls": sum(1 for call in calls if call.get("status", "ok") != "error"),
             "llmFailedCalls": sum(1 for call in calls if call.get("status") == "error"),
+            "llmEmptyContentCalls": empty_content_calls,
             "llmClientWallClockSeconds": llm_seconds,
             "llmClientWallClockLabel": label_from_seconds(llm_seconds),
             "llmAverageCallSeconds": (llm_seconds / llm_calls) if llm_calls else None,
@@ -1007,10 +1033,15 @@ def llm_task_breakdown(calls: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
     breakdown: dict[str, dict[str, Any]] = {}
     for call in calls:
         task = str(call.get("semantic_task") or call.get("task") or "unknown")
-        bucket = breakdown.setdefault(task, {"calls": 0, "elapsedSeconds": 0.0, "contentChars": 0})
+        bucket = breakdown.setdefault(
+            task,
+            {"calls": 0, "elapsedSeconds": 0.0, "contentChars": 0, "emptyContentCalls": 0},
+        )
         bucket["calls"] += 1
         bucket["elapsedSeconds"] += finite_float(call.get("elapsed_seconds"))
         bucket["contentChars"] += int(finite_float(call.get("content_chars")))
+        if call_empty_content(call):
+            bucket["emptyContentCalls"] += 1
     for bucket in breakdown.values():
         bucket["elapsedLabel"] = label_from_seconds(bucket["elapsedSeconds"])
     return breakdown
@@ -1065,6 +1096,7 @@ def summarize_costs(proposals: list[dict[str, Any]], run_elapsed_seconds: float)
         "llmCalls": llm_calls,
         "llmSuccessfulCalls": sum(int(cost.get("llmSuccessfulCalls") or 0) for cost in costs),
         "llmFailedCalls": sum(int(cost.get("llmFailedCalls") or 0) for cost in costs),
+        "llmEmptyContentCalls": sum(int(cost_total_metric(cost, "llmEmptyContentCalls")) for cost in costs),
         "llmClientWallClockSeconds": llm_client_seconds,
         "llmClientWallClockLabel": label_from_seconds(llm_client_seconds),
         "llmAverageCallSeconds": average_call_seconds,
@@ -1147,6 +1179,7 @@ def aggregate_comparator_costs(results: list[dict[str, Any]]) -> dict[str, Any]:
     llm_calls_total = sum(int(finite_float(cost.get("llmCalls"))) for cost in costs)
     llm_success_total = sum(int(finite_float(cost.get("llmSuccessfulCalls"))) for cost in costs)
     llm_failed_total = sum(int(finite_float(cost.get("llmFailedCalls"))) for cost in costs)
+    llm_empty_content_total = sum(int(finite_float(cost.get("llmEmptyContentCalls"))) for cost in costs)
     llm_client_seconds_total = sum(finite_float(cost.get("llmClientWallClockSeconds")) for cost in costs)
     algorithm_values = [
         finite_float(cost.get("algorithmRuntimeSeconds"))
@@ -1204,6 +1237,8 @@ def aggregate_comparator_costs(results: list[dict[str, Any]]) -> dict[str, Any]:
         "llmSuccessfulCallsTotal": llm_success_total,
         "llmFailedCalls": llm_failed_total / count,
         "llmFailedCallsTotal": llm_failed_total,
+        "llmEmptyContentCalls": llm_empty_content_total / count,
+        "llmEmptyContentCallsTotal": llm_empty_content_total,
         "llmClientWallClockSeconds": llm_client_seconds_total / count,
         "llmClientWallClockLabel": label_from_seconds(llm_client_seconds_total / count),
         "llmClientWallClockSecondsTotal": llm_client_seconds_total,
@@ -2377,7 +2412,7 @@ class ComparatorService:
         )
         effective_parallelism = 1 if execution_mode == EXECUTION_MODE_FAIR_SEQUENTIAL else requested_parallelism
         costs_comparable = execution_mode == EXECUTION_MODE_FAIR_SEQUENTIAL
-        return {
+        config = {
             "referenceText": reference_text,
             "topK": self._int_between(payload.get("topK", COMPARATOR_DEFAULTS.get("topK", 10)), "topK", 1, 200),
             "n": self._int_between(payload.get("n", COMPARATOR_DEFAULTS.get("n", 10)), "n", 1, 500),
@@ -2416,6 +2451,56 @@ class ComparatorService:
             ),
             "proposalGitConfigs": self._proposal_git_configs(payload.get("proposalGitConfigs"), selected),
         }
+        self._validate_binary_task_thinking_config(config)
+        return config
+
+    def _validate_binary_task_thinking_config(self, config: dict[str, Any]) -> None:
+        capabilities = comparator_ollama_model_capabilities()
+        common_model = str(config.get("model") or COMPARATOR_DEFAULTS.get("model") or "llama3").strip()
+        for instance in config.get("proposalInstances") or []:
+            if str(instance.get("proposalId") or "") != BINARY_PROPOSAL_ID:
+                continue
+            proposal_config = instance.get("proposalConfig") if isinstance(instance.get("proposalConfig"), dict) else {}
+            cli_values = proposal_config.get("cliValues") if isinstance(proposal_config.get("cliValues"), dict) else {}
+            for key, thinking_value in cli_values.items():
+                thinking_path = str(key)
+                if not thinking_path.startswith(BINARY_TASK_THINKING_PREFIX):
+                    continue
+                if not self._binary_task_thinking_enabled(thinking_value):
+                    continue
+                task_name = thinking_path.removeprefix(BINARY_TASK_THINKING_PREFIX)
+                task_model = str(cli_values.get(f"{BINARY_TASK_MODEL_PREFIX}{task_name}") or common_model).strip()
+                self._validate_binary_task_thinking_capability(task_model, task_name, capabilities)
+
+    def _binary_task_thinking_enabled(self, value: Any) -> bool:
+        if value in ("", None):
+            return False
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        return text not in {"false", "0", "no"}
+
+    def _validate_binary_task_thinking_capability(
+        self,
+        model: str,
+        task_name: str,
+        capabilities: dict[str, dict[str, Any]],
+    ) -> None:
+        model_capabilities = capabilities.get(model)
+        if not isinstance(model_capabilities, dict):
+            raise ValueError(
+                f"{model} for {task_name} is not declared in Binary ollama.model_capabilities."
+            )
+        if model_capabilities.get("thinking") is not True:
+            raise ValueError(f"{model} for {task_name} does not support thinking in Binary.")
+        raw_tasks = model_capabilities.get("validated_thinking_tasks")
+        validated_tasks = {
+            str(task).strip()
+            for task in raw_tasks
+            if str(task).strip()
+        } if isinstance(raw_tasks, list) else set()
+        if task_name not in validated_tasks:
+            raise ValueError(f"{model} for {task_name} is not validated for thinking in Binary.")
 
     def _execution_mode(self, value: Any) -> str:
         mode = str(value or EXECUTION_MODE_FAIR_SEQUENTIAL).strip()
@@ -2714,6 +2799,13 @@ class ComparatorService:
                 if raw_value in ("", None) or (raw_value is False and not option.get("allowFalse")):
                     continue
                 normalized[key_text] = self._bool_cli_value(raw_value, f"{proposal.display_name}.{key_text}")
+            elif option_type == "thinking_mode":
+                if raw_value in ("", None):
+                    continue
+                mode = self._thinking_mode_cli_value(raw_value, f"{proposal.display_name}.{key_text}")
+                if mode is False and not option.get("allowFalse"):
+                    continue
+                normalized[key_text] = mode
             elif option_type in {"int", "float", "string", "path"}:
                 text = str(raw_value or "").strip()
                 if not text:
@@ -2824,6 +2916,18 @@ class ComparatorService:
         if text in {"false", "0", "no"}:
             return False
         raise ValueError(f"{label} must be true or false.")
+
+    def _thinking_mode_cli_value(self, value: Any, label: str) -> bool | str:
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"true", "1", "yes", "si", "sÃ­"}:
+            return True
+        if text in {"false", "0", "no"}:
+            return False
+        if text in BINARY_THINKING_MODE_CHOICES and text != "false":
+            return text
+        raise ValueError(f"{label} must be false, low, medium, high, true or false.")
 
     def _int_cli_value(self, value: Any, label: str, option: dict[str, Any]) -> int:
         try:
@@ -3680,6 +3784,11 @@ class ComparatorService:
     def _yaml_cli_literal(self, value: Any, option_type: str) -> str:
         if option_type == "bool":
             return "true" if self._bool_cli_value(value, "yaml bool") else "false"
+        if option_type == "thinking_mode":
+            mode = self._thinking_mode_cli_value(value, "yaml thinking")
+            if isinstance(mode, bool):
+                return "true" if mode else "false"
+            return json.dumps(mode, ensure_ascii=False)
         if option_type in {"int", "float"}:
             return str(value)
         if option_type in {"yaml", "component_multi_select", "ordered_multi_select", "multi_select"}:
