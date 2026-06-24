@@ -2382,14 +2382,16 @@ td {
 
 .proposal-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
   gap: 12px;
 }
 
 .proposal-card {
   display: grid;
   gap: 10px;
+  align-content: start;
   min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-strong);
@@ -2401,8 +2403,18 @@ td {
   background: #f8fbfb;
 }
 
+.proposal-card-header,
+.proposal-card-progress-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
 .proposal-card strong {
+  min-width: 0;
   font-size: 1rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .proposal-card p {
@@ -2447,22 +2459,57 @@ td {
 
 .proposal-card dl {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 6px 10px;
+  gap: 8px;
+  min-width: 0;
   margin: 0;
+}
+
+.proposal-summary-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border-top: 1px solid rgba(203, 213, 225, 0.74);
+  padding-top: 8px;
+}
+
+.proposal-summary-field:first-child {
+  border-top: 0;
+  padding-top: 0;
 }
 
 .proposal-card dt {
   color: var(--muted);
   font-size: 0.76rem;
   font-weight: 800;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
   text-transform: uppercase;
 }
 
 .proposal-card dd {
   min-width: 0;
   margin: 0;
+  line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.proposal-card .copyable-value {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  width: 100%;
+  max-width: 100%;
+  gap: 8px;
+  align-items: start;
+}
+
+.proposal-card .copy-source {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.proposal-card .copy-button {
+  justify-self: end;
+  max-width: 100%;
 }
 
 .valid {

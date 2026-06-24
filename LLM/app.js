@@ -6904,6 +6904,16 @@ function comparatorProposalSummaryTerm(label, metrics = {}) {
   return `<dt${title}>${escapeHtml(label)}</dt>`;
 }
 
+function comparatorProposalSummaryField(label, valueHtml, options = {}) {
+  const valueTitle = options.valueTitle ? ` title="${escapeHtml(options.valueTitle)}"` : "";
+  return `
+    <div class="proposal-summary-field">
+      ${comparatorProposalSummaryTerm(label, options.metrics || {})}
+      <dd${valueTitle}>${valueHtml}</dd>
+    </div>
+  `;
+}
+
 function formatComparatorCostQuantity(value, digits = 2) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
@@ -6938,11 +6948,13 @@ function comparatorGeneralParametersCard(config = null) {
   const n = config?.n ?? "--";
   const generations = config?.generaciones ?? config?.iterations ?? "--";
   article.innerHTML = `
-    <strong>Parametros generales</strong>
-    <p>Aplican a todas las propuestas de la corrida.</p>
-    <dl>
-      ${comparatorProposalSummaryTerm("N")}<dd>${escapeHtml(String(n))}</dd>
-      ${comparatorProposalSummaryTerm("G")}<dd>${escapeHtml(String(generations))}</dd>
+    <div class="proposal-card-header">
+      <strong>Parametros generales</strong>
+      <p>Aplican a todas las propuestas de la corrida.</p>
+    </div>
+    <dl class="proposal-summary-list">
+      ${comparatorProposalSummaryField("N", escapeHtml(String(n)))}
+      ${comparatorProposalSummaryField("G", escapeHtml(String(generations)))}
     </dl>
   `;
   return article;
@@ -6962,11 +6974,15 @@ function comparatorBinaryArchiveSummaryHtml(proposal, config = null) {
     metrics.externalArchivePruneCountTotal,
     repetitionsK,
   );
-  const updatesTitle = updates.title ? ` title="${escapeHtml(updates.title)}"` : "";
-  const prunesTitle = prunes.title ? ` title="${escapeHtml(prunes.title)}"` : "";
   return `
-    ${comparatorProposalSummaryTerm("Actualizaciones archivos realizadas", metrics)}<dd${updatesTitle}>${escapeHtml(updates.value)}</dd>
-    ${comparatorProposalSummaryTerm("Podas realizadas", metrics)}<dd${prunesTitle}>${escapeHtml(prunes.value)}</dd>
+    ${comparatorProposalSummaryField("Actualizaciones archivos realizadas", escapeHtml(updates.value), {
+      metrics,
+      valueTitle: updates.title,
+    })}
+    ${comparatorProposalSummaryField("Podas realizadas", escapeHtml(prunes.value), {
+      metrics,
+      valueTitle: prunes.title,
+    })}
   `;
 }
 
@@ -6991,21 +7007,24 @@ function renderComparatorCards(proposals, config = null) {
     const gitLabel = git.shortCommit
       ? `${git.configuredBranch || git.branch || "--"} @ ${git.shortCommit}${git.dirty ? " (local dirty)" : ""}`
       : "--";
-    const term = (label) => comparatorProposalSummaryTerm(label, metrics);
     const article = document.createElement("article");
     article.className = "proposal-card";
     article.innerHTML = `
-      <strong>${escapeHtml(proposal.displayName || proposal.proposalId)}</strong>
-      <p><span class="${comparatorStatusClass(proposal.status)}">${escapeHtml(comparatorStatusLabel(proposal.status))}</span>${proposal.error ? `: ${escapeHtml(proposal.error)}` : ""}</p>
+      <div class="proposal-card-header">
+        <strong>${escapeHtml(proposal.displayName || proposal.proposalId)}</strong>
+        <p><span class="${comparatorStatusClass(proposal.status)}">${escapeHtml(comparatorStatusLabel(proposal.status))}</span>${proposal.error ? `: ${escapeHtml(proposal.error)}` : ""}</p>
+      </div>
       <div class="mini-progress" aria-label="Progreso ${escapeHtml(proposal.displayName || proposal.proposalId)}">
         <span style="width: ${progressPercent}%"></span>
       </div>
-      <p>${escapeHtml(stageLabel)} (${progressPercent}%)</p>
-      <p title="${escapeHtml(repetitionProgress.title)}">${escapeHtml(repetitionProgress.text)}</p>
-      <dl>
+      <div class="proposal-card-progress-copy">
+        <p>${escapeHtml(stageLabel)} (${progressPercent}%)</p>
+        <p title="${escapeHtml(repetitionProgress.title)}">${escapeHtml(repetitionProgress.text)}</p>
+      </div>
+      <dl class="proposal-summary-list">
         ${comparatorBinaryArchiveSummaryHtml(proposal, config)}
-        ${term("Git")}<dd>${copyableTextHtml(gitLabel)}</dd>
-        ${term("Salida")}<dd>${copyableTextHtml(metrics.outputDir || proposal.outputDir || "--")}</dd>
+        ${comparatorProposalSummaryField("Git", copyableTextHtml(gitLabel), { metrics })}
+        ${comparatorProposalSummaryField("Salida", copyableTextHtml(metrics.outputDir || proposal.outputDir || "--"), { metrics })}
       </dl>
     `;
     return article;
