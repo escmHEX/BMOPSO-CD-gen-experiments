@@ -107,10 +107,54 @@ export function comparatorIsBinaryProposal(proposal) {
   return proposalId === "binary-mopso-cd" || instanceId === "binary-mopso-cd" || instanceId.startsWith("binary-mopso-cd:");
 }
 
-export function comparatorProposalColor(proposal, index = 0) {
-  if (comparatorIsBinaryProposal(proposal)) return COMPARATOR_BINARY_COLOR;
+function comparatorPaletteColor(index = 0) {
   const colorIndex = Math.abs(Math.trunc(Number(index) || 0)) % COMPARATOR_NON_BINARY_PALETTE.length;
   return COMPARATOR_NON_BINARY_PALETTE[colorIndex];
+}
+
+export function comparatorProposalColor(proposal, index = 0) {
+  if (comparatorIsBinaryProposal(proposal)) return COMPARATOR_BINARY_COLOR;
+  return comparatorPaletteColor(index);
+}
+
+function comparatorProposalConfigModified(proposal) {
+  const config = proposal?.proposalConfig || {};
+  if (String(config.extraArgs || "").trim()) return true;
+  const cliValues = config.cliValues && typeof config.cliValues === "object" ? config.cliValues : {};
+  return Object.keys(cliValues).length > 0;
+}
+
+function comparatorReservedBinaryEntityId(proposals) {
+  const binaryProposals = proposals.filter(comparatorIsBinaryProposal);
+  if (binaryProposals.length === 0) return "";
+  if (binaryProposals.length === 1) return comparatorProposalEntityId(binaryProposals[0]);
+  const unmodified = binaryProposals.find((proposal) => !comparatorProposalConfigModified(proposal));
+  return unmodified ? comparatorProposalEntityId(unmodified) : "";
+}
+
+export function comparatorProposalChartStyleAssignments(proposals = []) {
+  const list = Array.isArray(proposals) ? proposals : [];
+  const reservedBinaryEntityId = comparatorReservedBinaryEntityId(list);
+  const styles = new Map();
+  let paletteIndex = 0;
+
+  list.forEach((proposal) => {
+    const entityId = comparatorProposalEntityId(proposal);
+    if (!entityId) return;
+    const isBinary = comparatorIsBinaryProposal(proposal);
+    const emphasized = Boolean(isBinary && entityId === reservedBinaryEntityId);
+    const color = emphasized ? COMPARATOR_BINARY_COLOR : comparatorPaletteColor(paletteIndex++);
+    styles.set(entityId, {
+      color,
+      emphasized,
+      isBinary,
+      lineWidth: emphasized ? 3 : 2,
+      symbolSize: emphasized ? 11 : 9,
+      pointOpacity: emphasized ? 0.86 : 0.68,
+    });
+  });
+
+  return styles;
 }
 
 export function comparatorBenchmarkProposals(proposals = []) {

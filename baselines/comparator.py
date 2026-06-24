@@ -1799,6 +1799,7 @@ def check_proposal_dependencies(root: Path, proposal: ProposalDefinition) -> dic
             errors="replace",
             timeout=10,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
     except Exception as error:
         return {
@@ -1839,6 +1840,23 @@ def split_cli_args(raw: str) -> list[str]:
 
 def command_label(command: list[str]) -> str:
     return subprocess.list2cmdline([str(part) for part in command])
+
+
+def hidden_subprocess_kwargs(detached: bool = False) -> dict[str, Any]:
+    if sys.platform != "win32":
+        return {}
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if detached:
+        creationflags |= subprocess.CREATE_NEW_PROCESS_GROUP
+    kwargs: dict[str, Any] = {}
+    if creationflags:
+        kwargs["creationflags"] = creationflags
+    if hasattr(subprocess, "STARTUPINFO"):
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+        kwargs["startupinfo"] = startupinfo
+    return kwargs
 
 
 class ComparatorService:
@@ -2972,6 +2990,7 @@ class ComparatorService:
                 errors="replace",
                 timeout=timeout_seconds,
                 check=False,
+                **hidden_subprocess_kwargs(),
             )
             return {
                 "command": command_label(command),
@@ -4917,7 +4936,6 @@ class ComparatorService:
             environment["BASELINE_PRELOAD_MODULES"] = ",".join(preload_modules)
         if export_history:
             environment["COMPARATOR_EXPORT_HISTORY"] = "1"
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
         process_started = time.perf_counter()
         timed_out = False
         process = subprocess.Popen(
@@ -4929,8 +4947,8 @@ class ComparatorService:
             encoding="utf-8",
             errors="replace",
             env=environment,
-            creationflags=creationflags,
             start_new_session=sys.platform != "win32",
+            **hidden_subprocess_kwargs(detached=True),
         )
 
         with self._lock:

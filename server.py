@@ -46,6 +46,8 @@ PORTAL_RESTART_HEADER = "X-Tool-Portal-Restart"
 PORTAL_ACTIVE_STATUSES = {"queued", "running"}
 PORTAL_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 PORTAL_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
+PORTAL_RESTART_HELPER_TIMEOUT_SECONDS = 12
+PORTAL_SKIP_PORT_RELEASE_FLAG = "--skip-port-release"
 
 
 def release_existing_server_port(host: str, port: int) -> None:
@@ -80,6 +82,7 @@ def find_windows_listener_pid(host: str, port: int) -> int | None:
         text=True,
         timeout=15,
         check=False,
+        **hidden_subprocess_kwargs(),
     )
     candidate_hosts = {host, "0.0.0.0", "::", "::1", "127.0.0.1"}
     for line in result.stdout.splitlines():
@@ -108,6 +111,7 @@ def windows_process_command_line(process_id: int) -> str:
             text=True,
             timeout=10,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
     except subprocess.TimeoutExpired:
         return ""
@@ -123,6 +127,7 @@ def windows_process_parent_id(process_id: int) -> int | None:
             text=True,
             timeout=10,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
     except subprocess.TimeoutExpired:
         return None
@@ -165,6 +170,7 @@ def terminate_windows_process_tree(process_id: int) -> None:
             text=True,
             timeout=15,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
     except subprocess.TimeoutExpired:
         try:
@@ -180,6 +186,7 @@ def stop_windows_process(process_id: int) -> None:
         text=True,
         timeout=10,
         check=False,
+        **hidden_subprocess_kwargs(),
     )
 
 
@@ -252,9 +259,18 @@ def portal_active_work_summary(services: dict[str, object]) -> list[dict]:
     return active
 
 
+def windowless_python_executable(python_executable: str | None = None) -> str:
+    executable = Path(python_executable or sys.executable)
+    if sys.platform == "win32" and executable.name.lower() == "python.exe":
+        pythonw = executable.with_name("pythonw.exe")
+        if pythonw.exists():
+            return str(pythonw)
+    return str(executable)
+
+
 def build_portal_restart_command(root: Path, host: str, port: int, lm_studio_base: str) -> list[str]:
     return [
-        sys.executable,
+        windowless_python_executable(sys.executable),
         str(root / "server.py"),
         "--host",
         host,
@@ -262,6 +278,185 @@ def build_portal_restart_command(root: Path, host: str, port: int, lm_studio_bas
         str(port),
         "--lm-studio",
         lm_studio_base,
+        PORTAL_SKIP_PORT_RELEASE_FLAG,
+    ]
+
+
+def portal_restart_endpoint_from_command(command: list[str]) -> tuple[str, int]:
+    host = DEFAULT_HOST
+    port = DEFAULT_PORT
+    for index, value in enumerate(command):
+        if value == "--host" and index + 1 < len(command):
+            host = command[index + 1]
+        elif value == "--port" and index + 1 < len(command):
+            try:
+                port = int(command[index + 1])
+            except ValueError:
+                port = DEFAULT_PORT
+    return host, port
+
+
+def hidden_subprocess_kwargs(detached: bool = False) -> dict:
+    if sys.platform != "win32":
+        return {}
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if detached:
+        creationflags |= subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    kwargs: dict = {}
+    if creationflags:
+        kwargs["creationflags"] = creationflags
+    if hasattr(subprocess, "STARTUPINFO"):
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+        kwargs["startupinfo"] = startupinfo
+    return kwargs
+
+
+def portal_restart_subprocess_kwargs(cwd: Path) -> dict:
+    return {
+        "cwd": str(cwd),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+        **hidden_subprocess_kwargs(detached=True),
+    }
+
+
+def build_portal_restart_helper_command(
+    command: list[str],
+    cwd: Path,
+    parent_pid: int,
+    delay_seconds: float,
+    timeout_seconds: float = PORTAL_RESTART_HELPER_TIMEOUT_SECONDS,
+) -> list[str]:
+    host, port = portal_restart_endpoint_from_command(command)
+    helper_code = r"""
+import ctypes
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+parent_pid = int(sys.argv[1])
+command = json.loads(sys.argv[2])
+cwd = sys.argv[3]
+delay_seconds = float(sys.argv[4])
+timeout_seconds = float(sys.argv[5])
+host = sys.argv[6]
+port = int(sys.argv[7])
+
+def parent_alive(pid):
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        synchronize = 0x00100000
+        wait_timeout = 0x00000102
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(synchronize, False, pid)
+        if not handle:
+            return False
+        try:
+            return kernel32.WaitForSingleObject(handle, 0) == wait_timeout
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+def terminate_parent(pid):
+    if pid <= 0 or not parent_alive(pid):
+        return
+    if sys.platform == "win32":
+        kwargs = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "check": False,
+            "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        }
+        if hasattr(subprocess, "STARTUPINFO"):
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0
+            kwargs["startupinfo"] = startupinfo
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F"],
+            **kwargs,
+        )
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+
+def probe_host(value):
+    if value in ("", "0.0.0.0", "::"):
+        return "127.0.0.1"
+    return value
+
+def port_is_listening(host_value, port_value):
+    target_host = probe_host(host_value)
+    family = socket.AF_INET6 if ":" in target_host else socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.25)
+            return sock.connect_ex((target_host, port_value)) == 0
+    except OSError:
+        return False
+
+deadline = time.monotonic() + timeout_seconds
+while parent_alive(parent_pid) and time.monotonic() < deadline:
+    time.sleep(0.1)
+
+if parent_alive(parent_pid):
+    terminate_parent(parent_pid)
+    deadline = time.monotonic() + 4
+    while parent_alive(parent_pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+
+if delay_seconds > 0:
+    time.sleep(delay_seconds)
+
+deadline = time.monotonic() + timeout_seconds
+while port_is_listening(host, port) and time.monotonic() < deadline:
+    time.sleep(0.1)
+
+kwargs = {
+    "cwd": cwd,
+    "stdin": subprocess.DEVNULL,
+    "stdout": subprocess.DEVNULL,
+    "stderr": subprocess.DEVNULL,
+    "close_fds": True,
+}
+if sys.platform == "win32":
+    creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    kwargs["creationflags"] = creationflags
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    kwargs["startupinfo"] = startupinfo
+
+subprocess.Popen(command, **kwargs)
+"""
+    return [
+        windowless_python_executable(),
+        "-c",
+        helper_code,
+        str(parent_pid),
+        json.dumps(command),
+        str(cwd),
+        str(delay_seconds),
+        str(timeout_seconds),
+        host,
+        str(port),
     ]
 
 
@@ -270,26 +465,19 @@ def schedule_portal_restart(
     cwd: Path,
     delay_seconds: float = 0.35,
     launcher=None,
+    terminator=None,
+    current_pid: int | None = None,
 ) -> threading.Thread:
     process_launcher = launcher or subprocess.Popen
+    process_terminator = terminator or os._exit
+    parent_pid = current_pid if current_pid is not None else os.getpid()
 
     def restart() -> None:
         if delay_seconds > 0:
             time.sleep(delay_seconds)
-        creationflags = 0
-        if sys.platform == "win32":
-            creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-            creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        kwargs = {
-            "cwd": str(cwd),
-            "stdin": subprocess.DEVNULL,
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-            "close_fds": True,
-        }
-        if creationflags:
-            kwargs["creationflags"] = creationflags
-        process_launcher(command, **kwargs)
+        helper_command = build_portal_restart_helper_command(command, cwd, parent_pid, 0)
+        process_launcher(helper_command, **portal_restart_subprocess_kwargs(cwd))
+        process_terminator(0)
 
     thread = threading.Thread(target=restart, name="portal-backend-restart", daemon=True)
     thread.start()
@@ -893,6 +1081,7 @@ def main() -> None:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--lm-studio", default=DEFAULT_LM_STUDIO)
+    parser.add_argument(PORTAL_SKIP_PORT_RELEASE_FLAG, action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent
@@ -914,7 +1103,8 @@ def main() -> None:
     ToolPortalHandler.sbert_service = SbertSimilarityService()
 
     socketserver.ThreadingTCPServer.allow_reuse_address = True
-    release_existing_server_port(args.host, args.port)
+    if not args.skip_port_release:
+        release_existing_server_port(args.host, args.port)
     with socketserver.ThreadingTCPServer((args.host, args.port), handler) as httpd:
         print(f"Serving portal at http://{args.host}:{args.port}/LLM/")
         print(f"Proxying {PROXY_PREFIX}/* to {ToolPortalHandler.lm_studio_base}/*")

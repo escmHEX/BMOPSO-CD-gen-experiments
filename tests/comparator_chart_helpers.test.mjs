@@ -18,6 +18,7 @@ import {
   comparatorMetricExtremes,
   comparatorMetricMetadata,
   comparatorMetricReferenceLinePatch,
+  comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
 } from "../LLM/comparator_chart_helpers.mjs";
 
@@ -318,6 +319,104 @@ test("non-binary proposal palette keeps adjacent colors visually separated", () 
   }, Number.POSITIVE_INFINITY);
 
   assert.ok(minimumDistance >= 45, `minimum distance was ${minimumDistance}`);
+});
+
+test("chart style assignments keep a single binary instance green", () => {
+  const proposals = [{
+    instanceId: "binary-mopso-cd:qwen",
+    proposalId: "binary-mopso-cd",
+    proposalConfig: {
+      extraArgs: "",
+      cliValues: {
+        "router.task_models.synthetic_text_generation": "qwen3:4b-instruct-2507-q4_K_M",
+      },
+    },
+  }];
+
+  const styles = comparatorProposalChartStyleAssignments(proposals);
+  const binaryStyle = styles.get("binary-mopso-cd:qwen");
+
+  assert.equal(binaryStyle.color, "#2A8C00");
+  assert.equal(binaryStyle.emphasized, true);
+});
+
+test("chart style assignments reserve green only for the unmodified binary instance when several binary instances are compared", () => {
+  const proposals = [
+    {
+      instanceId: "binary-mopso-cd:default",
+      proposalId: "binary-mopso-cd",
+      proposalConfig: { extraArgs: "", cliValues: {} },
+    },
+    {
+      instanceId: "binary-mopso-cd:qwen",
+      proposalId: "binary-mopso-cd",
+      proposalConfig: {
+        extraArgs: "",
+        cliValues: {
+          "router.task_models.synthetic_text_generation": "qwen3:4b-instruct-2507-q4_K_M",
+        },
+      },
+    },
+    {
+      instanceId: "evolmd-mo",
+      proposalId: "evolmd-mo",
+    },
+  ];
+
+  const styles = comparatorProposalChartStyleAssignments(proposals);
+
+  assert.equal(styles.get("binary-mopso-cd:default").color, "#2A8C00");
+  assert.equal(styles.get("binary-mopso-cd:default").emphasized, true);
+  assert.notEqual(styles.get("binary-mopso-cd:qwen").color, "#2A8C00");
+  assert.equal(styles.get("binary-mopso-cd:qwen").emphasized, false);
+  assert.notEqual(styles.get("evolmd-mo").color, "#2A8C00");
+});
+
+test("chart style assignments do not reserve green when several binary instances are all modified", () => {
+  const proposals = [
+    {
+      instanceId: "binary-mopso-cd:qwen",
+      proposalId: "binary-mopso-cd",
+      proposalConfig: {
+        extraArgs: "",
+        cliValues: {
+          "router.task_models.synthetic_text_generation": "qwen3:4b-instruct-2507-q4_K_M",
+        },
+      },
+    },
+    {
+      instanceId: "binary-mopso-cd:mopso",
+      proposalId: "binary-mopso-cd",
+      proposalConfig: {
+        extraArgs: "",
+        cliValues: {
+          "mopso.leader_tournament_size": "8",
+        },
+      },
+    },
+  ];
+
+  const styles = comparatorProposalChartStyleAssignments(proposals);
+
+  assert.notEqual(styles.get("binary-mopso-cd:qwen").color, "#2A8C00");
+  assert.notEqual(styles.get("binary-mopso-cd:mopso").color, "#2A8C00");
+  assert.equal(styles.get("binary-mopso-cd:qwen").emphasized, false);
+  assert.equal(styles.get("binary-mopso-cd:mopso").emphasized, false);
+});
+
+test("chart style assignments keep non-binary palette stable when a green binary instance is present", () => {
+  const defaultBinary = {
+    instanceId: "binary-mopso-cd:default",
+    proposalId: "binary-mopso-cd",
+    proposalConfig: { extraArgs: "", cliValues: {} },
+  };
+  const baseline = { instanceId: "evolmd-mo", proposalId: "evolmd-mo" };
+
+  const withoutBinary = comparatorProposalChartStyleAssignments([baseline]);
+  const withBinary = comparatorProposalChartStyleAssignments([defaultBinary, baseline]);
+
+  assert.equal(withBinary.get("binary-mopso-cd:default").color, "#2A8C00");
+  assert.equal(withBinary.get("evolmd-mo").color, withoutBinary.get("evolmd-mo").color);
 });
 
 test("quality winners do not depend on cost comparability", () => {
