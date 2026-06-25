@@ -1416,9 +1416,76 @@ class RepetitionAggregationTests(unittest.TestCase):
             "router.heuristics.word_replacement_candidates",
         ):
             self.assertEqual(set_values[key], "false")
-        self.assertEqual(set_values["router.task_models.semantic_anchor_extraction"], '"llama3"')
+        self.assertNotIn("router.task_models.semantic_anchor_extraction", set_values)
         self.assertEqual(set_values["router.task_models.semantic_pool_generation"], '"lfm2.5:8b"')
         self.assertEqual(set_values["router.task_thinking.semantic_pool_generation"], '"low"')
+
+    def test_binary_command_preserves_default_task_models_without_explicit_overrides(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "model": "llama3",
+                "selectedProposalIds": ["binary-mopso-cd"],
+            }
+        )
+        command = service._build_command(
+            {"config": config},
+            proposal,
+            Path("."),
+            Path("out"),
+            Path("reference.txt"),
+            777,
+        )
+
+        set_values = command_set_values(command)
+        self.assertEqual(set_values["ollama.default_model"], '"llama3"')
+        self.assertNotIn("router.task_models.central_anchor_selection", set_values)
+        self.assertFalse(any(path.startswith("router.task_models.") for path in command_set_paths(command)))
+
+    def test_binary_task_thinking_uses_default_task_model_when_model_not_overridden(self):
+        service = ComparatorService(Path("."))
+
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "model": "llama3",
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {
+                    "binary-mopso-cd": {
+                        "cliValues": {
+                            "router.task_thinking.central_anchor_selection": "high",
+                        }
+                    }
+                },
+            }
+        )
+
+        values = parsed["proposalConfigs"]["binary-mopso-cd"]["cliValues"]
+        self.assertEqual(values["router.task_thinking.central_anchor_selection"], "high")
+
+    def test_binary_task_thinking_rejects_default_task_model_without_thinking_support(self):
+        service = ComparatorService(Path("."))
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "llama3\\.1:8b.*semantic_anchor_extraction.*does not support thinking",
+        ):
+            service._read_config(
+                {
+                    "referenceText": "reference",
+                    "model": "qwen3.5:9b",
+                    "selectedProposalIds": ["binary-mopso-cd"],
+                    "proposalConfigs": {
+                        "binary-mopso-cd": {
+                            "cliValues": {
+                                "router.task_thinking.semantic_anchor_extraction": "high",
+                            }
+                        }
+                    },
+                }
+            )
 
     def test_binary_command_uses_instance_specific_cli_values(self):
         service = ComparatorService(Path("."))

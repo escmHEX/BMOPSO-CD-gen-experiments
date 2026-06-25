@@ -5522,6 +5522,8 @@ function renderComparatorTaskModelOption(proposal, modelOption, thinkingOption) 
   const modelPath = comparatorOptionKey(modelOption);
   const thinkingPath = thinkingOption ? comparatorOptionKey(thinkingOption) : "";
   fieldset.dataset.taskModelPath = modelPath;
+  fieldset.dataset.taskDefaultModel =
+    modelOption.default === undefined || modelOption.default === null ? "" : String(modelOption.default);
   if (thinkingPath) fieldset.dataset.taskThinkingPath = thinkingPath;
   fieldset.innerHTML = `
     <legend>${escapeHtml(comparatorOptionLabel(modelOption))}</legend>
@@ -5564,6 +5566,7 @@ function comparatorTaskFieldsetEffectiveModel(fieldset) {
     return String(customInput?.value || "").trim();
   }
   if (modelSelect.value) return modelSelect.value;
+  if (fieldset?.dataset?.taskDefaultModel) return fieldset.dataset.taskDefaultModel;
   return readComparatorModelValue({ allowEmpty: true });
 }
 

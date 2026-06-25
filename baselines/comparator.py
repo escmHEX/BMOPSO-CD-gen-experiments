@@ -204,7 +204,7 @@ BINARY_SELECT_OPTION_PATHS = {
 }
 BINARY_VALUE_HELP = {
     "models.sbert.default": "Modelo SBERT usado para embeddings y metricas semanticas. Puedes elegir un alias conocido o escribir un modelo compatible.",
-    "ollama.default_model": "Gestionado por el modelo comun del comparador; las tareas del router usan ese modelo salvo override explicito.",
+    "ollama.default_model": "Gestionado por el modelo comun del comparador. Las tareas del router conservan sus defaults salvo override explicito.",
     "logging.level": "Nivel minimo de logs emitidos por Binary. DEBUG es mas verboso; INFO es el nivel usual.",
     "parallelism.enabled": "Activa paralelismo interno de Binary. Para comparaciones de costo justas, recuerda usar modo secuencial del comparador.",
     "parallelism.particle_update_max_concurrent": "Override opcional. Si lo dejas vacio, el comparador envia auto: N de la comparacion; si escribes un valor, fuerza ese limite.",
@@ -296,7 +296,7 @@ BINARY_PATH_HELP = {
     "experiment.runs": "El comparador ejecuta K externamente; Binary corre una repeticion por proceso.",
     "experiment.seed": "Gestionado por la semilla efectiva de cada repeticion.",
     "runtime.outdir_base": "Gestionado por el comparador para aislar artefactos por corrida.",
-    "ollama.default_model": "Gestionado por el campo comun Modelo del comparador.",
+    "ollama.default_model": "Gestionado por el campo comun Modelo del comparador; no pisa los modelos por tarea.",
     "mopso.k_retry": "Debe permanecer en 0 segun la validacion actual de Binary.",
     "ollama.speculative_decoding_enabled": "Binary bloquea esta opcion durante validacion.",
 }
@@ -411,6 +411,19 @@ def binary_model_capabilities_from_config(config: dict[str, Any]) -> dict[str, d
     return capabilities
 
 
+def binary_task_models_from_config(config: dict[str, Any]) -> dict[str, str]:
+    router = config.get("router") if isinstance(config.get("router"), dict) else {}
+    raw_task_models = router.get("task_models") if isinstance(router, dict) else None
+    if not isinstance(raw_task_models, dict):
+        return {}
+    task_models: dict[str, str] = {}
+    for task_name, model in raw_task_models.items():
+        model_text = str(model or "").strip()
+        if model_text:
+            task_models[str(task_name).strip()] = model_text
+    return {task: model for task, model in task_models.items() if task}
+
+
 def load_binary_model_metadata() -> tuple[list[str], dict[str, dict[str, Any]]]:
     config = load_binary_default_config(binary_default_config_path())
     return binary_model_options_from_config(config), binary_model_capabilities_from_config(config)
@@ -430,6 +443,13 @@ def comparator_ollama_model_capabilities() -> dict[str, dict[str, Any]]:
     except Exception:
         return {}
     return capabilities
+
+
+def comparator_binary_default_task_models() -> dict[str, str]:
+    try:
+        return binary_task_models_from_config(load_binary_default_config(binary_default_config_path()))
+    except Exception:
+        return {}
 
 
 def parse_simple_yaml_mapping(text: str) -> dict[str, Any]:
@@ -2457,6 +2477,7 @@ class ComparatorService:
 
     def _validate_binary_task_thinking_config(self, config: dict[str, Any]) -> None:
         capabilities = comparator_ollama_model_capabilities()
+        default_task_models = comparator_binary_default_task_models()
         common_model = str(config.get("model") or COMPARATOR_DEFAULTS.get("model") or "llama3").strip()
         for instance in config.get("proposalInstances") or []:
             if str(instance.get("proposalId") or "") != BINARY_PROPOSAL_ID:
@@ -2470,7 +2491,11 @@ class ComparatorService:
                 if not self._binary_task_thinking_enabled(thinking_value):
                     continue
                 task_name = thinking_path.removeprefix(BINARY_TASK_THINKING_PREFIX)
-                task_model = str(cli_values.get(f"{BINARY_TASK_MODEL_PREFIX}{task_name}") or common_model).strip()
+                task_model = str(
+                    cli_values.get(f"{BINARY_TASK_MODEL_PREFIX}{task_name}")
+                    or default_task_models.get(task_name)
+                    or common_model
+                ).strip()
                 self._validate_binary_task_thinking_capability(task_model, task_name, capabilities)
 
     def _binary_task_thinking_enabled(self, value: Any) -> bool:
@@ -3719,20 +3744,10 @@ class ComparatorService:
         for path in BINARY_AUTO_PARALLELISM_PATHS:
             if path not in manual_paths:
                 overrides.append((path, int(run["config"]["n"]), "int"))
-        for path in self._binary_task_model_paths(proposal):
-            overrides.append((path, model, "string"))
         args: list[str] = []
         for path, value, value_type in overrides:
             args.extend(["--set", f"{path}={self._yaml_cli_literal(value, value_type)}"])
         return args
-
-    def _binary_task_model_paths(self, proposal: ProposalDefinition) -> list[str]:
-        paths = [
-            str(option.get("configPath"))
-            for option in self._proposal_cli_options(proposal)
-            if str(option.get("configPath") or "").startswith(BINARY_TASK_MODEL_PREFIX)
-        ]
-        return sorted(path for path in paths if path)
 
     def _cli_args_from_values(self, proposal: ProposalDefinition, values: dict[str, Any]) -> list[str]:
         options = self._configurable_cli_options(proposal)
