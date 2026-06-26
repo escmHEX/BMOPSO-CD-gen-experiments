@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  comparatorBmopsoInternalAnalyses,
   comparatorBenchmarkProposals,
   comparatorBestCostProposalIds,
   comparatorBestMetricProposalIds,
+  comparatorHasBmopsoInternalAnalysis,
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
   comparatorHypervolumeArea,
@@ -469,6 +471,47 @@ test("cost winners use instance ids when present", () => {
   }, { costsComparable: true });
 
   assert.deepEqual([...winners], ["binary-b"]);
+});
+
+test("BMOPSO internal analysis availability is driven by payload", () => {
+  assert.equal(comparatorHasBmopsoInternalAnalysis([
+    { proposalId: "binary-mopso-cd", instanceId: "binary-a", status: "completed" },
+  ]), false);
+
+  assert.equal(comparatorHasBmopsoInternalAnalysis([
+    {
+      proposalId: "binary-mopso-cd",
+      instanceId: "binary-a",
+      status: "completed",
+      internalBmopsoAnalysis: { available: true, series: [{ generation: 1, hypervolume: 0.2 }] },
+    },
+  ]), true);
+});
+
+test("BMOPSO internal analyses preserve multiple instances", () => {
+  const analyses = comparatorBmopsoInternalAnalyses([
+    {
+      proposalId: "binary-mopso-cd",
+      instanceId: "binary-a",
+      displayName: "Binary A",
+      internalBmopsoAnalysis: { available: true, metrics: { hypervolumeLabel: "0.310000" } },
+    },
+    {
+      proposalId: "evolmd-mo",
+      instanceId: "evolmd-mo",
+      displayName: "EVOLMD-MO",
+    },
+    {
+      proposalId: "binary-mopso-cd",
+      instanceId: "binary-b",
+      displayName: "Binary B",
+      internalBmopsoAnalysis: { available: true, metrics: { hypervolumeLabel: "0.470000" } },
+    },
+  ]);
+
+  assert.deepEqual(analyses.map((item) => item.instanceId), ["binary-a", "binary-b"]);
+  assert.deepEqual(analyses.map((item) => item.displayName), ["Binary A", "Binary B"]);
+  assert.deepEqual(analyses.map((item) => item.analysis.metrics.hypervolumeLabel), ["0.310000", "0.470000"]);
 });
 
 test("cost winners are disabled in exploratory mode", () => {

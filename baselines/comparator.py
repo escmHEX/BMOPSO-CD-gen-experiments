@@ -116,6 +116,7 @@ COMPARATOR_TIMEOUT_MINUTES_MIN = 2400
 COMPARATOR_TIMEOUT_MINUTES_MAX = 10800
 METRIC_SCHEMA_VERSION = 4
 METRIC_COORDINATE_SPACE = "comparable_normalized"
+BINARY_INTERNAL_COORDINATE_SPACE = "binary_native_normalized"
 POSTHOC_DIAGNOSTIC_KMEANS_CLUSTERS = 5
 POSTHOC_ENTITY_ENTROPY_POS = {"NOUN", "VERB", "ADJ"}
 PROXY_OBJECTIVE_NAMES = ["fidelity_sbert_proxy", "semantic_diversity_proxy"]
@@ -5489,9 +5490,251 @@ class ComparatorService:
         return self._with_metric_recompute_status(public)
 
     def _with_metric_recompute_status(self, run: dict[str, Any]) -> dict[str, Any]:
-        public = dict(run)
+        public = self._with_internal_bmopso_analysis(dict(run))
         public["metricRecomputeStatus"] = self._metric_recompute_status(public)
         return public
+
+    def _with_internal_bmopso_analysis(self, run: dict[str, Any]) -> dict[str, Any]:
+        proposals = run.get("proposals")
+        if not isinstance(proposals, list):
+            return run
+        enriched_proposals: list[Any] = []
+        for result in proposals:
+            if not isinstance(result, dict):
+                enriched_proposals.append(result)
+                continue
+            enriched = dict(result)
+            if enriched.get("proposalId") == BINARY_PROPOSAL_ID and enriched.get("status") == STATUS_COMPLETED:
+                analysis = self._build_internal_bmopso_analysis(enriched)
+                if analysis:
+                    enriched["internalBmopsoAnalysis"] = analysis
+                else:
+                    enriched.pop("internalBmopsoAnalysis", None)
+            else:
+                enriched.pop("internalBmopsoAnalysis", None)
+            enriched_proposals.append(enriched)
+        run["proposals"] = enriched_proposals
+        return run
+
+    def _build_internal_bmopso_analysis(self, result: dict[str, Any]) -> dict[str, Any] | None:
+        repetitions = result.get("repetitions") if isinstance(result.get("repetitions"), list) else []
+        repetition_analyses = [
+            analysis
+            for repetition in repetitions
+            if isinstance(repetition, dict) and repetition.get("status") == STATUS_COMPLETED
+            for analysis in [self._build_single_internal_bmopso_analysis(repetition, result)]
+            if analysis
+        ]
+        if repetition_analyses:
+            return self._aggregate_internal_bmopso_analyses(result, repetition_analyses)
+        return self._build_single_internal_bmopso_analysis(result, result)
+
+    def _build_single_internal_bmopso_analysis(
+        self,
+        result: dict[str, Any],
+        identity_source: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        output_dir = Path(str(result.get("outputDir") or ""))
+        if not output_dir.exists():
+            return None
+        series = self._read_binary_internal_metric_series(output_dir)
+        if not series:
+            return None
+        proposal = PROPOSAL_BY_ID.get(BINARY_PROPOSAL_ID)
+        if proposal is None:
+            return None
+        instance = self._internal_bmopso_instance(identity_source, proposal)
+        rows = self._read_binary_internal_front_rows(proposal, instance, output_dir)
+        if not rows:
+            return None
+        selected_rows = self._read_binary_internal_selected_rows(proposal, instance, output_dir, rows)
+        self._mark_selected_rows(rows, selected_rows)
+        charts = build_charts_from_rows(rows, selected_rows, series)
+        self._retag_internal_bmopso_charts(charts)
+        hypervolume = latest_finite_series_value(series, "hypervolume")
+        return {
+            "available": True,
+            "instanceId": instance.instance_id,
+            "proposalId": instance.proposal_id,
+            "displayName": instance.display_name,
+            "source": "evolucion_metricas.csv",
+            "coordinateSpace": BINARY_INTERNAL_COORDINATE_SPACE,
+            "metrics": {
+                "hypervolume": hypervolume,
+                "hypervolumeLabel": f"{hypervolume:.6f}" if hypervolume is not None else "No aplica",
+            },
+            "series": series,
+            "charts": charts,
+        }
+
+    def _internal_bmopso_instance(
+        self,
+        result: dict[str, Any],
+        proposal: ProposalDefinition,
+    ) -> ProposalRunInstance:
+        return ProposalRunInstance(
+            instance_id=str(result.get("instanceId") or result.get("proposalId") or proposal.proposal_id),
+            proposal_id=proposal.proposal_id,
+            display_name=str(result.get("displayName") or proposal.display_name),
+            base_display_name=str(result.get("baseDisplayName") or proposal.display_name),
+            proposal=proposal,
+            proposal_config=result.get("proposalConfig") if isinstance(result.get("proposalConfig"), dict) else {"extraArgs": "", "cliValues": {}},
+            order_index=int(finite_float(result.get("orderIndex"), 0)),
+        )
+
+    def _read_binary_internal_metric_series(self, output_dir: Path) -> list[dict[str, Any]]:
+        rows = self._read_csv_dicts(output_dir / "evolucion_metricas.csv")
+        series: list[dict[str, Any]] = []
+        for item in rows:
+            generation = finite_int_or_none(item.get("generation"))
+            hypervolume = finite_float(item.get("hypervolume"), None)
+            if generation is None or generation < 0 or hypervolume is None:
+                continue
+            archive_size = finite_int_or_none(item.get("archive_size"))
+            point = {
+                "generation": generation,
+                "hypervolume": hypervolume,
+                "source": "evolucion_metricas.csv",
+            }
+            if archive_size is not None:
+                point["archiveSize"] = archive_size
+                point["nonDominatedRows"] = archive_size
+            series.append(point)
+        return series
+
+    def _read_binary_internal_front_rows(
+        self,
+        proposal: ProposalDefinition,
+        instance: ProposalRunInstance,
+        output_dir: Path,
+    ) -> list[dict[str, Any]]:
+        payload = read_json_or_default(output_dir / proposal.result_file, None)
+        if not isinstance(payload, list):
+            return []
+        rows = [
+            self._normalize_binary_row(proposal, item, index)
+            for index, item in enumerate(payload, start=1)
+            if isinstance(item, dict)
+        ]
+        self._attach_instance_metadata(rows, instance)
+        mark_non_dominated(rows)
+        for row in rows:
+            row["postHocNonDominated"] = False
+        rows.sort(
+            key=lambda row: (
+                1 if row.get("nonDominated") else 0,
+                sum(row.get("objectiveVector") or []),
+            ),
+            reverse=True,
+        )
+        for rank, row in enumerate(rows, start=1):
+            row["rank"] = rank
+        return rows
+
+    def _read_binary_internal_selected_rows(
+        self,
+        proposal: ProposalDefinition,
+        instance: ProposalRunInstance,
+        output_dir: Path,
+        rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        selected_payload = read_json_or_default(output_dir / "final_selection_hybrid.json", None)
+        selected = [item for item in selected_payload if isinstance(item, dict)] if isinstance(selected_payload, list) else []
+        if not selected:
+            return []
+        selected_rows = self._normalize_selected_rows(proposal, selected, rows)
+        self._attach_instance_metadata(selected_rows, instance)
+        return selected_rows
+
+    def _retag_internal_bmopso_charts(self, charts: dict[str, Any]) -> None:
+        for key in ("pareto", "selected", "nonDominated"):
+            for point in charts.get(key) or []:
+                if isinstance(point, dict):
+                    point["coordinateSpace"] = BINARY_INTERNAL_COORDINATE_SPACE
+
+    def _aggregate_internal_bmopso_analyses(
+        self,
+        result: dict[str, Any],
+        analyses: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        if not analyses:
+            return None
+        series = self._aggregate_internal_bmopso_series(analyses)
+        charts = {
+            "pareto": [point for analysis in analyses for point in (analysis.get("charts") or {}).get("pareto", [])],
+            "selected": [point for analysis in analyses for point in (analysis.get("charts") or {}).get("selected", [])],
+            "nonDominated": self._internal_bmopso_non_dominated_points(
+                [point for analysis in analyses for point in (analysis.get("charts") or {}).get("pareto", [])]
+            ),
+            "series": series,
+        }
+        hypervolume = latest_finite_series_value(series, "hypervolume")
+        return {
+            "available": True,
+            "instanceId": str(result.get("instanceId") or result.get("proposalId") or BINARY_PROPOSAL_ID),
+            "proposalId": BINARY_PROPOSAL_ID,
+            "displayName": str(result.get("displayName") or "Binary MOPSO-CD"),
+            "source": "evolucion_metricas.csv",
+            "coordinateSpace": BINARY_INTERNAL_COORDINATE_SPACE,
+            "metrics": {
+                "hypervolume": hypervolume,
+                "hypervolumeLabel": f"{hypervolume:.6f}" if hypervolume is not None else "No aplica",
+            },
+            "series": series,
+            "charts": charts,
+        }
+
+    def _aggregate_internal_bmopso_series(self, analyses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        buckets: dict[int, dict[str, list[float]]] = {}
+        for analysis in analyses:
+            for point in analysis.get("series") or []:
+                generation = finite_int_or_none(point.get("generation"))
+                if generation is None or generation < 0:
+                    continue
+                bucket = buckets.setdefault(generation, {"hypervolume": [], "archiveSize": [], "nonDominatedRows": []})
+                for key in bucket:
+                    value = finite_float(point.get(key), None)
+                    if value is not None:
+                        bucket[key].append(value)
+        series: list[dict[str, Any]] = []
+        for generation in sorted(buckets):
+            bucket = buckets[generation]
+            item: dict[str, Any] = {
+                "generation": generation,
+                "hypervolume": sum(bucket["hypervolume"]) / len(bucket["hypervolume"]) if bucket["hypervolume"] else None,
+                "source": "evolucion_metricas.csv",
+            }
+            if bucket["archiveSize"]:
+                item["archiveSize"] = sum(bucket["archiveSize"]) / len(bucket["archiveSize"])
+            if bucket["nonDominatedRows"]:
+                item["nonDominatedRows"] = sum(bucket["nonDominatedRows"]) / len(bucket["nonDominatedRows"])
+            series.append(item)
+        return series
+
+    def _internal_bmopso_non_dominated_points(self, points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        valid_points = [
+            point
+            for point in points
+            if isinstance(point, dict)
+            and finite_float(point.get("x"), None) is not None
+            and finite_float(point.get("y"), None) is not None
+        ]
+        front = []
+        for point in valid_points:
+            x_value = finite_float(point.get("x"))
+            y_value = finite_float(point.get("y"))
+            dominated = any(
+                other is not point
+                and finite_float(other.get("x")) >= x_value
+                and finite_float(other.get("y")) >= y_value
+                and (finite_float(other.get("x")) > x_value or finite_float(other.get("y")) > y_value)
+                for other in valid_points
+            )
+            if not dominated:
+                copied = dict(point)
+                copied["coordinateSpace"] = BINARY_INTERNAL_COORDINATE_SPACE
+                front.append(copied)
+        return front
 
     def _metric_recompute_status(self, run: dict[str, Any]) -> dict[str, Any]:
         available = run.get("status") == STATUS_COMPLETED

@@ -2195,6 +2195,7 @@ Context:
           <nav class="tab-strip" aria-label="Vistas del comparador">
             <button class="secondary comparator-tab is-active" type="button" data-comparator-tab="charts" aria-selected="true">Gráficos principales</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="otherCharts" aria-selected="false">Otros gráficos</button>
+            <button id="comparatorInternalBmopsoTabButton" class="secondary comparator-tab" type="button" data-comparator-tab="internalBmopso" aria-selected="false" hidden>Análisis interno BMOPSO</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="table" aria-selected="false">Tabla</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="costs" aria-selected="false">Metricas</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="logs" aria-selected="false">Logs</button>
@@ -2277,6 +2278,10 @@ Context:
               <p id="comparatorProjectionStatus" class="chart-help">Proyecta embeddings SBERT del frente final de cada propuesta.</p>
             </article>
             <div id="comparatorEmbeddingProjectionCharts" class="chart-grid"></div>
+          </section>
+
+          <section id="comparatorInternalBmopsoTab" class="comparator-tab-panel">
+            <div id="comparatorInternalBmopsoCharts" class="bmopso-internal-analysis"></div>
           </section>
 
           <section id="comparatorTableTab" class="panel comparator-tab-panel">

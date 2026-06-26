@@ -170,6 +170,24 @@ export function comparatorBenchmarkProposals(proposals = []) {
   });
 }
 
+export function comparatorBmopsoInternalAnalyses(proposals = []) {
+  const list = Array.isArray(proposals) ? proposals : [];
+  return list.flatMap((proposal) => {
+    const analysis = proposal?.internalBmopsoAnalysis;
+    if (!analysis?.available) return [];
+    return [{
+      instanceId: comparatorProposalEntityId(proposal) || analysis.instanceId || "",
+      proposalId: proposal?.proposalId || analysis.proposalId || "",
+      displayName: proposal?.displayName || analysis.displayName || proposal?.proposalId || "",
+      analysis,
+    }];
+  });
+}
+
+export function comparatorHasBmopsoInternalAnalysis(proposals = []) {
+  return comparatorBmopsoInternalAnalyses(proposals).length > 0;
+}
+
 export function comparatorDominates(candidate, point) {
   const candidateCoordinates = comparatorPointCoordinates(candidate);
   const pointCoordinates = comparatorPointCoordinates(point);

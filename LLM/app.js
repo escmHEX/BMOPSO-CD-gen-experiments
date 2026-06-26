@@ -1,10 +1,12 @@
 import {
+  comparatorBmopsoInternalAnalyses,
   comparatorBenchmarkProposals,
   comparatorBestMetricProposalIds,
   comparatorChartAxisWindow,
   comparatorCountByProposal,
   comparatorExpandedAxisWindow,
   comparatorGlobalNonDominatedFront,
+  comparatorHasBmopsoInternalAnalysis,
   comparatorHypervolumeArea,
   comparatorIsBinaryProposal,
   comparatorIsGloballyNonDominated,
@@ -394,6 +396,8 @@ let comparatorChartSignature = "";
 let comparatorProjectionCharts = [];
 let comparatorProjectionSignature = "";
 let comparatorProjectionLoadToken = 0;
+let comparatorInternalBmopsoCharts = [];
+let comparatorInternalBmopsoSignature = "";
 let comparatorChoiceInstances = [];
 let comparatorChartFilterIds = new Set();
 let comparatorChartFilterSignature = "";
@@ -756,6 +760,9 @@ const dom = {
   comparatorProgressDetails: document.querySelector("#comparatorProgressDetails"),
   comparatorProposalCards: document.querySelector("#comparatorProposalCards"),
   comparatorResultsBody: document.querySelector("#comparatorResultsBody"),
+  comparatorChartsTab: document.querySelector("#comparatorChartsTab"),
+  comparatorOtherChartsTab: document.querySelector("#comparatorOtherChartsTab"),
+  comparatorInternalBmopsoTab: document.querySelector("#comparatorInternalBmopsoTab"),
   comparatorChartProposalFilters: document.querySelector("#comparatorChartProposalFilters"),
   comparatorParetoCharts: document.querySelector("#comparatorParetoCharts"),
   comparatorCombinedParetoChart: document.querySelector("#comparatorCombinedParetoChart"),
@@ -769,6 +776,8 @@ const dom = {
   comparatorProjectionMethod: document.querySelector("#comparatorProjectionMethod"),
   comparatorProjectionStatus: document.querySelector("#comparatorProjectionStatus"),
   comparatorEmbeddingProjectionCharts: document.querySelector("#comparatorEmbeddingProjectionCharts"),
+  comparatorInternalBmopsoTabButton: document.querySelector("#comparatorInternalBmopsoTabButton"),
+  comparatorInternalBmopsoCharts: document.querySelector("#comparatorInternalBmopsoCharts"),
   comparatorCostExplanation: document.querySelector("#comparatorCostExplanation"),
   comparatorCostTableHead: document.querySelector("#comparatorCostTableHead"),
   comparatorCostTableBody: document.querySelector("#comparatorCostTableBody"),
@@ -4864,14 +4873,22 @@ function resetComparatorUi(options = {}) {
   if (dom.comparatorProjectionStatus) {
     dom.comparatorProjectionStatus.textContent = "Proyecta embeddings SBERT del frente final de cada propuesta.";
   }
+  if (dom.comparatorInternalBmopsoTabButton) {
+    dom.comparatorInternalBmopsoTabButton.hidden = true;
+  }
+  if (dom.comparatorInternalBmopsoCharts) {
+    dom.comparatorInternalBmopsoCharts.innerHTML = "";
+  }
   renderComparatorCostDetails(null);
   comparatorChartSignature = "";
   comparatorProjectionSignature = "";
+  comparatorInternalBmopsoSignature = "";
   comparatorProjectionLoadToken += 1;
   comparatorChartFilterIds = new Set();
   comparatorChartFilterSignature = "";
   disposeComparatorCharts();
   disposeComparatorProjectionCharts();
+  disposeComparatorInternalBmopsoCharts();
   dom.comparatorProposalCards.innerHTML = `
     <article class="proposal-card">
       <strong>Sin corrida</strong>
@@ -4905,6 +4922,12 @@ function disposeComparatorProjectionCharts() {
   removeComparatorLocalLegends(dom.comparatorOtherChartsTab || document);
 }
 
+function disposeComparatorInternalBmopsoCharts() {
+  comparatorInternalBmopsoCharts.forEach((chart) => chart.dispose());
+  comparatorInternalBmopsoCharts = [];
+  removeComparatorLocalLegends(dom.comparatorInternalBmopsoTab || document);
+}
+
 function installChartPanelMinimizers(container) {
   container?.querySelectorAll?.(".panel").forEach((panel) => {
     if (!panel.querySelector(".chart-surface") || panel.querySelector("[data-chart-minimize]")) return;
@@ -4923,6 +4946,7 @@ function installChartPanelMinimizers(container) {
       window.setTimeout(() => {
         comparatorCharts.forEach((chart) => chart.resize());
         comparatorProjectionCharts.forEach((chart) => chart.resize());
+        comparatorInternalBmopsoCharts.forEach((chart) => chart.resize());
       }, 0);
     });
     panel.prepend(button);
@@ -6547,6 +6571,7 @@ async function runComparator() {
   stopComparatorPolling();
   comparatorPollFailureCount = 0;
   comparatorChartSignature = "";
+  comparatorInternalBmopsoSignature = "";
   comparatorChartFilterIds = new Set();
   comparatorChartFilterSignature = "";
   resetComparatorLogLoader(null);
@@ -6846,6 +6871,8 @@ function renderComparatorRun(run) {
   renderComparatorCostDetails(run);
   renderComparatorCharts(run);
   renderComparatorEmbeddingProjection(run);
+  syncComparatorInternalBmopsoTab(run);
+  renderComparatorInternalBmopsoAnalysis(run);
   renderComparatorLogs(run);
 
   const detail = run.error
@@ -7443,6 +7470,124 @@ function renderComparatorEmbeddingProjectionPayload(payload) {
   );
   installChartPanelMinimizers(dom.comparatorOtherChartsTab || document.querySelector("#comparatorOtherChartsTab"));
   window.queueMicrotask(() => syncComparatorChartLocalLegends(dom.comparatorOtherChartsTab || document));
+}
+
+function syncComparatorInternalBmopsoTab(run) {
+  const available = comparatorHasBmopsoInternalAnalysis(run?.proposals || []);
+  if (dom.comparatorInternalBmopsoTabButton) {
+    dom.comparatorInternalBmopsoTabButton.hidden = !available;
+  }
+  if (!available) {
+    comparatorInternalBmopsoSignature = "";
+    disposeComparatorInternalBmopsoCharts();
+    if (dom.comparatorInternalBmopsoCharts) {
+      dom.comparatorInternalBmopsoCharts.innerHTML = "";
+    }
+    if (activeComparatorTabName() === "internalBmopso") {
+      activateComparatorTab("charts");
+    }
+  }
+}
+
+function renderComparatorInternalBmopsoAnalysis(run) {
+  if (!dom.comparatorInternalBmopsoCharts) return;
+  const analyses = comparatorBmopsoInternalAnalyses(run?.proposals || []);
+  if (!analyses.length) {
+    comparatorInternalBmopsoSignature = "";
+    disposeComparatorInternalBmopsoCharts();
+    dom.comparatorInternalBmopsoCharts.innerHTML = "";
+    return;
+  }
+  if (!window.echarts) {
+    dom.comparatorInternalBmopsoCharts.innerHTML = '<article class="panel"><p>ECharts no esta disponible.</p></article>';
+    return;
+  }
+  const signature = comparatorInternalBmopsoSignatureForRun(run, analyses);
+  if (signature === comparatorInternalBmopsoSignature) return;
+  comparatorInternalBmopsoSignature = signature;
+  disposeComparatorInternalBmopsoCharts();
+  dom.comparatorInternalBmopsoCharts.replaceChildren(
+    ...analyses.map((item, index) => comparatorInternalBmopsoSection(item, index)),
+  );
+  installChartPanelMinimizers(dom.comparatorInternalBmopsoTab || document.querySelector("#comparatorInternalBmopsoTab"));
+  window.queueMicrotask(() => syncComparatorChartLocalLegends(dom.comparatorInternalBmopsoTab || document));
+}
+
+function comparatorInternalBmopsoSignatureForRun(run, analyses) {
+  return JSON.stringify({
+    runId: run?.runId || "",
+    analyses: analyses.map((item) => ({
+      instanceId: item.instanceId,
+      displayName: item.displayName,
+      series: (item.analysis.series || []).map((point) => [
+        point.generation,
+        point.hypervolume,
+        point.archiveSize,
+      ]),
+      pareto: (((item.analysis.charts || {}).pareto) || []).map((point) => [point.x, point.y, point.rank]),
+      selected: (((item.analysis.charts || {}).selected) || []).map((point) => [point.x, point.y, point.rank]),
+      nonDominated: (((item.analysis.charts || {}).nonDominated) || []).map((point) => [point.x, point.y, point.rank]),
+      hv: item.analysis.metrics?.hypervolume,
+    })),
+  });
+}
+
+function comparatorInternalBmopsoSection(item, index) {
+  const style = comparatorChartStyleForProposal({
+    instanceId: item.instanceId,
+    proposalId: item.proposalId,
+    displayName: item.displayName,
+  }, index, comparatorChartStyles);
+  const section = document.createElement("section");
+  section.className = "bmopso-internal-section";
+  section.innerHTML = `
+    <div class="panel-title">
+      <h2>${escapeHtml(item.displayName || item.instanceId || "Binary MOPSO-CD")}</h2>
+      <span>HV interno desde ${escapeHtml(item.analysis.source || "evolucion_metricas.csv")}; ejes nativos normalizados BMOPSO.</span>
+    </div>
+    <div class="grid two-columns">
+      <article class="panel">
+        <div class="panel-title">
+          <h2>Frente final con HV interno</h2>
+          <span>${escapeHtml(item.analysis.metrics?.hypervolumeLabel || "No aplica")}</span>
+        </div>
+        <div class="chart-surface" data-bmopso-internal-front></div>
+      </article>
+      <article class="panel">
+        <div class="panel-title">
+          <h2>HV(t) interno</h2>
+          <span>${escapeHtml(String((item.analysis.series || []).length))} punto(s)</span>
+        </div>
+        <div class="chart-surface" data-bmopso-internal-hv></div>
+      </article>
+    </div>
+  `;
+  const frontNode = section.querySelector("[data-bmopso-internal-front]");
+  const hvNode = section.querySelector("[data-bmopso-internal-hv]");
+  window.queueMicrotask(() => {
+    const frontChart = window.echarts.init(frontNode);
+    comparatorInternalBmopsoCharts.push(frontChart);
+    const frontOption = internalBmopsoParetoChartOption(
+      "Frente final BMOPSO",
+      item.analysis,
+      style.color,
+    );
+    frontChart.setOption(frontOption);
+    installComparatorLocalLegend(frontChart, frontNode, frontOption.series || []);
+
+    const hvChart = window.echarts.init(hvNode);
+    comparatorInternalBmopsoCharts.push(hvChart);
+    const hvOption = internalBmopsoHvLineOption(
+      item.displayName || item.instanceId || "Binary MOPSO-CD",
+      item.analysis,
+      style.color,
+      style.lineWidth,
+    );
+    hvChart.setOption(hvOption);
+    installComparatorHideSeriesToolbox(hvChart);
+    installComparatorLocalLegend(hvChart, hvNode, hvOption.series || []);
+  });
+  return section;
 }
 
 function embeddingProjectionOverlayPanel(proposals, reference, method, bounds = {}, styleMap = comparatorChartStyles) {
@@ -8052,6 +8197,144 @@ function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa
   });
 }
 
+function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C00") {
+  const charts = analysis.charts || {};
+  const allPoints = (charts.pareto || []).map((point) => ({
+    value: [point.x, point.y],
+    labelText: point.label,
+    prompt: point.prompt,
+    rank: point.rank,
+    nativeObjectiveVector: point.nativeObjectiveVector,
+    comparableObjectiveVector: point.comparableObjectiveVector,
+    coordinateSpace: point.coordinateSpace,
+  }));
+  const selectedPoints = (charts.selected || []).map((point) => ({
+    value: [point.x, point.y],
+    labelText: point.label,
+    prompt: point.prompt,
+    rank: point.rank,
+    nativeObjectiveVector: point.nativeObjectiveVector,
+    comparableObjectiveVector: point.comparableObjectiveVector,
+    coordinateSpace: point.coordinateSpace,
+  }));
+  const hvAreaSeries = comparatorHypervolumeAreaSeries(
+    charts.nonDominated || [],
+    analysis.metrics?.hypervolumeLabel || "",
+    proposalColor,
+  );
+  return baseScatterOption(title, [
+    ...hvAreaSeries,
+    { name: "Individuos", type: "scatter", symbolSize: 8, data: allPoints, label: { show: false }, itemStyle: { color: proposalColor, opacity: 0.72 } },
+    {
+      name: "Seleccionadas",
+      type: "scatter",
+      symbol: "circle",
+      symbolSize: 15,
+      data: selectedPoints,
+      label: { show: false },
+      itemStyle: { color: "#ffffff", borderColor: proposalColor, borderWidth: 2.5 },
+    },
+  ], {
+    description: "Ejes nativos normalizados de Binary MOPSO-CD. Area sombreada: HV interno reportado por BMOPSO.",
+  });
+}
+
+function internalBmopsoHvLineOption(seriesName, analysis, color = "#2A8C00", lineWidth = 3) {
+  const series = [{
+    id: `bmopso-internal-hv-${seriesName}`,
+    name: seriesName,
+    type: "line",
+    connectNulls: false,
+    showSymbol: false,
+    data: (analysis.series || [])
+      .filter((point) => point.hypervolume !== null && point.hypervolume !== undefined)
+      .map((point) => [point.generation, point.hypervolume]),
+    itemStyle: { color },
+    lineStyle: { color, width: lineWidth },
+  }];
+  const metricValues = series.flatMap((item) => item.data.map((point) => point[1])).filter(Number.isFinite);
+  const referenceTarget = series.find((item) => item.data.length > 0);
+  const referenceLines = referenceTarget && metricValues.length > 0
+    ? comparatorMetricReferenceLines(metricValues, true)
+    : null;
+  if (referenceTarget && referenceLines) {
+    referenceTarget.markLine = referenceLines;
+  }
+  const chartPoints = series.flatMap((item) => (item.data || []).map((point) => ({ value: point })));
+  const xAxisWindow = comparatorChartAxisWindow(chartPoints, "x", {
+    paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
+    zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
+    minSpan: 1,
+  });
+  const yAxisWindow = comparatorChartAxisWindow(chartPoints, "y", {
+    paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
+    zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
+  });
+  const dataZoom = [
+    xAxisWindow ? {
+      type: "inside",
+      xAxisIndex: 0,
+      filterMode: "none",
+      startValue: xAxisWindow.defaultMin,
+      endValue: xAxisWindow.defaultMax,
+    } : null,
+    yAxisWindow ? {
+      type: "inside",
+      yAxisIndex: 0,
+      filterMode: "none",
+      startValue: yAxisWindow.defaultMin,
+      endValue: yAxisWindow.defaultMax,
+    } : null,
+    xAxisWindow ? {
+      type: "slider",
+      xAxisIndex: 0,
+      filterMode: "none",
+      height: 18,
+      bottom: 10,
+      startValue: xAxisWindow.defaultMin,
+      endValue: xAxisWindow.defaultMax,
+    } : null,
+  ].filter(Boolean);
+  const toolboxFeature = {
+    saveAsImage: {},
+    dataZoom: {},
+    restore: { title: "Reset" },
+  };
+  const option = {
+    title: {
+      text: "HV(t) interno BMOPSO",
+      subtext: "Serie nativa reportada por evolucion_metricas.csv; no usa recomputo post-hoc.",
+      left: 8,
+      top: 6,
+      textStyle: { fontSize: 13 },
+      subtextStyle: { fontSize: 11, color: "#64748b" },
+    },
+    tooltip: safeChartTooltip("axis", comparatorLineTooltipFormatter),
+    legend: { show: false },
+    grid: { left: 52, right: 22, top: 78, bottom: 70, containLabel: true },
+    toolbox: { feature: toolboxFeature, right: 8, top: 38 },
+    dataZoom,
+    xAxis: {
+      type: "value",
+      name: "Iteracion",
+      nameLocation: "middle",
+      nameGap: 34,
+      minInterval: 1,
+      min: xAxisWindow?.zoomMin,
+      max: xAxisWindow?.zoomMax,
+    },
+    yAxis: {
+      type: "value",
+      scale: true,
+      min: yAxisWindow?.zoomMin,
+      max: yAxisWindow?.zoomMax,
+    },
+    graphic: comparatorEmptyChartGraphic(series, "Sin serie HV interna disponible."),
+    series,
+  };
+  return option;
+}
+
 function comparatorHypervolumeAreaSeries(points, hypervolumeLabel, color = "#2563eb") {
   if (!hypervolumeLabel || hypervolumeLabel === "No aplica") return [];
   const area = comparatorHypervolumeArea(points);
@@ -8357,7 +8640,14 @@ function hexToRgba(hex, alpha) {
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
+function activeComparatorTabName() {
+  return document.querySelector(".comparator-tab.is-active")?.dataset.comparatorTab || "charts";
+}
+
 function activateComparatorTab(tabName) {
+  if (tabName === "internalBmopso" && dom.comparatorInternalBmopsoTabButton?.hidden) {
+    tabName = "charts";
+  }
   document.querySelectorAll(".comparator-tab").forEach((button) => {
     const isActive = button.dataset.comparatorTab === tabName;
     button.classList.toggle("is-active", isActive);
@@ -8370,6 +8660,7 @@ function activateComparatorTab(tabName) {
   window.setTimeout(() => {
     comparatorCharts.forEach((chart) => chart.resize());
     comparatorProjectionCharts.forEach((chart) => chart.resize());
+    comparatorInternalBmopsoCharts.forEach((chart) => chart.resize());
   }, 0);
 }
 
@@ -9147,6 +9438,7 @@ document.querySelectorAll(".comparator-tab").forEach((button) => {
 window.addEventListener("resize", () => {
   comparatorCharts.forEach((chart) => chart.resize());
   comparatorProjectionCharts.forEach((chart) => chart.resize());
+  comparatorInternalBmopsoCharts.forEach((chart) => chart.resize());
   syncComparatorConfigGroupLayouts();
 });
 dom.solutionLlmModelSelect.addEventListener("change", () => {

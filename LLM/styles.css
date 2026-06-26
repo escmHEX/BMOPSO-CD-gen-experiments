@@ -1309,6 +1309,13 @@ input[type="checkbox"]:disabled {
   gap: 18px;
 }
 
+.bmopso-internal-analysis,
+.bmopso-internal-section {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
 .chart-surface {
   width: 100%;
   min-height: 400px;

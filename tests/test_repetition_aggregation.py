@@ -1946,6 +1946,270 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(metrics["externalArchiveUpdateCount"], 4)
         self.assertEqual(metrics["externalArchivePruneCount"], 2)
 
+    def test_get_run_enriches_binary_internal_analysis_from_native_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_id = "native-bmopso"
+            run_dir = root / "runs" / "comparator" / run_id
+            output_dir = run_dir / "binary-mopso-cd" / "exec" / "2026-06-26_03-19-22"
+            output_dir.mkdir(parents=True)
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "\n".join(
+                    [
+                        "generation,hypervolume,archive_size",
+                        "0,0.05,1",
+                        "1,0.11,2",
+                        "2,0.22,3",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (output_dir / "archive_history.jsonl").write_text(
+                json.dumps({"generation": 2, "hypervolume": 0.99}) + "\n",
+                encoding="utf-8",
+            )
+            (output_dir / "pareto_front.json").write_text(
+                json.dumps(
+                    [
+                        {"generated_text": "Generated A", "prompt": "Prompt A", "objectives": {"f1": 0.0, "f2": 1.0}},
+                        {"generated_text": "Generated B", "prompt": "Prompt B", "objectives": {"f1": 0.4, "f2": 0.6}},
+                        {"generated_text": "Generated C", "prompt": "Prompt C", "objectives": {"f1": -0.2, "f2": 0.2}},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (output_dir / "final_selection_hybrid.json").write_text(
+                json.dumps(
+                    [
+                        {"generated_text": "Generated B", "prompt": "Prompt B", "objectives": {"f1": 0.4, "f2": 0.6}},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "summary.json").write_text(
+                json.dumps(
+                    {
+                        "runId": run_id,
+                        "status": "completed",
+                        "runDir": str(run_dir),
+                        "metricSchemaVersion": 4,
+                        "metricCoordinateSpace": "comparable_normalized",
+                        "proposals": [
+                            {
+                                "instanceId": "binary-a",
+                                "proposalId": "binary-mopso-cd",
+                                "displayName": "Binary A",
+                                "baseDisplayName": "Binary MOPSO-CD",
+                                "status": "completed",
+                                "outputDir": str(output_dir),
+                                "rows": [{"generatedText": "Generated A"}],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(root)
+
+            proposal = service.get_run(run_id)["proposals"][0]
+            analysis = proposal["internalBmopsoAnalysis"]
+
+        self.assertTrue(analysis["available"])
+        self.assertEqual(analysis["instanceId"], "binary-a")
+        self.assertEqual(analysis["coordinateSpace"], "binary_native_normalized")
+        self.assertEqual(analysis["source"], "evolucion_metricas.csv")
+        self.assertAlmostEqual(analysis["metrics"]["hypervolume"], 0.22)
+        self.assertEqual([point["generation"] for point in analysis["series"]], [0, 1, 2])
+        self.assertEqual([point["hypervolume"] for point in analysis["series"]], [0.05, 0.11, 0.22])
+        self.assertEqual([point["archiveSize"] for point in analysis["series"]], [1, 2, 3])
+        self.assertEqual(len(analysis["charts"]["pareto"]), 3)
+        self.assertEqual(len(analysis["charts"]["nonDominated"]), 2)
+        self.assertEqual(len(analysis["charts"]["selected"]), 1)
+        self.assertEqual(analysis["charts"]["pareto"][0]["coordinateSpace"], "binary_native_normalized")
+
+    def test_get_run_enriches_each_binary_instance_with_internal_analysis(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_id = "multiple-binary"
+            run_dir = root / "runs" / "comparator" / run_id
+            proposals = []
+            for suffix, hv in (("a", "0.31"), ("b", "0.47")):
+                output_dir = run_dir / f"binary-{suffix}" / "exec"
+                output_dir.mkdir(parents=True)
+                (output_dir / "evolucion_metricas.csv").write_text(
+                    f"generation,hypervolume,archive_size\n1,{hv},4\n",
+                    encoding="utf-8",
+                )
+                (output_dir / "pareto_front.json").write_text(
+                    json.dumps(
+                        [
+                            {
+                                "generated_text": f"Generated {suffix}",
+                                "prompt": f"Prompt {suffix}",
+                                "objectives": {"f1": 0.0, "f2": 1.0},
+                            }
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+                proposals.append(
+                    {
+                        "instanceId": f"binary-{suffix}",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": f"Binary {suffix.upper()}",
+                        "status": "completed",
+                        "outputDir": str(output_dir),
+                    }
+                )
+            (run_dir / "summary.json").write_text(
+                json.dumps(
+                    {
+                        "runId": run_id,
+                        "status": "completed",
+                        "runDir": str(run_dir),
+                        "metricSchemaVersion": 4,
+                        "metricCoordinateSpace": "comparable_normalized",
+                        "proposals": proposals,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(root)
+
+            enriched = service.get_run(run_id)["proposals"]
+
+        self.assertEqual(
+            [proposal["internalBmopsoAnalysis"]["instanceId"] for proposal in enriched],
+            ["binary-a", "binary-b"],
+        )
+        self.assertEqual(
+            [proposal["internalBmopsoAnalysis"]["metrics"]["hypervolumeLabel"] for proposal in enriched],
+            ["0.310000", "0.470000"],
+        )
+
+    def test_get_run_internal_analysis_uses_only_hybrid_selection_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_id = "binary-no-hybrid-selection"
+            run_dir = root / "runs" / "comparator" / run_id
+            output_dir = run_dir / "binary" / "exec"
+            output_dir.mkdir(parents=True)
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "generation,hypervolume,archive_size\n1,0.33,2\n",
+                encoding="utf-8",
+            )
+            front = [
+                {"generated_text": "Generated A", "prompt": "Prompt A", "objectives": {"f1": 0.0, "f2": 1.0}},
+                {"generated_text": "Generated B", "prompt": "Prompt B", "objectives": {"f1": 0.2, "f2": 0.8}},
+            ]
+            (output_dir / "pareto_front.json").write_text(json.dumps(front), encoding="utf-8")
+            (output_dir / "pareto_ranked.json").write_text(json.dumps([front[0]]), encoding="utf-8")
+            (run_dir / "summary.json").write_text(
+                json.dumps(
+                    {
+                        "runId": run_id,
+                        "status": "completed",
+                        "runDir": str(run_dir),
+                        "metricSchemaVersion": 4,
+                        "metricCoordinateSpace": "comparable_normalized",
+                        "proposals": [
+                            {
+                                "instanceId": "binary-a",
+                                "proposalId": "binary-mopso-cd",
+                                "displayName": "Binary A",
+                                "status": "completed",
+                                "outputDir": str(output_dir),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(root)
+
+            analysis = service.get_run(run_id)["proposals"][0]["internalBmopsoAnalysis"]
+
+        self.assertEqual(len(analysis["charts"]["pareto"]), 2)
+        self.assertEqual(analysis["charts"]["selected"], [])
+
+    def test_get_run_skips_binary_internal_analysis_without_required_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_id = "missing-native-artifacts"
+            run_dir = root / "runs" / "comparator" / run_id
+            output_dir = run_dir / "binary" / "exec"
+            output_dir.mkdir(parents=True)
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "generation,hypervolume\n1,0.25\n",
+                encoding="utf-8",
+            )
+            (run_dir / "summary.json").write_text(
+                json.dumps(
+                    {
+                        "runId": run_id,
+                        "status": "completed",
+                        "runDir": str(run_dir),
+                        "metricSchemaVersion": 4,
+                        "metricCoordinateSpace": "comparable_normalized",
+                        "proposals": [
+                            {
+                                "instanceId": "binary-a",
+                                "proposalId": "binary-mopso-cd",
+                                "displayName": "Binary A",
+                                "status": "completed",
+                                "outputDir": str(output_dir),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(root)
+
+            proposal = service.get_run(run_id)["proposals"][0]
+
+        self.assertNotIn("internalBmopsoAnalysis", proposal)
+
+    def test_get_run_does_not_add_internal_analysis_to_non_binary_proposals(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_id = "no-binary"
+            run_dir = root / "runs" / "comparator" / run_id
+            output_dir = run_dir / "evolmd-mo" / "exec"
+            output_dir.mkdir(parents=True)
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "generation,hypervolume\n1,0.25\n",
+                encoding="utf-8",
+            )
+            (output_dir / "pareto_front.json").write_text("[]", encoding="utf-8")
+            (run_dir / "summary.json").write_text(
+                json.dumps(
+                    {
+                        "runId": run_id,
+                        "status": "completed",
+                        "runDir": str(run_dir),
+                        "metricSchemaVersion": 4,
+                        "metricCoordinateSpace": "comparable_normalized",
+                        "proposals": [
+                            {
+                                "instanceId": "evolmd-mo",
+                                "proposalId": "evolmd-mo",
+                                "displayName": "EVOLMD-MO",
+                                "status": "completed",
+                                "outputDir": str(output_dir),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(root)
+
+            proposal = service.get_run(run_id)["proposals"][0]
+
+        self.assertNotIn("internalBmopsoAnalysis", proposal)
+
     def test_mesap_rows_normalize_from_population_final_with_posthoc_metrics(self):
         service = ComparatorService(Path("."))
         proposal = next(item for item in PROPOSALS if item.proposal_id == "mesap")
