@@ -225,6 +225,8 @@ BINARY_VALUE_HELP = {
     "mopso.p_tur_max": "Probabilidad maxima de turbulencia. Binary valida p_tur_min <= p_tur_max.",
     "mopso.tau_tur_min": "Umbral minimo para turbulencia. Binary valida tau_tur_min <= tau_tur_max.",
     "mopso.tau_tur_max": "Umbral maximo para turbulencia. Binary valida tau_tur_min <= tau_tur_max.",
+    "mopso.guided_trajectory_validation_enabled": "Activa o desactiva la validacion angular de candidatos guiados.",
+    "mopso.guided_trajectory_relative_margin": "Margen relativo no negativo usado por la validacion angular cuando esta activa.",
     "generated_text_validation.tau_gen_min": "Fidelidad minima aceptada para texto generado; Binary valida que este entre -1 y 1.",
     "checkpoint.enabled": "Activa escritura de checkpoints.",
     "checkpoint.interval": "Frecuencia de checkpoints cuando estan activos. Binary exige entero positivo.",
@@ -282,6 +284,8 @@ BINARY_PATH_LABELS = {
     "mopso.omega_min": "Omega minimo",
     "mopso.p_anchor_enabled": "Anclaje activo",
     "mopso.k_retry": "Reintentos",
+    "mopso.guided_trajectory_validation_enabled": "Validacion trayectoria guiada",
+    "mopso.guided_trajectory_relative_margin": "Margen relativo trayectoria guiada",
     "selection.enabled": "Seleccion final activa",
     "selection.k": "Cantidad seleccionada",
     "selection.lambda_mmr": "Lambda MMR",
@@ -298,6 +302,8 @@ BINARY_PATH_HELP = {
     "runtime.outdir_base": "Gestionado por el comparador para aislar artefactos por corrida.",
     "ollama.default_model": "Gestionado por el campo comun Modelo del comparador; no pisa los modelos por tarea.",
     "mopso.k_retry": "Debe permanecer en 0 segun la validacion actual de Binary.",
+    "mopso.guided_trajectory_validation_enabled": "Override booleano para activar o desactivar la validacion de trayectoria guiada.",
+    "mopso.guided_trajectory_relative_margin": "Override numerico no negativo para el margen relativo de trayectoria guiada.",
     "ollama.speculative_decoding_enabled": "Binary bloquea esta opcion durante validacion.",
 }
 

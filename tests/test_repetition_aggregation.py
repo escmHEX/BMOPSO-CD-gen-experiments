@@ -735,11 +735,24 @@ class RepetitionAggregationTests(unittest.TestCase):
 
         self.assertIn("--config", options_by_key)
         self.assertIn("mopso.archive_multiplier", options_by_key)
+        self.assertIn("mopso.guided_trajectory_validation_enabled", options_by_key)
+        self.assertIn("mopso.guided_trajectory_relative_margin", options_by_key)
         self.assertIn("router.task_models.synthetic_text_generation", options_by_key)
         self.assertIn("selection.lambda_mmr", options_by_key)
         self.assertEqual(options_by_key["mopso.archive_multiplier"]["flag"], "--set")
         self.assertEqual(options_by_key["mopso.archive_multiplier"]["type"], "float")
         self.assertEqual(options_by_key["mopso.alpha"]["type"], "float")
+        guided_validation = options_by_key["mopso.guided_trajectory_validation_enabled"]
+        guided_margin = options_by_key["mopso.guided_trajectory_relative_margin"]
+        self.assertEqual(guided_validation["group"], "mopso")
+        self.assertEqual(guided_validation["type"], "bool")
+        self.assertTrue(guided_validation["allowFalse"])
+        self.assertEqual(guided_validation["label"], "Validacion trayectoria guiada")
+        self.assertIn("validacion angular", guided_validation["valueHelp"])
+        self.assertEqual(guided_margin["group"], "mopso")
+        self.assertEqual(guided_margin["type"], "float")
+        self.assertEqual(guided_margin["label"], "Margen relativo trayectoria guiada")
+        self.assertIn("no negativo", guided_margin["valueHelp"])
         self.assertEqual(options_by_key["router.heuristics.word_replacement_candidates"]["type"], "bool")
         self.assertTrue(options_by_key["router.heuristics.word_replacement_candidates"]["allowFalse"])
         self.assertEqual(options_by_key["experiment.n"]["source"], "managed")
@@ -875,6 +888,7 @@ class RepetitionAggregationTests(unittest.TestCase):
                         "cliValues": {
                             "mopso.alpha": "1.25",
                             "mopso.archive_multiplier": "0.5",
+                            "mopso.guided_trajectory_relative_margin": "0.40",
                         }
                     }
                 },
@@ -883,6 +897,25 @@ class RepetitionAggregationTests(unittest.TestCase):
         values = parsed["proposalConfigs"]["binary-mopso-cd"]["cliValues"]
         self.assertEqual(values["mopso.alpha"], "1.25")
         self.assertEqual(values["mopso.archive_multiplier"], "0.5")
+        self.assertEqual(values["mopso.guided_trajectory_relative_margin"], "0.40")
+
+    def test_binary_mopso_guided_trajectory_bool_override_accepts_false(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {
+                    "binary-mopso-cd": {
+                        "cliValues": {
+                            "mopso.guided_trajectory_validation_enabled": False,
+                        }
+                    }
+                },
+            }
+        )
+        values = parsed["proposalConfigs"]["binary-mopso-cd"]["cliValues"]
+        self.assertIs(values["mopso.guided_trajectory_validation_enabled"], False)
 
     def test_binary_task_thinking_allows_supported_model_even_without_task_validation(self):
         service = ComparatorService(Path("."))
@@ -987,6 +1020,8 @@ class RepetitionAggregationTests(unittest.TestCase):
             "mopso.k_retry": "int",
             "mopso.kcand": "int",
             "mopso.leader_tournament_size": "int",
+            "mopso.guided_trajectory_validation_enabled": "bool",
+            "mopso.guided_trajectory_relative_margin": "float",
             "mopso.omega_max": "float",
             "mopso.omega_min": "float",
             "mopso.p_anchor_enabled": "bool",
@@ -1497,7 +1532,13 @@ class RepetitionAggregationTests(unittest.TestCase):
                         "instanceId": "binary-a",
                         "proposalId": "binary-mopso-cd",
                         "displayName": "Binary A",
-                        "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        "proposalConfig": {
+                            "cliValues": {
+                                "selection.k": "4",
+                                "mopso.guided_trajectory_validation_enabled": False,
+                                "mopso.guided_trajectory_relative_margin": "0.40",
+                            }
+                        },
                     },
                     {
                         "instanceId": "binary-b",
@@ -1515,6 +1556,10 @@ class RepetitionAggregationTests(unittest.TestCase):
 
         self.assertEqual(command_set_values(first_command)["selection.k"], "4")
         self.assertEqual(command_set_values(second_command)["selection.k"], "5")
+        self.assertEqual(command_set_values(first_command)["mopso.guided_trajectory_validation_enabled"], "false")
+        self.assertEqual(command_set_values(first_command)["mopso.guided_trajectory_relative_margin"], "0.40")
+        self.assertNotIn("mopso.guided_trajectory_validation_enabled", command_set_values(second_command))
+        self.assertNotIn("mopso.guided_trajectory_relative_margin", command_set_values(second_command))
         self.assertEqual(command_set_values(first_command)["experiment.seed"], "777")
         self.assertEqual(command_set_values(second_command)["experiment.seed"], "778")
 
