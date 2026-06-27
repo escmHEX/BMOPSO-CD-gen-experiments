@@ -85,7 +85,7 @@ function Python-InVenv([string]$VenvPath) {
 function Ensure-Venv([string]$VenvPath) {
   Invoke-Checked "uv" @("venv", "--python", "3.13", $VenvPath)
   $python = Python-InVenv $VenvPath
-  Invoke-Checked $python @("-m", "pip", "install", "--upgrade", "pip")
+  Invoke-Checked "uv" @("pip", "install", "--python", $python, "--upgrade", "pip")
 }
 
 function Install-Requirements([string]$Python, [string]$Requirements) {

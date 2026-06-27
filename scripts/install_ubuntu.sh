@@ -209,7 +209,7 @@ ensure_venv() {
   uv venv --python 3.13 "$venv_path"
   local python_bin
   python_bin="$(python_in_venv "$venv_path")"
-  "$python_bin" -m pip install --upgrade pip
+  uv pip install --python "$python_bin" --upgrade pip
 }
 
 install_requirements() {
