@@ -139,6 +139,7 @@ BINARY_LOCAL_REPOSITORY = "baselines/external/binary-mopso-cd"
 BINARY_DEVELOPMENT_REPOSITORY = "../Binary MOPSO-CD"
 BINARY_PORTAL_PPDB_SOURCE = Path("data/external/ppdb/ppdb-2.0-s-all")
 BINARY_PORTAL_PPDB_SQLITE_INDEX = Path("data/turbulence/ppdb_index.sqlite")
+BINARY_DEFAULT_OLLAMA_TIMEOUT_SECONDS = 600
 BINARY_TASK_MODEL_PREFIX = "router.task_models."
 BINARY_TASK_THINKING_PREFIX = "router.task_thinking."
 BINARY_THINKING_MODE_CHOICES = ("false", "low", "medium", "high")
@@ -223,6 +224,7 @@ BINARY_SELECT_OPTION_PATHS = {
 BINARY_VALUE_HELP = {
     "models.sbert.default": "Modelo SBERT usado para embeddings y metricas semanticas. Puedes elegir un alias conocido o escribir un modelo compatible.",
     "ollama.default_model": "Gestionado por el modelo comun del comparador. Las tareas del router conservan sus defaults salvo override explicito.",
+    "ollama.timeout_seconds": "Solo aplica a llamadas Ollama/LLM. No limita la construccion del indice PPDB ni el timeout global del proceso del comparador.",
     "logging.level": "Nivel minimo de logs emitidos por Binary. DEBUG es mas verboso; INFO es el nivel usual.",
     "parallelism.enabled": "Activa paralelismo interno de Binary. Para comparaciones de costo justas, recuerda usar modo secuencial del comparador.",
     "parallelism.particle_update_max_concurrent": "Override opcional. Si lo dejas vacio, el comparador envia auto: N de la comparacion; si escribes un valor, fuerza ese limite.",
@@ -3791,6 +3793,8 @@ class ComparatorService:
             ("runtime.outdir_base", str(output_base.resolve()), "path"),
             ("ollama.default_model", model, "string"),
         ]
+        if "ollama.timeout_seconds" not in manual_paths:
+            overrides.append(("ollama.timeout_seconds", BINARY_DEFAULT_OLLAMA_TIMEOUT_SECONDS, "int"))
         overrides.extend(binary_portal_ppdb_overrides(self.root, manual_paths))
         for path in BINARY_AUTO_PARALLELISM_PATHS:
             if path not in manual_paths:

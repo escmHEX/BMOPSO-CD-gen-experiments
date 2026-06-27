@@ -30,6 +30,7 @@ from runtime_defaults import DEFAULT_OLLAMA_MODEL, OLLAMA_OPENAI_API_MODE, OLLAM
 
 REQUIRED_COMPARATOR_PROPOSALS = ("evolmd", "evolmd-mo", "mesap", "binary-mopso-cd")
 REQUIRED_INITIAL_COMPARISON_STRATEGIES = ("hybrid-semantic-v7", "evolmd-initial", "evolmd-mo-initial")
+REQUIRED_OLLAMA_MODELS = ("llama3", "llama3.1:8b", "gemma4:e4b")
 
 
 @dataclass
@@ -80,6 +81,18 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
+def model_aliases(name: str) -> set[str]:
+    value = str(name or "").strip()
+    if not value:
+        return set()
+    aliases = {value}
+    if ":" not in value:
+        aliases.add(f"{value}:latest")
+    elif value.endswith(":latest"):
+        aliases.add(value.removesuffix(":latest"))
+    return aliases
+
+
 def check_portal_health(base_url: str, timeout: float) -> str:
     payload = request_json(base_url, "/api/portal/health", timeout=timeout)
     require(payload.get("status") == "ok", f"unexpected health payload: {payload}")
@@ -96,7 +109,15 @@ def check_lm_models(base_url: str, timeout: float, lm_base_url: str, api_mode: s
     )
     models = payload.get("models")
     require(isinstance(models, list), f"models response did not include a list: {payload}")
-    return f"{len(models)} model(s)"
+    available: set[str] = set()
+    for model in models:
+        if isinstance(model, dict):
+            available.update(model_aliases(str(model.get("id") or model.get("label") or "")))
+        else:
+            available.update(model_aliases(str(model)))
+    missing = [model for model in REQUIRED_OLLAMA_MODELS if not available.intersection(model_aliases(model))]
+    require(not missing, f"missing Ollama model(s): {', '.join(missing)}")
+    return f"{len(models)} model(s); required={', '.join(REQUIRED_OLLAMA_MODELS)}"
 
 
 def check_lm_chat(base_url: str, timeout: float, lm_base_url: str, api_mode: str, model: str) -> str:
@@ -160,7 +181,7 @@ def check_binary_ppdb_files() -> str:
     )
     if sqlite_index_path.exists():
         return f"sqlite={sqlite_index_path.relative_to(ROOT)}"
-    return f"source={source_path.relative_to(ROOT)}"
+    return f"source={source_path.relative_to(ROOT)}; sqlite will be built on first Binary run"
 
 
 def check_initial_population(base_url: str, timeout: float) -> str:

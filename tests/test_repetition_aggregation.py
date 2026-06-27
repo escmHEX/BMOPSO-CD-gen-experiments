@@ -806,6 +806,8 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertIn("phi4-mini", options_by_key["router.task_models.synthetic_text_generation"]["choices"])
         self.assertIn("ministral-3:3b", options_by_key["router.task_models.synthetic_text_generation"]["choices"])
         self.assertTrue(options_by_key["router.task_models.synthetic_text_generation"]["allowCustom"])
+        self.assertIn("Solo aplica a llamadas Ollama", options_by_key["ollama.timeout_seconds"]["valueHelp"])
+        self.assertIn("PPDB", options_by_key["ollama.timeout_seconds"]["valueHelp"])
 
     def test_binary_proposal_cli_options_refresh_model_choices_from_default_yaml(self):
         service = ComparatorService(Path("."))
@@ -1546,6 +1548,57 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(set_values["ollama.default_model"], '"llama3"')
         self.assertNotIn("router.task_models.central_anchor_selection", set_values)
         self.assertFalse(any(path.startswith("router.task_models.") for path in command_set_paths(command)))
+
+    def test_binary_command_injects_server_safe_ollama_timeout_by_default(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["binary-mopso-cd"],
+            }
+        )
+        command = service._build_command(
+            {"config": config},
+            proposal,
+            Path("."),
+            Path("out"),
+            Path("reference.txt"),
+            777,
+        )
+
+        set_values = command_set_values(command)
+        self.assertEqual(set_values["ollama.timeout_seconds"], "600")
+
+    def test_binary_command_preserves_manual_ollama_timeout_override(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {
+                    "binary-mopso-cd": {
+                        "cliValues": {
+                            "ollama.timeout_seconds": 900,
+                        }
+                    }
+                },
+            }
+        )
+        command = service._build_command(
+            {"config": config},
+            proposal,
+            Path("."),
+            Path("out"),
+            Path("reference.txt"),
+            777,
+        )
+
+        set_values = command_set_values(command)
+        paths = command_set_paths(command)
+        self.assertEqual(set_values["ollama.timeout_seconds"], "900")
+        self.assertEqual(paths.count("ollama.timeout_seconds"), 1)
 
     def test_binary_task_thinking_uses_default_task_model_when_model_not_overridden(self):
         service = ComparatorService(Path("."))

@@ -10,6 +10,8 @@ baselines/external/binary-mopso-cd/
 
 # External datasets
 data/external/ppdb/
+data/turbulence/*.sqlite
+data/turbulence/*.sqlite-*
 
 # Python cache and test cache
 .venv/
