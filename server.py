@@ -268,9 +268,19 @@ def windowless_python_executable(python_executable: str | None = None) -> str:
     return str(executable)
 
 
+def portal_python_executable(root: Path) -> str:
+    if sys.platform == "win32":
+        candidate = root / ".venv" / "Scripts" / "python.exe"
+    else:
+        candidate = root / ".venv" / "bin" / "python"
+    if candidate.exists():
+        return str(candidate)
+    return sys.executable
+
+
 def build_portal_restart_command(root: Path, host: str, port: int, lm_studio_base: str) -> list[str]:
     return [
-        windowless_python_executable(sys.executable),
+        windowless_python_executable(portal_python_executable(root)),
         str(root / "server.py"),
         "--host",
         host,
@@ -724,6 +734,9 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
                 )
             except ValueError as error:
                 self.send_json(400, {"error": str(error)})
+                return
+            except Exception as error:
+                self.send_json(500, {"error": str(error)})
                 return
             if not payload:
                 self.send_json(404, {"error": "Run not found."})

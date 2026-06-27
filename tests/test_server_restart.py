@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -102,6 +103,43 @@ class ToolPortalRestartTests(unittest.TestCase):
             )
 
         self.assertEqual(command[0], r"C:\portal\.venv\Scripts\pythonw.exe")
+
+    def test_restart_command_prefers_project_venv_when_current_python_is_global(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            scripts_dir = root / ".venv" / "Scripts"
+            scripts_dir.mkdir(parents=True)
+            (scripts_dir / "python.exe").write_text("", encoding="utf-8")
+            (scripts_dir / "pythonw.exe").write_text("", encoding="utf-8")
+
+            with patch.object(server.sys, "platform", "win32"), patch.object(
+                server.sys,
+                "executable",
+                r"C:\Users\Admin\AppData\Local\Programs\Python\Python313\python.exe",
+            ):
+                command = server.build_portal_restart_command(
+                    root=root,
+                    host="127.0.0.1",
+                    port=4173,
+                    lm_studio_base="http://127.0.0.1:1234",
+                )
+
+        self.assertEqual(command[0], str(scripts_dir / "pythonw.exe"))
+
+    def test_comparator_embedding_projection_get_returns_json_500_on_unexpected_error(self):
+        sent: list[tuple[int, dict]] = []
+        fake_handler = SimpleNamespace(
+            path="/api/comparator/runs/run-1/embedding-projection?method=pca",
+            comparator_path_parts=lambda: ["runs", "run-1", "embedding-projection"],
+            comparator_service=SimpleNamespace(
+                get_run_embedding_projection=Mock(side_effect=RuntimeError("No module named numpy"))
+            ),
+            send_json=lambda status, payload: sent.append((status, payload)),
+        )
+
+        server.ToolPortalHandler.handle_comparator_get(fake_handler)
+
+        self.assertEqual(sent, [(500, {"error": "No module named numpy"})])
 
     def test_restart_helper_prefers_windowless_python_on_windows(self):
         with patch.object(server.sys, "platform", "win32"), patch.object(
