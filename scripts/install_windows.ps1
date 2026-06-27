@@ -83,8 +83,16 @@ function Python-InVenv([string]$VenvPath) {
 }
 
 function Ensure-Venv([string]$VenvPath) {
-  Invoke-Checked "uv" @("venv", "--python", "3.13", $VenvPath)
   $python = Python-InVenv $VenvPath
+  if ($env:UV_VENV_CLEAR -eq "1" -or $env:UV_VENV_CLEAR -eq "true") {
+    Invoke-Checked "uv" @("venv", "--clear", "--python", "3.13", $VenvPath)
+  } elseif (Test-Path $python) {
+    Write-Host "Reusing existing virtual environment at: $VenvPath"
+  } elseif (Test-Path $VenvPath) {
+    Fail "$VenvPath exists but $python is missing. Remove that directory or rerun with UV_VENV_CLEAR=1."
+  } else {
+    Invoke-Checked "uv" @("venv", "--python", "3.13", $VenvPath)
+  }
   Invoke-Checked "uv" @("pip", "install", "--python", $python, "--upgrade", "pip")
 }
 

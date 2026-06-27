@@ -206,9 +206,17 @@ python_in_venv() {
 
 ensure_venv() {
   local venv_path="$1"
-  uv venv --python 3.13 "$venv_path"
   local python_bin
   python_bin="$(python_in_venv "$venv_path")"
+  if [[ "${UV_VENV_CLEAR:-}" == "1" || "${UV_VENV_CLEAR:-}" == "true" ]]; then
+    uv venv --clear --python 3.13 "$venv_path"
+  elif [[ -x "$python_bin" ]]; then
+    echo "Reusing existing virtual environment at: $venv_path"
+  elif [[ -e "$venv_path" ]]; then
+    fail "$venv_path exists but $python_bin is missing. Remove that directory or rerun with UV_VENV_CLEAR=1."
+  else
+    uv venv --python 3.13 "$venv_path"
+  fi
   uv pip install --python "$python_bin" --upgrade pip
 }
 
