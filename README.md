@@ -11,13 +11,15 @@ git checkout dev
 git submodule update --init --recursive
 ```
 
-## Requisitos
+## Antes de ejecutar el instalador
 
-- Git.
-- Red y espacio suficiente para modelos, entornos Python y PPDB.
-- Python 3.13 gestionado por `uv` (los instaladores lo preparan).
-- Kaggle API para PPDB: `~/.kaggle/kaggle.json` o `KAGGLE_USERNAME` / `KAGGLE_KEY`.
-- Permisos para instalar/ejecutar Ollama.
+- Tener red y espacio suficiente para modelos, entornos Python y PPDB.
+- Configurar Kaggle API para PPDB: `~/.kaggle/kaggle.json` o `KAGGLE_USERNAME` / `KAGGLE_KEY`.
+- Tener permisos para instalar/ejecutar Ollama.
+- En Windows, tener Git instalado y `winget` disponible.
+- En Ubuntu, tener `sudo` si faltan paquetes base como `git`, `curl` o `unzip`.
+
+Los scripts instalan o preparan automaticamente `uv`, Python 3.13, los venvs, dependencias Python, Kaggle CLI, Ollama cuando falta, modelos Ollama y modelos Python.
 
 ## Ubuntu
 
