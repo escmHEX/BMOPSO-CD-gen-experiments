@@ -5,6 +5,8 @@ runs/
 baselines/comparator_config.local.json
 baselines/venvs/
 baselines/external/binary-mopso-cd/
+.local/ollama/
+.local/ollama-models/
 
 # External datasets
 data/external/ppdb/

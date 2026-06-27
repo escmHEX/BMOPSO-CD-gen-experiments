@@ -8,6 +8,8 @@ HOST="127.0.0.1"
 PORT="4173"
 LM_STUDIO="http://127.0.0.1:11434"
 USE_NOHUP=0
+OLLAMA_LOCAL_DIR="${OLLAMA_LOCAL_DIR:-$ROOT/.local/ollama}"
+OLLAMA_LOCAL_MODELS_DIR="${OLLAMA_MODELS:-$ROOT/.local/ollama-models}"
 
 if [[ $# -gt 0 ]]; then
   shift
@@ -25,6 +27,11 @@ Options:
   -h, --help          Show this help.
 USAGE
 }
+
+if [[ "$ACTION" == "-h" || "$ACTION" == "--help" ]]; then
+  usage
+  exit 0
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,6 +51,7 @@ CONFIG="$ROOT/baselines/comparator_config.local.json"
 DAEMON_DIR="$ROOT/runs/server-daemon"
 PID_FILE="$DAEMON_DIR/server.pid"
 LOG_FILE="$DAEMON_DIR/server.log"
+OLLAMA_LOG_FILE="$DAEMON_DIR/ollama.log"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -54,6 +62,27 @@ require_runtime() {
   [[ -x "$PYTHON" ]] || fail "Missing $PYTHON. Run bash scripts/install_ubuntu.sh first."
   [[ -f "$SERVER" ]] || fail "Missing $SERVER."
   [[ -f "$CONFIG" ]] || fail "Missing $CONFIG. Run bash scripts/install_ubuntu.sh first."
+}
+
+use_local_ollama_env() {
+  if [[ -x "$OLLAMA_LOCAL_DIR/bin/ollama" ]]; then
+    export PATH="$OLLAMA_LOCAL_DIR/bin:$PATH"
+    export OLLAMA_MODELS="${OLLAMA_MODELS:-$OLLAMA_LOCAL_MODELS_DIR}"
+  fi
+}
+
+ensure_ollama_running() {
+  use_local_ollama_env
+  command -v ollama >/dev/null 2>&1 || return 0
+  if ollama list >/dev/null 2>&1; then
+    return 0
+  fi
+  mkdir -p "$DAEMON_DIR"
+  nohup ollama serve >> "$OLLAMA_LOG_FILE" 2>&1 &
+  sleep 3
+  ollama list >/dev/null 2>&1 || {
+    echo "Warning: Ollama is not responding. LLM endpoints will fail until Ollama is started. Logs: $OLLAMA_LOG_FILE" >&2
+  }
 }
 
 systemd_available() {
@@ -74,8 +103,10 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$ROOT
-Environment=COMPARATOR_CONFIG_PATH=$CONFIG
-ExecStart=$PYTHON $SERVER --host $HOST --port $PORT --lm-studio $LM_STUDIO
+Environment="COMPARATOR_CONFIG_PATH=$CONFIG"
+Environment="PATH=$OLLAMA_LOCAL_DIR/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="OLLAMA_MODELS=${OLLAMA_MODELS:-$OLLAMA_LOCAL_MODELS_DIR}"
+ExecStart="$PYTHON" "$SERVER" --host "$HOST" --port "$PORT" --lm-studio "$LM_STUDIO"
 Restart=on-failure
 RestartSec=5
 StandardOutput=append:$LOG_FILE
@@ -108,6 +139,7 @@ nohup_running() {
 
 nohup_start() {
   require_runtime
+  ensure_ollama_running
   mkdir -p "$DAEMON_DIR"
   if nohup_running; then
     echo "Server already running with PID $(cat "$PID_FILE")."
@@ -133,6 +165,7 @@ nohup_stop() {
 
 systemd_start() {
   require_runtime
+  ensure_ollama_running
   mkdir -p "$DAEMON_DIR"
   write_systemd_unit >/dev/null
   enable_linger_if_possible

@@ -15,17 +15,25 @@ git submodule update --init --recursive
 
 - Tener red y espacio suficiente para modelos, entornos Python y PPDB.
 - Configurar Kaggle API para PPDB: `~/.kaggle/kaggle.json` o `KAGGLE_USERNAME` / `KAGGLE_KEY`.
-- Tener permisos para instalar/ejecutar Ollama.
 - En Windows, tener Git instalado y `winget` disponible.
-- En Ubuntu, tener `sudo` si faltan paquetes base como `git`, `curl` o `unzip`.
+- En Ubuntu no necesitas `sudo` si el servidor ya trae `git` y `curl`. Usa `--no-sudo` para instalar Ollama dentro del repo.
+- Si en Ubuntu faltan herramientas base como `git` o `curl`, el script no puede instalarlas sin `sudo`; en ese caso debes pedirlas al administrador o cargar el modulo equivalente del servidor.
 
-Los scripts instalan o preparan automaticamente `uv`, Python 3.13, los venvs, dependencias Python, Kaggle CLI, Ollama cuando falta, modelos Ollama y modelos Python.
+Los scripts instalan o preparan automaticamente `uv`, Python 3.13, los venvs, dependencias Python, Kaggle CLI, Ollama cuando falta, modelos Ollama y modelos Python. En modo sin `sudo`, Ollama queda en `.local/ollama` y sus modelos en `.local/ollama-models`.
 
 ## Ubuntu
 
 ```bash
 bash scripts/install_ubuntu.sh
 bash scripts/start_server_daemon_ubuntu.sh start --host 0.0.0.0
+bash scripts/verify_install.py --base-url http://127.0.0.1:4173
+```
+
+Sin acceso a `sudo`:
+
+```bash
+bash scripts/install_ubuntu.sh --no-sudo
+bash scripts/start_server_daemon_ubuntu.sh start --host 0.0.0.0 --nohup
 bash scripts/verify_install.py --base-url http://127.0.0.1:4173
 ```
 
@@ -39,7 +47,7 @@ El instalador crea `.venv`, prepara venvs aislados para EVOLMD, EVOLMD-MO, MESAP
 .\.venv\Scripts\python.exe scripts\verify_install.py --base-url http://127.0.0.1:4173
 ```
 
-El daemon de Windows usa Task Scheduler. El daemon de Ubuntu usa `systemd --user` cuando esta disponible y `nohup` como fallback.
+El daemon de Windows usa Task Scheduler. El daemon de Ubuntu usa `systemd --user` cuando esta disponible y `nohup` como fallback. Sin `sudo`, no puede ejecutar `loginctl enable-linger`; si la universidad mata procesos de usuario al cerrar SSH, debes pedir que habiliten `linger` para tu usuario o usar el gestor de jobs del servidor.
 
 ## Servidor manual
 

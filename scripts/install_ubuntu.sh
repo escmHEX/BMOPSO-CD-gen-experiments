@@ -9,6 +9,9 @@ SKIP_PPDB=0
 SKIP_OLLAMA_INSTALL=0
 SKIP_MODEL_PULL=0
 SKIP_WARMUP=0
+NO_SUDO=0
+OLLAMA_LOCAL_DIR="${OLLAMA_LOCAL_DIR:-$ROOT/.local/ollama}"
+OLLAMA_LOCAL_MODELS_DIR="${OLLAMA_MODELS:-$ROOT/.local/ollama-models}"
 SPACY_MODEL_WHEEL="https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
 
 usage() {
@@ -21,6 +24,7 @@ Options:
   --skip-ollama-install Do not install Ollama if it is missing.
   --skip-model-pull     Skip Ollama model pulls during warmup.
   --skip-warmup         Skip all model warmup steps.
+  --no-sudo             Never use sudo. Install Ollama under .local/ollama.
   -h, --help            Show this help.
 USAGE
 }
@@ -32,6 +36,7 @@ while [[ $# -gt 0 ]]; do
     --skip-ollama-install) SKIP_OLLAMA_INSTALL=1 ;;
     --skip-model-pull) SKIP_MODEL_PULL=1 ;;
     --skip-warmup) SKIP_WARMUP=1 ;;
+    --no-sudo) NO_SUDO=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
   esac
@@ -47,9 +52,19 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing command '$1'. Install it and rerun this script."
 }
 
+has_sudo_access() {
+  [[ "$NO_SUDO" -eq 0 ]] || return 1
+  command -v sudo >/dev/null 2>&1 || return 1
+  if sudo -n true >/dev/null 2>&1; then
+    return 0
+  fi
+  [[ -t 0 ]] || return 1
+  sudo -v >/dev/null 2>&1
+}
+
 maybe_apt_install() {
   local package="$1"
-  if command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1 && has_sudo_access; then
     sudo apt-get update
     sudo apt-get install -y "$package"
   fi
@@ -62,7 +77,13 @@ ensure_command() {
     return
   fi
   maybe_apt_install "$package_name"
-  command -v "$command_name" >/dev/null 2>&1 || fail "Missing command '$command_name'. Install package '$package_name' and rerun."
+  if command -v "$command_name" >/dev/null 2>&1; then
+    return
+  fi
+  if [[ "$NO_SUDO" -eq 1 ]] || ! has_sudo_access; then
+    fail "Missing command '$command_name'. Without sudo, install/load package '$package_name' first and rerun."
+  fi
+  fail "Missing command '$command_name'. Install package '$package_name' and rerun."
 }
 
 ensure_uv() {
@@ -75,21 +96,99 @@ ensure_uv() {
   command -v uv >/dev/null 2>&1 || fail "uv installation did not add uv to PATH. Add ~/.local/bin to PATH and rerun."
 }
 
+use_local_ollama_env() {
+  export PATH="$OLLAMA_LOCAL_DIR/bin:$PATH"
+  export OLLAMA_MODELS="${OLLAMA_MODELS:-$OLLAMA_LOCAL_MODELS_DIR}"
+}
+
+ollama_archive_name() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo "ollama-linux-amd64.tar.zst" ;;
+    aarch64|arm64) echo "ollama-linux-arm64.tar.zst" ;;
+    *) fail "Unsupported CPU architecture for local Ollama install: $(uname -m)" ;;
+  esac
+}
+
+extract_tar_zst() {
+  local archive="$1"
+  local destination="$2"
+  mkdir -p "$destination"
+  local helper_python="${PORTAL_PYTHON:-}"
+  [[ -n "$helper_python" && -x "$helper_python" ]] || fail "Cannot extract $archive without a prepared Python venv."
+  uv pip install --python "$helper_python" zstandard
+  "$helper_python" - "$archive" "$destination" <<'PY'
+from pathlib import Path
+import sys
+import tarfile
+
+import zstandard
+
+archive = Path(sys.argv[1])
+destination = Path(sys.argv[2]).resolve()
+
+with archive.open("rb") as raw:
+    reader = zstandard.ZstdDecompressor().stream_reader(raw)
+    with tarfile.open(fileobj=reader, mode="r|") as tar:
+        for member in tar:
+            target = (destination / member.name).resolve()
+            if target != destination and destination not in target.parents:
+                raise RuntimeError(f"Refusing to extract outside destination: {member.name}")
+            tar.extract(member, path=destination, filter="data")
+PY
+}
+
+install_ollama_local() {
+  ensure_command curl curl
+  local archive_name
+  archive_name="$(ollama_archive_name)"
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local resolved_root
+  local resolved_install_dir
+  resolved_root="$(cd "$ROOT" && pwd -P)"
+  mkdir -p "$(dirname "$OLLAMA_LOCAL_DIR")"
+  resolved_install_dir="$(cd "$(dirname "$OLLAMA_LOCAL_DIR")" && pwd -P)/$(basename "$OLLAMA_LOCAL_DIR")"
+  [[ "$resolved_install_dir" == "$resolved_root/"* ]] || fail "OLLAMA_LOCAL_DIR must be inside the repository when the installer manages it: $OLLAMA_LOCAL_DIR"
+  echo "Installing Ollama locally under $OLLAMA_LOCAL_DIR."
+  curl -fL "https://ollama.com/download/$archive_name" -o "$tmp_dir/$archive_name" || {
+    rm -rf "$tmp_dir"
+    return 1
+  }
+  rm -rf "$OLLAMA_LOCAL_DIR"
+  extract_tar_zst "$tmp_dir/$archive_name" "$OLLAMA_LOCAL_DIR" || {
+    rm -rf "$tmp_dir"
+    return 1
+  }
+  rm -rf "$tmp_dir"
+  use_local_ollama_env
+  command -v ollama >/dev/null 2>&1 || fail "Local Ollama install finished but $OLLAMA_LOCAL_DIR/bin/ollama is not usable."
+}
+
 ensure_ollama() {
+  if [[ -x "$OLLAMA_LOCAL_DIR/bin/ollama" ]]; then
+    use_local_ollama_env
+  fi
   if command -v ollama >/dev/null 2>&1; then
     return
   fi
   if [[ "$SKIP_OLLAMA_INSTALL" -eq 1 ]]; then
     fail "Ollama is missing and --skip-ollama-install was passed."
   fi
+  if [[ "$NO_SUDO" -eq 1 ]] || ! has_sudo_access; then
+    install_ollama_local
+    return
+  fi
   ensure_command curl curl
-  curl -fsSL https://ollama.com/install.sh | sh
-  command -v ollama >/dev/null 2>&1 || fail "Ollama installation finished but ollama is not in PATH."
+  if curl -fsSL https://ollama.com/install.sh | sh; then
+    command -v ollama >/dev/null 2>&1 && return
+  fi
+  echo "System Ollama install did not finish cleanly; falling back to local user install." >&2
+  install_ollama_local
 }
 
 ensure_ollama_service() {
   ensure_ollama
-  if command -v systemctl >/dev/null 2>&1; then
+  if [[ "$NO_SUDO" -eq 0 ]] && command -v systemctl >/dev/null 2>&1 && has_sudo_access; then
     sudo systemctl enable --now ollama >/dev/null 2>&1 || true
   fi
   if ! ollama list >/dev/null 2>&1; then
@@ -181,9 +280,12 @@ prepare_ppdb() {
   fi
 }
 
+if [[ -x "$OLLAMA_LOCAL_DIR/bin/ollama" ]]; then
+  use_local_ollama_env
+fi
+
 ensure_command git git
 ensure_command curl curl
-ensure_command unzip unzip
 ensure_uv
 uv python install 3.13
 
