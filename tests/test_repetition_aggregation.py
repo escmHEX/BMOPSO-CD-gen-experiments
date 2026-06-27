@@ -1427,6 +1427,38 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(paths.count("parallelism.particle_update_max_concurrent"), 1)
         self.assertEqual(paths.count("parallelism.initial_text_generation_max_concurrent"), 1)
 
+    def test_binary_command_injects_portal_ppdb_paths_when_available(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            ppdb_source = root / "data" / "external" / "ppdb" / "ppdb-2.0-s-all"
+            ppdb_source.parent.mkdir(parents=True)
+            ppdb_source.write_text("[X] ||| help ||| aid ||| features ||| Equivalence\n", encoding="utf-8")
+
+            service = ComparatorService(root)
+            proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+            config = service._read_config(
+                {
+                    "referenceText": "reference",
+                    "selectedProposalIds": ["binary-mopso-cd"],
+                }
+            )
+
+            command = service._build_command(
+                {"config": config},
+                proposal,
+                root / "binary",
+                root / "out",
+                root / "reference.txt",
+                777,
+            )
+            values = command_set_values(command)
+
+            self.assertEqual(json.loads(values["models.ppdb.source_path"]), str(ppdb_source.resolve()))
+            self.assertEqual(
+                json.loads(values["models.ppdb.index_path"]),
+                str((root / "data" / "turbulence" / "ppdb_index.sqlite").resolve()),
+            )
+
     def test_binary_command_builds_structured_cli_values(self):
         service = ComparatorService(Path("."))
         proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")

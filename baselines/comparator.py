@@ -137,6 +137,8 @@ MODULE_ROOT = Path(__file__).resolve().parents[1]
 BINARY_PROPOSAL_ID = "binary-mopso-cd"
 BINARY_LOCAL_REPOSITORY = "baselines/external/binary-mopso-cd"
 BINARY_DEVELOPMENT_REPOSITORY = "../Binary MOPSO-CD"
+BINARY_PORTAL_PPDB_SOURCE = Path("data/external/ppdb/ppdb-2.0-s-all")
+BINARY_PORTAL_PPDB_SQLITE_INDEX = Path("data/turbulence/ppdb_index.sqlite")
 BINARY_TASK_MODEL_PREFIX = "router.task_models."
 BINARY_TASK_THINKING_PREFIX = "router.task_thinking."
 BINARY_THINKING_MODE_CHOICES = ("false", "low", "medium", "high")
@@ -338,6 +340,19 @@ def configured_binary_repository_path() -> str:
     if configured == BINARY_LOCAL_REPOSITORY and module_relative_path(BINARY_DEVELOPMENT_REPOSITORY).exists():
         return BINARY_DEVELOPMENT_REPOSITORY
     return configured
+
+
+def binary_portal_ppdb_overrides(root: Path, manual_paths: set[str]) -> list[tuple[str, Any, str]]:
+    source_path = (root / BINARY_PORTAL_PPDB_SOURCE).resolve()
+    index_path = (root / BINARY_PORTAL_PPDB_SQLITE_INDEX).resolve()
+    if not source_path.exists() and not index_path.exists():
+        return []
+    overrides: list[tuple[str, Any, str]] = []
+    if source_path.exists() and "models.ppdb.source_path" not in manual_paths:
+        overrides.append(("models.ppdb.source_path", str(source_path), "path"))
+    if "models.ppdb.index_path" not in manual_paths:
+        overrides.append(("models.ppdb.index_path", str(index_path), "path"))
+    return overrides
 
 
 def flatten_mapping_leaves(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
@@ -3776,6 +3791,7 @@ class ComparatorService:
             ("runtime.outdir_base", str(output_base.resolve()), "path"),
             ("ollama.default_model", model, "string"),
         ]
+        overrides.extend(binary_portal_ppdb_overrides(self.root, manual_paths))
         for path in BINARY_AUTO_PARALLELISM_PATHS:
             if path not in manual_paths:
                 overrides.append((path, int(run["config"]["n"]), "int"))
