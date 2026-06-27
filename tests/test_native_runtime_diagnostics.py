@@ -69,6 +69,7 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
             initial_text_count=10,
             concurrency=1,
             ollama_timeout=120,
+            model="llama3",
         )
 
         compile(code, "<binary-initial-text-generation-probe>", "exec")
@@ -79,6 +80,8 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
         self.assertIn("generated_success", code)
         self.assertIn("parallelism.initial_text_generation_max_concurrent", code)
         self.assertIn("ollama.timeout_seconds", code)
+        self.assertIn("router.task_models.synthetic_text_generation", code)
+        self.assertIn("diagnostic_model = 'llama3'", code)
         self.assertIn("diagnostics", code)
         self.assertIn("ConsoleProgress", code)
 
@@ -131,6 +134,8 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
                 "1",
                 "--binary-initial-ollama-timeout",
                 "120",
+                "--binary-initial-model",
+                "llama3",
                 "--binary-smoke-run",
                 "--smoke-n",
                 "3",

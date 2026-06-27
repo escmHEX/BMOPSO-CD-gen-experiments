@@ -1549,11 +1549,15 @@ class RepetitionAggregationTests(unittest.TestCase):
             "router.heuristics.word_replacement_candidates",
         ):
             self.assertEqual(set_values[key], "false")
-        self.assertNotIn("router.task_models.semantic_anchor_extraction", set_values)
+        self.assertEqual(set_values["router.task_models.semantic_anchor_extraction"], '"llama3"')
+        self.assertEqual(set_values["router.task_models.semantic_pool_expansion"], '"llama3"')
+        self.assertEqual(set_values["router.task_models.semantic_component_influence_candidates"], '"llama3"')
+        self.assertEqual(set_values["router.task_models.synthetic_text_generation"], '"llama3"')
         self.assertEqual(set_values["router.task_models.semantic_pool_generation"], '"lfm2.5:8b"')
+        self.assertNotIn("router.task_models.central_anchor_selection", set_values)
         self.assertEqual(set_values["router.task_thinking.semantic_pool_generation"], '"low"')
 
-    def test_binary_command_preserves_default_task_models_without_explicit_overrides(self):
+    def test_binary_command_propagates_common_model_to_default_text_generation_task(self):
         service = ComparatorService(Path("."))
         proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
         config = service._read_config(
@@ -1574,8 +1578,12 @@ class RepetitionAggregationTests(unittest.TestCase):
 
         set_values = command_set_values(command)
         self.assertEqual(set_values["ollama.default_model"], '"llama3"')
+        self.assertEqual(set_values["router.task_models.synthetic_text_generation"], '"llama3"')
+        self.assertEqual(set_values["router.task_models.semantic_anchor_extraction"], '"llama3"')
+        self.assertEqual(set_values["router.task_models.semantic_pool_generation"], '"llama3"')
+        self.assertEqual(set_values["router.task_models.semantic_pool_expansion"], '"llama3"')
+        self.assertEqual(set_values["router.task_models.semantic_component_influence_candidates"], '"llama3"')
         self.assertNotIn("router.task_models.central_anchor_selection", set_values)
-        self.assertFalse(any(path.startswith("router.task_models.") for path in command_set_paths(command)))
 
     def test_binary_command_injects_server_safe_ollama_timeout_by_default(self):
         service = ComparatorService(Path("."))

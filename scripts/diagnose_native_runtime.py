@@ -27,6 +27,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROBE_HEARTBEAT_SECONDS = 30.0
+BINARY_COMMON_MODEL_TASKS = (
+    "semantic_anchor_extraction",
+    "semantic_pool_generation",
+    "semantic_pool_expansion",
+    "semantic_component_influence_candidates",
+    "synthetic_text_generation",
+)
 
 
 @dataclass(frozen=True)
@@ -239,7 +246,9 @@ def binary_initial_text_generation_probe_code(
     initial_text_count: int,
     concurrency: int,
     ollama_timeout: int,
+    model: str | None,
 ) -> str:
+    model_literal = repr(model.strip()) if model and model.strip() else "None"
     return f'''
 from __future__ import annotations
 
@@ -267,6 +276,11 @@ if not reference_path.exists():
     raise FileNotFoundError(f"missing reference.txt: {{reference_path}}")
 
 config = RuntimeConfig(load_yaml(config_path))
+diagnostic_model = {model_literal}
+if diagnostic_model:
+    config.set("ollama.default_model", diagnostic_model)
+    for task_name in {BINARY_COMMON_MODEL_TASKS!r}:
+        config.set(f"router.task_models.{{task_name}}", diagnostic_model)
 config.set("parallelism.initial_text_generation_max_concurrent", max(1, int({concurrency})))
 config.set("ollama.timeout_seconds", max(1, int({ollama_timeout})))
 components = ComponentSettings.from_config(config).order
@@ -319,6 +333,7 @@ print(
     f"ollama_timeout_seconds={{config.get('ollama.timeout_seconds')}}",
     flush=True,
 )
+print(f"diagnostic_model={{diagnostic_model or config.get('router.task_models.synthetic_text_generation')}}", flush=True)
 print(f"generation_candidates={{len(items)}} reduced_available={{len(reduced)}}")
 
 generated = builder._generate_text_candidates(items, reference_text)
@@ -594,6 +609,7 @@ def main() -> int:
     parser.add_argument("--binary-initial-text-count", type=int, default=0)
     parser.add_argument("--binary-initial-text-concurrency", type=int, default=1)
     parser.add_argument("--binary-initial-ollama-timeout", type=int, default=120)
+    parser.add_argument("--binary-initial-model")
     parser.add_argument("--binary-smoke-run", action="store_true")
     parser.add_argument("--smoke-n", type=int, default=3)
     parser.add_argument("--smoke-iterations", type=int, default=1)
@@ -646,6 +662,7 @@ def main() -> int:
                             initial_text_count=args.binary_initial_text_count,
                             concurrency=args.binary_initial_text_concurrency,
                             ollama_timeout=args.binary_initial_ollama_timeout,
+                            model=args.binary_initial_model,
                         ),
                         args.timeout,
                         stream_output=True,

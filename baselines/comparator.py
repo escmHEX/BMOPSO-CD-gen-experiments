@@ -146,6 +146,13 @@ BINARY_PORTAL_PPDB_SQLITE_INDEX = Path("data/turbulence/ppdb_index.sqlite")
 BINARY_DEFAULT_OLLAMA_TIMEOUT_SECONDS = 600
 BINARY_TASK_MODEL_PREFIX = "router.task_models."
 BINARY_TASK_THINKING_PREFIX = "router.task_thinking."
+BINARY_COMMON_MODEL_TASKS = (
+    "semantic_anchor_extraction",
+    "semantic_pool_generation",
+    "semantic_pool_expansion",
+    "semantic_component_influence_candidates",
+    "synthetic_text_generation",
+)
 BINARY_THINKING_MODE_CHOICES = ("false", "low", "medium", "high")
 BINARY_MANAGED_CONFIG_PATHS = {
     "experiment.n",
@@ -227,7 +234,7 @@ BINARY_SELECT_OPTION_PATHS = {
 }
 BINARY_VALUE_HELP = {
     "models.sbert.default": "Modelo SBERT usado para embeddings y metricas semanticas. Puedes elegir un alias conocido o escribir un modelo compatible.",
-    "ollama.default_model": "Gestionado por el modelo comun del comparador. Las tareas del router conservan sus defaults salvo override explicito.",
+    "ollama.default_model": "Gestionado por el modelo comun del comparador. Tambien se aplica a las tareas LLM principales salvo override explicito por tarea.",
     "ollama.timeout_seconds": "Solo aplica a llamadas Ollama/LLM. No limita la construccion del indice PPDB ni el timeout global del proceso del comparador.",
     "logging.level": "Nivel minimo de logs emitidos por Binary. DEBUG es mas verboso; INFO es el nivel usual.",
     "parallelism.enabled": "Activa paralelismo interno de Binary. Para comparaciones de costo justas, recuerda usar modo secuencial del comparador.",
@@ -324,7 +331,7 @@ BINARY_PATH_HELP = {
     "experiment.runs": "El comparador ejecuta K externamente; Binary corre una repeticion por proceso.",
     "experiment.seed": "Gestionado por la semilla efectiva de cada repeticion.",
     "runtime.outdir_base": "Gestionado por el comparador para aislar artefactos por corrida.",
-    "ollama.default_model": "Gestionado por el campo comun Modelo del comparador; no pisa los modelos por tarea.",
+    "ollama.default_model": "Gestionado por el campo comun Modelo del comparador; se propaga a las tareas LLM principales salvo override explicito.",
     "mopso.k_retry": "Debe permanecer en 0 segun la validacion actual de Binary.",
     "mopso.guided_trajectory_validation_enabled": "Override booleano para activar o desactivar la validacion de trayectoria guiada.",
     "mopso.guided_trajectory_relative_margin": "Override numerico no negativo para el margen relativo de trayectoria guiada.",
@@ -3799,6 +3806,10 @@ class ComparatorService:
         ]
         if "ollama.timeout_seconds" not in manual_paths:
             overrides.append(("ollama.timeout_seconds", BINARY_DEFAULT_OLLAMA_TIMEOUT_SECONDS, "int"))
+        for task_name in BINARY_COMMON_MODEL_TASKS:
+            path = f"{BINARY_TASK_MODEL_PREFIX}{task_name}"
+            if path not in manual_paths:
+                overrides.append((path, model, "string"))
         overrides.extend(binary_portal_ppdb_overrides(self.root, manual_paths))
         for path in BINARY_AUTO_PARALLELISM_PATHS:
             if path not in manual_paths:
