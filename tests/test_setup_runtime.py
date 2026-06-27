@@ -54,6 +54,22 @@ class RuntimeSetupTests(unittest.TestCase):
         self.assertIn("elseif (Test-Path $python)", windows_installer)
         self.assertIn("UV_VENV_CLEAR=1", windows_installer)
 
+    def test_installers_prepare_binary_ppdb_sqlite_index(self):
+        ubuntu_installer = Path("scripts/install_ubuntu.sh").read_text(encoding="utf-8")
+        windows_installer = Path("scripts/install_windows.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("data/turbulence/ppdb_index.sqlite", ubuntu_installer)
+        self.assertIn("build_sqlite_index", ubuntu_installer)
+        self.assertIn("data\\turbulence\\ppdb_index.sqlite", windows_installer)
+        self.assertIn("build_sqlite_index", windows_installer)
+
+    def test_verify_install_checks_binary_ppdb_runtime_files(self):
+        verifier = Path("scripts/verify_install.py").read_text(encoding="utf-8")
+
+        self.assertIn("binary ppdb", verifier)
+        self.assertIn("ppdb_index.sqlite", verifier)
+        self.assertIn("ppdb-2.0-s-all", verifier)
+
     def test_build_comparator_local_config_uses_ubuntu_venvs(self):
         from scripts.setup_runtime import build_comparator_local_config
 

@@ -63,7 +63,7 @@ bash scripts/start_server_daemon_ubuntu.sh start --host 0.0.0.0 --nohup
 bash scripts/verify_install.py --base-url http://127.0.0.1:4173
 ```
 
-El instalador crea `.venv`, prepara venvs aislados para EVOLMD, EVOLMD-MO, MESAP y Binary MOPSO-CD, clona Binary en `baselines/external/binary-mopso-cd`, descarga PPDB desde Kaggle, genera `data/turbulence/ppdb_index.json`, instala Ollama si falta y precarga modelos.
+El instalador crea `.venv`, prepara venvs aislados para EVOLMD, EVOLMD-MO, MESAP y Binary MOPSO-CD, clona Binary en `baselines/external/binary-mopso-cd`, descarga PPDB desde Kaggle, genera `data/turbulence/ppdb_index.json` para la web y `data/turbulence/ppdb_index.sqlite` para Binary, instala Ollama si falta y precarga modelos.
 
 ## Windows
 
@@ -92,7 +92,7 @@ LM Studio sigue siendo usable manualmente seleccionando modo `native` y base URL
 
 ## Verificacion
 
-`scripts/verify_install.py` comprueba salud del portal, Ollama, chat LLM, SBERT, PPDB, poblacion inicial, comparacion inicial y comparador de propuestas con EVOLMD, EVOLMD-MO, MESAP y Binary disponibles.
+`scripts/verify_install.py` comprueba salud del portal, Ollama, chat LLM, SBERT, PPDB web, PPDB de Binary, poblacion inicial, comparacion inicial y comparador de propuestas con EVOLMD, EVOLMD-MO, MESAP y Binary disponibles.
 
 Para comprobar que el servidor quedo funcionando, ejecuta este comando despues de iniciar el daemon:
 

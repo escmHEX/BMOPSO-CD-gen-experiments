@@ -290,6 +290,27 @@ prepare_ppdb() {
   fi
 }
 
+prepare_binary_ppdb_index() {
+  local binary_python="$1"
+  local ppdb_source="data/external/ppdb/ppdb-2.0-s-all"
+  local ppdb_index="data/turbulence/ppdb_index.sqlite"
+  if [[ "$SKIP_PPDB" -eq 1 ]]; then
+    echo "Skipping Binary PPDB SQLite index generation."
+    return
+  fi
+  [[ -f "$ppdb_source" ]] || fail "PPDB source is missing at $ppdb_source; rerun without --skip-ppdb after configuring Kaggle credentials."
+  if [[ "$FORCE_PPDB" -eq 1 || ! -f "$ppdb_index" ]]; then
+    "$binary_python" - "$ppdb_source" "$ppdb_index" <<'PY'
+from pathlib import Path
+import sys
+
+from binary_mopso_cd.services.ppdb import build_sqlite_index
+
+build_sqlite_index(Path(sys.argv[1]), Path(sys.argv[2]))
+PY
+  fi
+}
+
 if [[ -x "$OLLAMA_LOCAL_DIR/bin/ollama" ]]; then
   use_local_ollama_env
 fi
@@ -323,6 +344,7 @@ install_spacy_model "$BINARY_PYTHON"
 
 "$PORTAL_PYTHON" scripts/setup_runtime.py --write-comparator-config --platform linux
 prepare_ppdb "$PORTAL_PYTHON"
+prepare_binary_ppdb_index "$BINARY_PYTHON"
 
 ensure_ollama_service
 if [[ "$SKIP_WARMUP" -eq 0 ]]; then

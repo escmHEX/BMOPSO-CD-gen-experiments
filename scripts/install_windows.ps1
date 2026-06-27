@@ -175,6 +175,26 @@ function Prepare-Ppdb([string]$PortalPython) {
   }
 }
 
+function Prepare-BinaryPpdbIndex([string]$BinaryPython) {
+  if ($SkipPpdb) {
+    Write-Host "Skipping Binary PPDB SQLite index generation."
+    return
+  }
+  $ppdbSource = Join-Path $Root "data\external\ppdb\ppdb-2.0-s-all"
+  $ppdbIndex = Join-Path $Root "data\turbulence\ppdb_index.sqlite"
+  if (-not (Test-Path $ppdbSource)) {
+    Fail "PPDB source is missing at $ppdbSource; rerun without -SkipPpdb after configuring Kaggle credentials."
+  }
+  if ($ForcePpdb -or -not (Test-Path $ppdbIndex)) {
+    Invoke-Checked $BinaryPython @(
+      "-c",
+      "from pathlib import Path; import sys; from binary_mopso_cd.services.ppdb import build_sqlite_index; build_sqlite_index(Path(sys.argv[1]), Path(sys.argv[2]))",
+      $ppdbSource,
+      $ppdbIndex
+    )
+  }
+}
+
 Ensure-Command "git" "Install Git for Windows and rerun."
 Ensure-Uv
 Invoke-Checked "uv" @("python", "install", "3.13")
@@ -202,6 +222,7 @@ Install-SpacyModel $binaryPython
 
 Invoke-Checked $portalPython @("scripts\setup_runtime.py", "--write-comparator-config", "--platform", "win32")
 Prepare-Ppdb $portalPython
+Prepare-BinaryPpdbIndex $binaryPython
 
 Ensure-OllamaReady
 if (-not $SkipWarmup) {

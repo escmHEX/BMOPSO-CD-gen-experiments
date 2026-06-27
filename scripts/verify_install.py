@@ -150,6 +150,19 @@ def check_ppdb_status(base_url: str, timeout: float) -> str:
     return f"entries={payload.get('entries')}"
 
 
+def check_binary_ppdb_files() -> str:
+    source_path = ROOT / "data" / "external" / "ppdb" / "ppdb-2.0-s-all"
+    sqlite_index_path = ROOT / "data" / "turbulence" / "ppdb_index.sqlite"
+    require(
+        source_path.exists() or sqlite_index_path.exists(),
+        "Binary PPDB runtime files are missing. Rerun install without --skip-ppdb so "
+        "data/external/ppdb/ppdb-2.0-s-all or data/turbulence/ppdb_index.sqlite exists.",
+    )
+    if sqlite_index_path.exists():
+        return f"sqlite={sqlite_index_path.relative_to(ROOT)}"
+    return f"source={source_path.relative_to(ROOT)}"
+
+
 def check_initial_population(base_url: str, timeout: float) -> str:
     payload = request_json(base_url, "/api/initial-population/strategies", timeout=timeout)
     strategies = payload.get("strategies") if isinstance(payload.get("strategies"), list) else []
@@ -209,6 +222,7 @@ def main() -> int:
         [
             check("sbert pair", lambda: check_sbert_pair(args.base_url, args.timeout)),
             check("ppdb status", lambda: check_ppdb_status(args.base_url, args.timeout)),
+            check("binary ppdb", check_binary_ppdb_files),
             check("initial population", lambda: check_initial_population(args.base_url, args.timeout)),
             check("initial population comparison", lambda: check_initial_population_comparison(args.base_url, args.timeout)),
             check("proposal comparator", lambda: check_comparator_proposals(args.base_url, args.timeout)),
