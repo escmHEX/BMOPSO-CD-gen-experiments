@@ -64,7 +64,12 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
     def test_binary_initial_text_generation_probe_advances_to_llm_and_evaluation(self):
         module = load_module()
 
-        code = module.binary_initial_text_generation_probe_code(Path("runs/comparator/example/binary/exec/run"), 10)
+        code = module.binary_initial_text_generation_probe_code(
+            Path("runs/comparator/example/binary/exec/run"),
+            initial_text_count=10,
+            concurrency=1,
+            ollama_timeout=120,
+        )
 
         compile(code, "<binary-initial-text-generation-probe>", "exec")
         self.assertIn("reference.txt", code)
@@ -72,6 +77,10 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
         self.assertIn("semantic_fidelity_scores", code)
         self.assertIn("validate_generated_text", code)
         self.assertIn("generated_success", code)
+        self.assertIn("parallelism.initial_text_generation_max_concurrent", code)
+        self.assertIn("ollama.timeout_seconds", code)
+        self.assertIn("diagnostics", code)
+        self.assertIn("ConsoleProgress", code)
 
     def test_binary_smoke_command_runs_module_cli_with_small_overrides(self):
         module = load_module()
@@ -100,7 +109,7 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
         calls: list[str] = []
 
         def fake_run_python_probe(name, python_executable, code, timeout, **kwargs):
-            calls.append(name)
+            calls.append(f"{name}:{kwargs.get('stream_output', False)}")
             return module.ProbeResult(name, True, "ok")
 
         def fake_run_command_probe(name, command, timeout, **kwargs):
@@ -118,6 +127,10 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
                 str(run_dir),
                 "--binary-initial-text-count",
                 "10",
+                "--binary-initial-text-concurrency",
+                "1",
+                "--binary-initial-ollama-timeout",
+                "120",
                 "--binary-smoke-run",
                 "--smoke-n",
                 "3",
@@ -130,8 +143,8 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
                         exit_code = module.main()
 
         self.assertEqual(exit_code, 0)
-        self.assertIn("binary run prompt reduction", calls)
-        self.assertIn("binary initial text generation", calls)
+        self.assertIn("binary run prompt reduction:False", calls)
+        self.assertIn("binary initial text generation:True", calls)
         self.assertIn("binary smoke run", calls)
 
     def test_run_python_probe_prints_start_message(self):

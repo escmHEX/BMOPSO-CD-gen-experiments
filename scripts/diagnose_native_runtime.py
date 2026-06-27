@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
+import queue
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -230,7 +233,13 @@ print(f"reduced={{len(reduced)}} score_min={{score_min:.6f}} score_max={{score_m
 '''
 
 
-def binary_initial_text_generation_probe_code(run_dir: Path, initial_text_count: int) -> str:
+def binary_initial_text_generation_probe_code(
+    run_dir: Path,
+    *,
+    initial_text_count: int,
+    concurrency: int,
+    ollama_timeout: int,
+) -> str:
     return f'''
 from __future__ import annotations
 
@@ -258,6 +267,8 @@ if not reference_path.exists():
     raise FileNotFoundError(f"missing reference.txt: {{reference_path}}")
 
 config = RuntimeConfig(load_yaml(config_path))
+config.set("parallelism.initial_text_generation_max_concurrent", max(1, int({concurrency})))
+config.set("ollama.timeout_seconds", max(1, int({ollama_timeout})))
 components = ComponentSettings.from_config(config).order
 pools = {{component: [] for component in components}}
 with diagnostics_path.open("r", encoding="utf-8") as handle:
@@ -282,15 +293,32 @@ if missing:
     raise RuntimeError(f"run diagnostics do not contain all component pools: missing={{missing}}")
 
 reference_text = reference_path.read_text(encoding="utf-8").strip()
+probe_outdir = Path("diagnostics") / "binary-initial-text-generation" / run_dir.name
+probe_outdir.mkdir(parents=True, exist_ok=True)
 router = SemanticRouter(config)
-executor = SemanticTaskExecutor(config, outdir=None)
-builder = InitialPopulationBuilder(config, router, executor, rng_from_text(config.seed, None))
+executor = SemanticTaskExecutor(config, outdir=probe_outdir)
+
+
+class ConsoleProgress:
+    def info(self, message, *args):
+        text = message % args if args else message
+        print(text, flush=True)
+
+
+builder = InitialPopulationBuilder(config, router, executor, rng_from_text(config.seed, None), progress=ConsoleProgress())
 domain = str(config.get("experiment.domain"))
 candidates = builder._candidate_vectors(pools)
 reduced = builder._reduce_by_prompt_diversity(candidates, domain, 2 * config.n)
 limit = min(max(1, int({initial_text_count})), len(reduced))
 items = reduced[:limit]
 print(f"run_dir={{run_dir}}")
+print(f"diagnostic_outdir={{probe_outdir}}")
+print(
+    "effective_initial_text_generation_max_concurrent="
+    f"{{config.get('parallelism.initial_text_generation_max_concurrent')}} "
+    f"ollama_timeout_seconds={{config.get('ollama.timeout_seconds')}}",
+    flush=True,
+)
 print(f"generation_candidates={{len(items)}} reduced_available={{len(reduced)}}")
 
 generated = builder._generate_text_candidates(items, reference_text)
@@ -337,6 +365,7 @@ print(
     f"f1_max={{float(max(f1_values)):.6f}} evaluated_solutions={{len(solutions)}} "
     f"f2_min={{min(f2_values):.6f}} f2_max={{max(f2_values):.6f}}"
 )
+executor.save_caches()
 '''
 
 
@@ -385,10 +414,18 @@ def run_python_probe(
     timeout: float,
     *,
     heartbeat_seconds: float = PROBE_HEARTBEAT_SECONDS,
+    stream_output: bool = False,
 ) -> ProbeResult:
     if not python_executable.exists():
         return ProbeResult(name, False, f"missing python executable: {python_executable}")
     print(f"[INFO] running {name}: python={python_executable} timeout={timeout:g}s", flush=True)
+    if stream_output:
+        return run_streamed_process_probe(
+            name,
+            [str(python_executable), "-u", "-c", code],
+            timeout,
+            heartbeat_seconds=heartbeat_seconds,
+        )
     started = time.monotonic()
     process = subprocess.Popen(
         [str(python_executable), "-c", code],
@@ -435,7 +472,7 @@ def run_python_probe(
     return ProbeResult(name, False, detail, stdout, stderr)
 
 
-def run_command_probe(
+def run_streamed_process_probe(
     name: str,
     command: list[str],
     timeout: float,
@@ -445,40 +482,82 @@ def run_command_probe(
     executable = Path(command[0])
     if not executable.exists():
         return ProbeResult(name, False, f"missing executable: {executable}")
-    print(f"[INFO] running {name}: command={' '.join(command)} timeout={timeout:g}s", flush=True)
-    started = time.monotonic()
+
+    output_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
     process = subprocess.Popen(
         command,
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        bufsize=1,
+        env=env,
     )
-    stdout = ""
-    stderr = ""
+
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+
+    def read_stream(label: str, stream) -> None:
+        try:
+            for line in iter(stream.readline, ""):
+                output_queue.put((label, line))
+        finally:
+            stream.close()
+
+    threads = [
+        threading.Thread(target=read_stream, args=("stdout", process.stdout), daemon=True),
+        threading.Thread(target=read_stream, args=("stderr", process.stderr), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+
+    def drain_output() -> None:
+        while True:
+            try:
+                label, line = output_queue.get_nowait()
+            except queue.Empty:
+                return
+            if label == "stdout":
+                stdout_parts.append(line)
+            else:
+                stderr_parts.append(line)
+            print(f"[{name} {label}] {line}", end="", flush=True)
+
+    started = time.monotonic()
     try:
         while True:
+            drain_output()
             elapsed = time.monotonic() - started
             remaining = timeout - elapsed
+            if process.poll() is not None:
+                break
             if remaining <= 0:
                 process.kill()
-                stdout, stderr = process.communicate()
-                return ProbeResult(name, False, f"timed out after {timeout:g}s", stdout.strip(), stderr.strip())
+                process.wait()
+                drain_output()
+                stdout = "".join(stdout_parts).strip()
+                stderr = "".join(stderr_parts).strip()
+                return ProbeResult(name, False, f"timed out after {timeout:g}s", stdout, stderr)
             wait_for = max(0.1, min(float(heartbeat_seconds), remaining))
             try:
-                stdout, stderr = process.communicate(timeout=wait_for)
-                break
+                process.wait(timeout=wait_for)
             except subprocess.TimeoutExpired:
+                drain_output()
                 elapsed = time.monotonic() - started
                 print(f"[INFO] {name} still running after {format_seconds(elapsed)}", flush=True)
                 continue
     except KeyboardInterrupt:
         process.kill()
-        process.communicate()
+        process.wait()
         raise
 
-    stdout = stdout.strip()
-    stderr = stderr.strip()
+    for thread in threads:
+        thread.join(timeout=1)
+    drain_output()
+    stdout = "".join(stdout_parts).strip()
+    stderr = "".join(stderr_parts).strip()
     if process.returncode == 0:
         return ProbeResult(name, True, tail_text(stdout) or "ok", stdout, stderr)
     detail = describe_return_code(process.returncode)
@@ -494,6 +573,17 @@ def run_command_probe(
     return ProbeResult(name, False, detail, stdout, stderr)
 
 
+def run_command_probe(
+    name: str,
+    command: list[str],
+    timeout: float,
+    *,
+    heartbeat_seconds: float = PROBE_HEARTBEAT_SECONDS,
+) -> ProbeResult:
+    print(f"[INFO] running {name}: command={' '.join(command)} timeout={timeout:g}s", flush=True)
+    return run_streamed_process_probe(name, command, timeout, heartbeat_seconds=heartbeat_seconds)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diagnose native ML runtime compatibility.")
     parser.add_argument("--binary-python", type=Path, default=default_binary_python())
@@ -502,12 +592,18 @@ def main() -> int:
     parser.add_argument("--skip-binary", action="store_true")
     parser.add_argument("--binary-run-dir", type=Path)
     parser.add_argument("--binary-initial-text-count", type=int, default=0)
+    parser.add_argument("--binary-initial-text-concurrency", type=int, default=1)
+    parser.add_argument("--binary-initial-ollama-timeout", type=int, default=120)
     parser.add_argument("--binary-smoke-run", action="store_true")
     parser.add_argument("--smoke-n", type=int, default=3)
     parser.add_argument("--smoke-iterations", type=int, default=1)
     args = parser.parse_args()
     if args.binary_initial_text_count < 0:
         parser.error("--binary-initial-text-count must be non-negative")
+    if args.binary_initial_text_concurrency <= 0:
+        parser.error("--binary-initial-text-concurrency must be positive")
+    if args.binary_initial_ollama_timeout <= 0:
+        parser.error("--binary-initial-ollama-timeout must be positive")
     if args.binary_initial_text_count > 0 and args.binary_run_dir is None:
         parser.error("--binary-initial-text-count requires --binary-run-dir")
     if args.binary_smoke_run and args.binary_run_dir is None:
@@ -547,9 +643,12 @@ def main() -> int:
                         args.binary_python,
                         binary_initial_text_generation_probe_code(
                             args.binary_run_dir,
-                            args.binary_initial_text_count,
+                            initial_text_count=args.binary_initial_text_count,
+                            concurrency=args.binary_initial_text_concurrency,
+                            ollama_timeout=args.binary_initial_ollama_timeout,
                         ),
                         args.timeout,
+                        stream_output=True,
                     )
                 )
             if args.binary_smoke_run:
