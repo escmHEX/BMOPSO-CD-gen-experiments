@@ -14,12 +14,38 @@ git submodule update --init --recursive
 ## Antes de ejecutar el instalador
 
 - Tener red y espacio suficiente para modelos, entornos Python y PPDB.
-- Configurar Kaggle API para PPDB: `~/.kaggle/kaggle.json` o `KAGGLE_USERNAME` / `KAGGLE_KEY`.
+- Configurar Kaggle API para descargar PPDB.
 - En Windows, tener Git instalado y `winget` disponible.
 - En Ubuntu no necesitas `sudo` si el servidor ya trae `git` y `curl`. Usa `--no-sudo` para instalar Ollama dentro del repo.
-- Si en Ubuntu faltan herramientas base como `git` o `curl`, el script no puede instalarlas sin `sudo`; en ese caso debes pedirlas al administrador o cargar el modulo equivalente del servidor.
+- Si en Ubuntu faltan herramientas base como `git` o `curl`, el instalador fallara antes de descargar dependencias.
 
 Los scripts instalan o preparan automaticamente `uv`, Python 3.13, los venvs, dependencias Python, Kaggle CLI, Ollama cuando falta, modelos Ollama y modelos Python. En modo sin `sudo`, Ollama queda en `.local/ollama` y sus modelos en `.local/ollama-models`.
+
+## Kaggle API
+
+Antes de ejecutar el instalador, copia tu token de Kaggle y configura una de estas opciones.
+
+Ubuntu:
+
+```bash
+export KAGGLE_API_TOKEN=<TU_TOKEN_KAGGLE>
+```
+
+O guardalo para que Kaggle CLI lo lea automaticamente:
+
+```bash
+mkdir -p ~/.kaggle
+printf '%s' '<TU_TOKEN_KAGGLE>' > ~/.kaggle/access_token
+chmod 600 ~/.kaggle/access_token
+```
+
+Windows PowerShell:
+
+```powershell
+$env:KAGGLE_API_TOKEN = "<TU_TOKEN_KAGGLE>"
+```
+
+Tambien se mantiene soporte para el formato clasico `~/.kaggle/kaggle.json` o las variables `KAGGLE_USERNAME` y `KAGGLE_KEY`.
 
 ## Ubuntu
 
@@ -47,7 +73,7 @@ El instalador crea `.venv`, prepara venvs aislados para EVOLMD, EVOLMD-MO, MESAP
 .\.venv\Scripts\python.exe scripts\verify_install.py --base-url http://127.0.0.1:4173
 ```
 
-El daemon de Windows usa Task Scheduler. El daemon de Ubuntu usa `systemd --user` cuando esta disponible y `nohup` como fallback. Sin `sudo`, no puede ejecutar `loginctl enable-linger`; si la universidad mata procesos de usuario al cerrar SSH, debes pedir que habiliten `linger` para tu usuario o usar el gestor de jobs del servidor.
+El daemon de Windows usa Task Scheduler. El daemon de Ubuntu usa `systemd --user` cuando esta disponible y `nohup` como fallback. Sin `sudo`, no intenta configurar `loginctl enable-linger`; si el entorno cierra procesos al terminar la sesion, usa `--nohup`, `systemd --user` con linger ya habilitado o el gestor de procesos disponible.
 
 ## Servidor manual
 

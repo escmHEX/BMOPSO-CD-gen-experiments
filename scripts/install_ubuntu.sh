@@ -245,6 +245,8 @@ sync_binary_repository() {
 }
 
 has_kaggle_credentials() {
+  [[ -n "${KAGGLE_API_TOKEN:-}" ]] && return 0
+  [[ -f "$HOME/.kaggle/access_token" ]] && return 0
   [[ -f "$HOME/.kaggle/kaggle.json" ]] && return 0
   [[ -n "${KAGGLE_USERNAME:-}" && -n "${KAGGLE_KEY:-}" ]] && return 0
   return 1
@@ -260,7 +262,7 @@ prepare_ppdb() {
     return
   fi
   if [[ "$FORCE_PPDB" -eq 1 || ! -f "$ppdb_source" ]]; then
-    has_kaggle_credentials || fail "Kaggle credentials are missing. Configure ~/.kaggle/kaggle.json or KAGGLE_USERNAME/KAGGLE_KEY for cudawarrior/ppdb-2-0-s-all."
+    has_kaggle_credentials || fail "Kaggle credentials are missing. Configure KAGGLE_API_TOKEN, ~/.kaggle/access_token, ~/.kaggle/kaggle.json, or KAGGLE_USERNAME/KAGGLE_KEY for cudawarrior/ppdb-2-0-s-all."
     mkdir -p "$ppdb_dir"
     "$portal_python" -m kaggle datasets download -d cudawarrior/ppdb-2-0-s-all -p "$ppdb_dir" --unzip
     if [[ ! -f "$ppdb_source" ]]; then

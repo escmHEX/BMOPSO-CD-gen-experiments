@@ -120,6 +120,13 @@ function Sync-BinaryRepository {
 }
 
 function Has-KaggleCredentials {
+  if (-not [string]::IsNullOrWhiteSpace($env:KAGGLE_API_TOKEN)) {
+    return $true
+  }
+  $accessToken = Join-Path $env:USERPROFILE ".kaggle\access_token"
+  if (Test-Path $accessToken) {
+    return $true
+  }
   $kaggleJson = Join-Path $env:USERPROFILE ".kaggle\kaggle.json"
   if (Test-Path $kaggleJson) {
     return $true
@@ -137,7 +144,7 @@ function Prepare-Ppdb([string]$PortalPython) {
   $ppdbIndex = Join-Path $Root "data\turbulence\ppdb_index.json"
   if ($ForcePpdb -or -not (Test-Path $ppdbSource)) {
     if (-not (Has-KaggleCredentials)) {
-      Fail "Kaggle credentials are missing. Configure %USERPROFILE%\.kaggle\kaggle.json or KAGGLE_USERNAME/KAGGLE_KEY for cudawarrior/ppdb-2-0-s-all."
+      Fail "Kaggle credentials are missing. Configure KAGGLE_API_TOKEN, %USERPROFILE%\.kaggle\access_token, %USERPROFILE%\.kaggle\kaggle.json, or KAGGLE_USERNAME/KAGGLE_KEY for cudawarrior/ppdb-2-0-s-all."
     }
     New-Item -ItemType Directory -Force -Path $ppdbDir | Out-Null
     Invoke-Checked $PortalPython @("-m", "kaggle", "datasets", "download", "-d", "cudawarrior/ppdb-2-0-s-all", "-p", $ppdbDir, "--unzip")
