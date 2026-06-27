@@ -103,6 +103,7 @@ def binary_prompt_reduction_probe_code() -> str:
     return r'''
 import numpy as np
 
+from binary_mopso_cd.initialization import greedy_max_min_indices
 from binary_mopso_cd.services.embedding import EmbeddingCache, EmbeddingService
 
 service = EmbeddingService(
@@ -120,11 +121,15 @@ prompts = [
     for index in range(40)
 ]
 embeddings = service.encode(prompts, text_type="prompt")
+selected = greedy_max_min_indices(embeddings, 20)
 scores = []
-for index in range(len(prompts)):
-    others = [other for other in range(len(prompts)) if other != index]
+for index in selected:
+    others = [other for other in selected if other != index]
     scores.append(float(np.min(1.0 - (embeddings[index] @ embeddings[others].T))))
-print(f"shape={tuple(embeddings.shape)} dtype={embeddings.dtype} scores={len(scores)} min={min(scores):.6f}")
+print(
+    f"shape={tuple(embeddings.shape)} dtype={embeddings.dtype} "
+    f"selected={len(selected)} scores={len(scores)} min={min(scores):.6f}"
+)
 '''
 
 

@@ -46,6 +46,7 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
 
         self.assertIn("EmbeddingService", code)
         self.assertIn("range(40)", code)
+        self.assertIn("greedy_max_min_indices", code)
         self.assertIn("embeddings[index] @ embeddings[others].T", code)
 
     def test_run_python_probe_prints_start_message(self):
