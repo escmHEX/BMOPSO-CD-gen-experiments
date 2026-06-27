@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib
 import json
 import os
@@ -10,6 +11,38 @@ from unittest.mock import patch
 
 
 class RuntimeSetupTests(unittest.TestCase):
+    def test_warmup_direct_runtime_imports_are_backend_requirements(self):
+        import scripts.warmup_runtime as warmup_runtime
+
+        module_path = Path(warmup_runtime.__file__)
+        tree = ast.parse(module_path.read_text(encoding="utf-8"))
+        imported_modules: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_modules.update(alias.name.split(".", 1)[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_modules.add(node.module.split(".", 1)[0])
+
+        runtime_imports = {
+            "sentence_transformers": "sentence-transformers",
+            "transformers": "transformers",
+            "nltk": "nltk",
+            "spacy": "spacy",
+        }
+        requirements_text = Path("requirements.backend.txt").read_text(encoding="utf-8")
+        declared_requirements = {
+            line.split("==", 1)[0].split(">=", 1)[0].split("<", 1)[0].strip().lower()
+            for line in requirements_text.splitlines()
+            if line.strip() and not line.startswith("#") and "://" not in line
+        }
+
+        missing = [
+            requirement
+            for module_name, requirement in runtime_imports.items()
+            if module_name in imported_modules and requirement.lower() not in declared_requirements
+        ]
+        self.assertEqual(missing, [])
+
     def test_build_comparator_local_config_uses_ubuntu_venvs(self):
         from scripts.setup_runtime import build_comparator_local_config
 
