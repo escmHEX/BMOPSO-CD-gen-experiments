@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -35,6 +38,63 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
 
         self.assertIn("EmbeddingService", code)
         self.assertIn("encode", code)
+
+    def test_binary_prompt_reduction_probe_matches_initialization_shape(self):
+        module = load_module()
+
+        code = module.binary_prompt_reduction_probe_code()
+
+        self.assertIn("EmbeddingService", code)
+        self.assertIn("range(40)", code)
+        self.assertIn("embeddings[index] @ embeddings[others].T", code)
+
+    def test_run_python_probe_prints_start_message(self):
+        module = load_module()
+
+        class FakeProcess:
+            returncode = 0
+
+            def communicate(self, timeout=None):
+                return "ok", ""
+
+        output = io.StringIO()
+        with patch.object(module.subprocess, "Popen", return_value=FakeProcess()):
+            with contextlib.redirect_stdout(output):
+                result = module.run_python_probe("binary sbert", Path(sys.executable), "print('ok')", 10)
+
+        self.assertTrue(result.ok)
+        self.assertIn("[INFO] running binary sbert:", output.getvalue())
+        self.assertIn("timeout=10s", output.getvalue())
+
+    def test_run_python_probe_prints_heartbeat_while_waiting(self):
+        module = load_module()
+
+        class FakeProcess:
+            returncode = 0
+
+            def __init__(self):
+                self.calls = 0
+
+            def communicate(self, timeout=None):
+                self.calls += 1
+                if self.calls == 1:
+                    raise module.subprocess.TimeoutExpired(["python"], timeout)
+                return "ok", ""
+
+        output = io.StringIO()
+        with patch.object(module.subprocess, "Popen", return_value=FakeProcess()):
+            with patch.object(module.time, "monotonic", side_effect=[0, 30, 31, 31]):
+                with contextlib.redirect_stdout(output):
+                    result = module.run_python_probe(
+                        "binary sbert",
+                        Path(sys.executable),
+                        "print('ok')",
+                        60,
+                        heartbeat_seconds=30,
+                    )
+
+        self.assertTrue(result.ok)
+        self.assertIn("[INFO] binary sbert still running after", output.getvalue())
 
 
 if __name__ == "__main__":

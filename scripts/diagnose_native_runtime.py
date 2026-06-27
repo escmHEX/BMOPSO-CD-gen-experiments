@@ -16,11 +16,13 @@ import platform
 import signal
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PROBE_HEARTBEAT_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,10 @@ def cpu_flag_summary() -> str:
     return "cpu flags not found in /proc/cpuinfo"
 
 
+def format_seconds(seconds: float) -> str:
+    return f"{int(seconds)}s"
+
+
 def portal_embedding_probe_code() -> str:
     return r'''
 from sentence_transformers import SentenceTransformer
@@ -93,26 +99,83 @@ print(f"shape={tuple(embeddings.shape)} dtype={embeddings.dtype}")
 '''
 
 
-def run_python_probe(name: str, python_executable: Path, code: str, timeout: float) -> ProbeResult:
+def binary_prompt_reduction_probe_code() -> str:
+    return r'''
+import numpy as np
+
+from binary_mopso_cd.services.embedding import EmbeddingCache, EmbeddingService
+
+service = EmbeddingService(
+    model_name="all-MiniLM-L6-v2",
+    resolved_model_name="sentence-transformers/all-MiniLM-L6-v2",
+    batch_size=64,
+    config_version="diagnostic",
+    cache=EmbeddingCache(None),
+)
+prompts = [
+    (
+        "Generate a short social media message related to crises and emergencies "
+        f"using semantic components role=person {index}, topic=quarantine, action=avoid phone."
+    )
+    for index in range(40)
+]
+embeddings = service.encode(prompts, text_type="prompt")
+scores = []
+for index in range(len(prompts)):
+    others = [other for other in range(len(prompts)) if other != index]
+    scores.append(float(np.min(1.0 - (embeddings[index] @ embeddings[others].T))))
+print(f"shape={tuple(embeddings.shape)} dtype={embeddings.dtype} scores={len(scores)} min={min(scores):.6f}")
+'''
+
+
+def run_python_probe(
+    name: str,
+    python_executable: Path,
+    code: str,
+    timeout: float,
+    *,
+    heartbeat_seconds: float = PROBE_HEARTBEAT_SECONDS,
+) -> ProbeResult:
     if not python_executable.exists():
         return ProbeResult(name, False, f"missing python executable: {python_executable}")
+    print(f"[INFO] running {name}: python={python_executable} timeout={timeout:g}s", flush=True)
+    started = time.monotonic()
+    process = subprocess.Popen(
+        [str(python_executable), "-c", code],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout = ""
+    stderr = ""
     try:
-        completed = subprocess.run(
-            [str(python_executable), "-c", code],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as error:
-        return ProbeResult(name, False, f"timed out after {timeout:g}s", error.stdout or "", error.stderr or "")
+        while True:
+            elapsed = time.monotonic() - started
+            remaining = timeout - elapsed
+            if remaining <= 0:
+                process.kill()
+                stdout, stderr = process.communicate()
+                return ProbeResult(name, False, f"timed out after {timeout:g}s", stdout.strip(), stderr.strip())
+            wait_for = max(0.1, min(float(heartbeat_seconds), remaining))
+            try:
+                stdout, stderr = process.communicate(timeout=wait_for)
+                break
+            except subprocess.TimeoutExpired:
+                elapsed = time.monotonic() - started
+                print(f"[INFO] {name} still running after {format_seconds(elapsed)}", flush=True)
+                continue
+    except KeyboardInterrupt:
+        process.kill()
+        process.communicate()
+        raise
 
-    stdout = completed.stdout.strip()
-    stderr = completed.stderr.strip()
-    if completed.returncode == 0:
+    stdout = stdout.strip()
+    stderr = stderr.strip()
+    if process.returncode == 0:
         return ProbeResult(name, True, stdout or "ok", stdout, stderr)
-    detail = describe_return_code(completed.returncode)
-    if completed.returncode == -signal.SIGILL:
+    detail = describe_return_code(process.returncode)
+    if process.returncode == -signal.SIGILL:
         detail += (
             "; SIGILL usually means a native dependency such as torch, numpy, scikit-learn, "
             "or sentence-transformers used CPU instructions unsupported by this node"
@@ -140,6 +203,14 @@ def main() -> int:
         results.append(run_python_probe("portal sbert", Path(sys.executable), portal_embedding_probe_code(), args.timeout))
     if not args.skip_binary:
         results.append(run_python_probe("binary sbert", args.binary_python, binary_embedding_probe_code(), args.timeout))
+        results.append(
+            run_python_probe(
+                "binary prompt reduction",
+                args.binary_python,
+                binary_prompt_reduction_probe_code(),
+                args.timeout,
+            )
+        )
 
     for result in results:
         prefix = "OK" if result.ok else "FAIL"
