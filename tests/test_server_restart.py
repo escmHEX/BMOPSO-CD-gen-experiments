@@ -162,6 +162,41 @@ class ToolPortalRestartTests(unittest.TestCase):
         self.assertEqual(json.loads(helper_command[4]), [r"C:\portal\.venv\Scripts\python.exe", "server.py"])
         self.assertEqual(helper_command[-2:], ["127.0.0.1", "4173"])
 
+    def test_current_systemd_user_service_matches_current_main_pid(self):
+        completed = Mock(returncode=0, stdout="ActiveState=active\nMainPID=4321\n", stderr="")
+
+        with patch.object(server.sys, "platform", "linux"), patch.object(
+            server.shutil,
+            "which",
+            return_value="/usr/bin/systemctl",
+        ), patch.dict(
+            server.os.environ,
+            {server.PORTAL_SYSTEMD_SERVICE_ENV: "custom-portal"},
+            clear=False,
+        ):
+            service_name = server.current_systemd_user_service(current_pid=4321, runner=Mock(return_value=completed))
+
+        self.assertEqual(service_name, "custom-portal.service")
+
+    def test_current_systemd_user_service_ignores_other_main_pid(self):
+        completed = Mock(returncode=0, stdout="ActiveState=active\nMainPID=9999\n", stderr="")
+
+        with patch.object(server.sys, "platform", "linux"), patch.object(
+            server.shutil,
+            "which",
+            return_value="/usr/bin/systemctl",
+        ):
+            service_name = server.current_systemd_user_service(current_pid=4321, runner=Mock(return_value=completed))
+
+        self.assertIsNone(service_name)
+
+    def test_systemd_restart_helper_uses_no_block_user_restart(self):
+        command = server.build_portal_systemd_restart_helper_command("bmopso-cd-experiments.service", 0.2)
+
+        self.assertEqual(command[1], "-c")
+        self.assertIn("--no-block", command[2])
+        self.assertEqual(command[-2:], ["0.2", "bmopso-cd-experiments.service"])
+
     def test_hidden_subprocess_kwargs_avoid_windows_console_creation(self):
         with patch.object(server.sys, "platform", "win32"):
             kwargs = server.hidden_subprocess_kwargs()
@@ -200,6 +235,37 @@ class ToolPortalRestartTests(unittest.TestCase):
         self.assertIn("C:\\portal", helper_command)
         self.assertEqual(calls[0][1]["cwd"], "C:\\portal")
         self.assertEqual(exits, [0])
+
+    def test_restart_endpoint_uses_systemd_when_current_process_is_user_service(self):
+        sent: list[tuple[int, dict]] = []
+        fake_handler = SimpleNamespace(
+            portal_path_parts=lambda: ["restart"],
+            read_request_body=lambda: b"{}",
+            headers={server.PORTAL_RESTART_HEADER: "1"},
+            portal_services=lambda: {},
+            send_json=lambda status, payload: sent.append((status, payload)),
+            portal_root=Path("C:/portal"),
+            portal_host="0.0.0.0",
+            portal_port=4173,
+            lm_studio_base="http://127.0.0.1:11434",
+            portal_started_at="2026-06-27T03:09:25+00:00",
+            wfile=SimpleNamespace(flush=Mock()),
+        )
+
+        with patch.object(
+            server,
+            "current_systemd_user_service",
+            return_value="bmopso-cd-experiments.service",
+        ), patch.object(server, "schedule_portal_systemd_restart") as schedule_systemd_restart, patch.object(
+            server,
+            "schedule_portal_restart",
+        ) as schedule_restart:
+            server.ToolPortalHandler.handle_portal_post(fake_handler)
+
+        self.assertEqual(sent[0][0], 202)
+        self.assertEqual(sent[0][1]["restartMode"], "systemd-user")
+        schedule_systemd_restart.assert_called_once_with("bmopso-cd-experiments.service", Path("C:/portal"))
+        schedule_restart.assert_not_called()
 
     def test_main_skips_port_release_for_internal_restart(self):
         service = SimpleNamespace()

@@ -6,6 +6,7 @@ import http.server
 import json
 import mimetypes
 import os
+import shutil
 import socketserver
 import subprocess
 import sys
@@ -49,6 +50,8 @@ PORTAL_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 PORTAL_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
 PORTAL_RESTART_HELPER_TIMEOUT_SECONDS = 12
 PORTAL_SKIP_PORT_RELEASE_FLAG = "--skip-port-release"
+PORTAL_SYSTEMD_SERVICE_ENV = "PORTAL_SYSTEMD_SERVICE"
+DEFAULT_PORTAL_SYSTEMD_SERVICE = "bmopso-cd-experiments.service"
 
 
 def release_existing_server_port(host: str, port: int) -> None:
@@ -293,6 +296,71 @@ def build_portal_restart_command(root: Path, host: str, port: int, lm_studio_bas
     ]
 
 
+def normalize_systemd_service_name(service_name: str) -> str:
+    value = service_name.strip()
+    if not value:
+        return DEFAULT_PORTAL_SYSTEMD_SERVICE
+    if "." not in value:
+        return f"{value}.service"
+    return value
+
+
+def portal_systemd_service_candidates() -> list[str]:
+    candidates = [
+        normalize_systemd_service_name(os.environ.get(PORTAL_SYSTEMD_SERVICE_ENV, "")),
+        DEFAULT_PORTAL_SYSTEMD_SERVICE,
+    ]
+    deduplicated: list[str] = []
+    for candidate in candidates:
+        if candidate not in deduplicated:
+            deduplicated.append(candidate)
+    return deduplicated
+
+
+def parse_systemctl_show_properties(output: str) -> dict[str, str]:
+    properties: dict[str, str] = {}
+    for line in output.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            properties[key] = value
+    return properties
+
+
+def current_systemd_user_service(
+    current_pid: int | None = None,
+    runner=None,
+) -> str | None:
+    if sys.platform == "win32" or shutil.which("systemctl") is None:
+        return None
+    process_runner = runner or subprocess.run
+    pid = str(current_pid if current_pid is not None else os.getpid())
+    for service_name in portal_systemd_service_candidates():
+        try:
+            completed = process_runner(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    service_name,
+                    "--property=ActiveState",
+                    "--property=MainPID",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+                timeout=3,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if completed.returncode != 0:
+            continue
+        properties = parse_systemctl_show_properties(completed.stdout)
+        if properties.get("ActiveState") in {"active", "activating"} and properties.get("MainPID") == pid:
+            return service_name
+    return None
+
+
 def portal_restart_endpoint_from_command(command: list[str]) -> tuple[str, int]:
     host = DEFAULT_HOST
     port = DEFAULT_PORT
@@ -333,6 +401,52 @@ def portal_restart_subprocess_kwargs(cwd: Path) -> dict:
         "close_fds": True,
         **hidden_subprocess_kwargs(detached=True),
     }
+
+
+def build_portal_systemd_restart_helper_command(service_name: str, delay_seconds: float) -> list[str]:
+    helper_code = r"""
+import subprocess
+import sys
+import time
+
+delay_seconds = float(sys.argv[1])
+service_name = sys.argv[2]
+
+if delay_seconds > 0:
+    time.sleep(delay_seconds)
+
+subprocess.run(
+    ["systemctl", "--user", "--no-block", "restart", service_name],
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    check=False,
+)
+"""
+    return [
+        windowless_python_executable(),
+        "-c",
+        helper_code,
+        str(delay_seconds),
+        service_name,
+    ]
+
+
+def schedule_portal_systemd_restart(
+    service_name: str,
+    cwd: Path,
+    delay_seconds: float = 0.35,
+    launcher=None,
+) -> threading.Thread:
+    process_launcher = launcher or subprocess.Popen
+
+    def restart() -> None:
+        helper_command = build_portal_systemd_restart_helper_command(service_name, delay_seconds)
+        process_launcher(helper_command, **portal_restart_subprocess_kwargs(cwd))
+
+    thread = threading.Thread(target=restart, name="portal-systemd-restart", daemon=True)
+    thread.start()
+    return thread
 
 
 def build_portal_restart_helper_command(
@@ -634,10 +748,12 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             self.portal_port,
             self.lm_studio_base,
         )
+        systemd_service = current_systemd_user_service()
         self.send_json(
             202,
             {
                 "status": "restarting",
+                "restartMode": "systemd-user" if systemd_service else "self",
                 "pid": os.getpid(),
                 "startedAt": self.portal_started_at,
             },
@@ -646,7 +762,10 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.flush()
         except OSError:
             pass
-        schedule_portal_restart(command, self.portal_root)
+        if systemd_service:
+            schedule_portal_systemd_restart(systemd_service, self.portal_root)
+        else:
+            schedule_portal_restart(command, self.portal_root)
 
     def portal_services(self) -> dict[str, object]:
         return {

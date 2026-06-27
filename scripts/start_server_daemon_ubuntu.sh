@@ -104,6 +104,7 @@ After=network.target
 Type=simple
 WorkingDirectory=$ROOT
 Environment="COMPARATOR_CONFIG_PATH=$CONFIG"
+Environment="PORTAL_SYSTEMD_SERVICE=$SERVICE_NAME.service"
 Environment="PATH=$OLLAMA_LOCAL_DIR/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="OLLAMA_MODELS=${OLLAMA_MODELS:-$OLLAMA_LOCAL_MODELS_DIR}"
 ExecStart="$PYTHON" "$SERVER" --host "$HOST" --port "$PORT" --lm-studio "$LM_STUDIO"
