@@ -94,7 +94,21 @@ LM Studio sigue siendo usable manualmente seleccionando modo `native` y base URL
 
 `scripts/verify_install.py` comprueba salud del portal, Ollama, chat LLM, SBERT, PPDB, poblacion inicial, comparacion inicial y comparador de propuestas con EVOLMD, EVOLMD-MO, MESAP y Binary disponibles.
 
-Validacion de codigo local:
+Para comprobar que el servidor quedo funcionando, ejecuta este comando despues de iniciar el daemon:
+
+Ubuntu:
+
+```bash
+bash scripts/verify_install.py --base-url http://127.0.0.1:4173
+```
+
+Windows:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\verify_install.py --base-url http://127.0.0.1:4173
+```
+
+Los siguientes comandos son validacion de codigo para desarrollo. Ejecutalos al final solo si modificaste el repo y quieres comprobar tests/whitespace antes de commitear:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest tests.test_server_restart tests.test_turbulence_comparison tests.test_sbert_service tests.test_repetition_aggregation
