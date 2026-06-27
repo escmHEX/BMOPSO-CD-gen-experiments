@@ -589,6 +589,34 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(state["stageTotal"], 6)
         self.assertEqual(state["stageLabel"], "Construyendo poblacion inicial")
 
+    def test_comparator_promotes_binary_initialization_detail_log(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        run = {
+            "status": "running",
+            "startedAtEpoch": None,
+            "cancelRequested": False,
+            "proposalStates": {proposal.proposal_id: service._initial_proposal_state(proposal)},
+        }
+        service._apply_log_progress_unlocked(
+            run,
+            proposal.proposal_id,
+            "2026-06-03 00:05:01 | INFO | 3/6 Construyendo poblacion inicial",
+        )
+        progress_detail = (
+            "initial population | text generation progress | completed=5/10 (50%) "
+            "| failed=0 | max_concurrent=10 | elapsed=00:00:33"
+        )
+        service._apply_log_progress_unlocked(
+            run,
+            proposal.proposal_id,
+            f"2026-06-03 00:05:45 | INFO | {progress_detail}",
+        )
+
+        state = run["proposalStates"][proposal.proposal_id]
+        self.assertEqual(state["stageLabel"], progress_detail)
+        self.assertGreater(state["progress"], 0.40)
+
     def test_comparator_parses_timestamped_binary_generation_log(self):
         service = ComparatorService(Path("."))
         proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")

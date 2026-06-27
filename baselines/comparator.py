@@ -69,7 +69,11 @@ SUPPORTED_GIT_PULL_MODES = {"ff-only"}
 EXECUTION_MODE_FAIR_SEQUENTIAL = "fair_sequential"
 EXECUTION_MODE_EXPLORATORY_PARALLEL = "exploratory_parallel"
 SUPPORTED_EXECUTION_MODES = {EXECUTION_MODE_FAIR_SEQUENTIAL, EXECUTION_MODE_EXPLORATORY_PARALLEL}
-PROPOSAL_TOTALS = {proposal_id: total for proposal_id, total in (("evolmd", 6), ("mesap", 6), ("evolmd-mo", 5), ("binary-mopso-cd", 6))}
+PROPOSAL_TOTALS = {
+    proposal_id: total
+    for proposal_id, total in (("evolmd", 6), ("mesap", 6), ("evolmd-mo", 5), ("binary-mopso-cd", 6))
+}
+BINARY_DETAIL_LOG_PREFIXES = ("initial population |", "PPDB SQLite index")
 
 
 def resolve_comparator_config_path(config_dir: Path | None = None) -> Path:
@@ -4939,6 +4943,9 @@ class ComparatorService:
             stage_index = max(int(state.get("stageIndex") or 1), 1)
             base = clamp((stage_index - 1) / stage_total, 0.0, 0.98)
             state["progress"] = max(float(state.get("progress") or 0.0), clamp(base + percent / stage_total, 0.0, 0.98))
+
+        if base_proposal_id == "binary-mopso-cd" and progress_message.startswith(BINARY_DETAIL_LOG_PREFIXES):
+            state["stageLabel"] = progress_message[:120]
 
         if not state.get("stageLabel") or state.get("stageLabel") == "En cola":
             state["stageLabel"] = progress_message[:120]
