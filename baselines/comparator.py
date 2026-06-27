@@ -135,6 +135,8 @@ POSTHOC_ENTITY_ENTROPY_POS = {"NOUN", "VERB", "ADJ"}
 PROXY_OBJECTIVE_NAMES = ["fidelity_sbert_proxy", "semantic_diversity_proxy"]
 MODULE_ROOT = Path(__file__).resolve().parents[1]
 BINARY_PROPOSAL_ID = "binary-mopso-cd"
+BINARY_LOCAL_REPOSITORY = "baselines/external/binary-mopso-cd"
+BINARY_DEVELOPMENT_REPOSITORY = "../Binary MOPSO-CD"
 BINARY_TASK_MODEL_PREFIX = "router.task_models."
 BINARY_TASK_THINKING_PREFIX = "router.task_thinking."
 BINARY_THINKING_MODE_CHOICES = ("false", "low", "medium", "high")
@@ -330,10 +332,12 @@ def module_relative_path(value: str) -> Path:
 def configured_binary_repository_path() -> str:
     binary_config = COMPARATOR_PROPOSAL_CONFIG.get(BINARY_PROPOSAL_ID)
     binary_config = binary_config if isinstance(binary_config, dict) else {}
-    return str(
-        binary_config.get("repositoryPath")
-        or r"C:\Users\Admin\Desktop\ImplementaciÃ³n\Binary MOPSO-CD"
-    )
+    configured = str(binary_config.get("repositoryPath") or BINARY_LOCAL_REPOSITORY)
+    if module_relative_path(configured).exists():
+        return configured
+    if configured == BINARY_LOCAL_REPOSITORY and module_relative_path(BINARY_DEVELOPMENT_REPOSITORY).exists():
+        return BINARY_DEVELOPMENT_REPOSITORY
+    return configured
 
 
 def flatten_mapping_leaves(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
@@ -1781,10 +1785,7 @@ PROPOSALS: tuple[ProposalDefinition, ...] = (
     ProposalDefinition(
         proposal_id="binary-mopso-cd",
         display_name="Binary MOPSO-CD",
-        repository_path=str(
-            proposal_config("binary-mopso-cd").get("repositoryPath")
-            or r"C:\Users\Admin\Desktop\Implementación\Binary MOPSO-CD"
-        ),
+        repository_path=configured_binary_repository_path(),
         description="Semantic Binary MOPSO-CD optimizer with explicit SBERT fidelity/diversity and Entropy-TOPSIS-MMR selection.",
         objective_names=("f1_fidelity_sbert", "f2_semantic_diversity"),
         result_file="pareto_front.json",
@@ -1829,8 +1830,22 @@ def proposal_python_executable(root: Path, repository: Path, proposal: ProposalD
     if proposal.python_executable:
         configured = resolve_config_path(root, proposal.python_executable)
         return str(configured)
-    for environment_name in (".venv", "venv"):
-        venv_python = repository / environment_name / "Scripts" / "python.exe"
+    windows_candidates = [
+        repository / ".venv" / "Scripts" / "python.exe",
+        repository / "venv" / "Scripts" / "python.exe",
+        root / "baselines" / "venvs" / proposal.proposal_id / "Scripts" / "python.exe",
+    ]
+    posix_candidates = [
+        repository / ".venv" / "bin" / "python",
+        repository / "venv" / "bin" / "python",
+        root / "baselines" / "venvs" / proposal.proposal_id / "bin" / "python",
+    ]
+    candidates = (
+        windows_candidates + posix_candidates
+        if sys.platform == "win32"
+        else posix_candidates + windows_candidates
+    )
+    for venv_python in candidates:
         if venv_python.exists():
             return str(venv_python)
     return sys.executable

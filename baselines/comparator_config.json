@@ -51,8 +51,8 @@
       }
     },
     "binary-mopso-cd": {
-      "repositoryPath": "C:\\Users\\Admin\\Desktop\\Implementaci\u00f3n\\Binary MOPSO-CD",
-      "pythonExecutable": "C:\\Users\\Admin\\Desktop\\Implementaci\u00f3n\\Binary MOPSO-CD\\.venv\\Scripts\\python.exe",
+      "repositoryPath": "baselines/external/binary-mopso-cd",
+      "pythonExecutable": "",
       "pythonPathEntries": [],
       "requiredModules": ["torch", "sentence_transformers", "sklearn", "numpy", "spacy", "ollama"],
       "git": {

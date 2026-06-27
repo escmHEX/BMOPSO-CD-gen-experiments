@@ -75,7 +75,7 @@ La sección `Comparador de propuestas` integra baselines clonados como submodule
 
 - `baselines/external/evolmd`
 - `baselines/external/evolmd-mo`
-- `C:\Users\Admin\Desktop\Implementación\Binary MOPSO-CD`
+- `baselines/external/binary-mopso-cd`
 
 Los submodules EVOLMD y EVOLMD-MO deben apuntar a los forks `escmHEX/MDPI-EVOLMD` y `escmHEX/EVOLMD-MO`.
 
@@ -138,7 +138,7 @@ Las métricas de costo finales de `proposal.cost`, que son las usadas para el an
 
 Si al menos una repetición completa correctamente, las métricas finales de calidad y costo de la propuesta se calculan sobre las repeticiones completadas. Las repeticiones fallidas quedan disponibles en `repetitions` y se informa el faltante en `error`. Si ninguna repetición completa, no hay métricas de calidad agregadas y el costo se promedia sobre los intentos fallidos o cancelados disponibles, conservando también sus totales.
 
-Antes de ejecutar una comparación real, configura en `baselines/comparator_config.json` el `pythonExecutable` correcto para cada propuesta o sus `pythonPathEntries`. La API `GET /api/comparator/proposals` reporta dependencias faltantes por propuesta antes de permitir seleccionarlas. Mantén Ollama corriendo con el modelo elegido.
+Antes de ejecutar una comparación real, ejecuta el instalador de tu sistema para generar `baselines/comparator_config.local.json` con el `pythonExecutable` correcto para cada propuesta. Si no usas el instalador, configura manualmente `pythonExecutable` o `pythonPathEntries`. La API `GET /api/comparator/proposals` reporta dependencias faltantes por propuesta antes de permitir seleccionarlas. Mantén Ollama corriendo con el modelo elegido.
 
 ## Simulación de iteración PSO
 

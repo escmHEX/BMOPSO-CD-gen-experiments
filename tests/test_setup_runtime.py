@@ -95,6 +95,37 @@ class RuntimeSetupTests(unittest.TestCase):
             "baselines/venvs/binary-mopso-cd/Scripts/python.exe",
         )
 
+    def test_base_comparator_config_does_not_hardcode_local_binary_windows_path(self):
+        config = json.loads(Path("baselines/comparator_config.json").read_text(encoding="utf-8"))
+        binary = config["proposals"]["binary-mopso-cd"]
+
+        self.assertEqual(binary["repositoryPath"], "baselines/external/binary-mopso-cd")
+        self.assertEqual(binary["pythonExecutable"], "")
+        self.assertNotIn("C:\\", json.dumps(binary))
+
+    def test_binary_repository_fallback_uses_relative_development_sibling(self):
+        from baselines import comparator as comparator_module
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent = Path(temp_dir)
+            root = parent / "Experimentos"
+            sibling_binary = parent / "Binary MOPSO-CD"
+            root.mkdir()
+            sibling_binary.mkdir()
+
+            with (
+                patch.object(comparator_module, "MODULE_ROOT", root),
+                patch.object(
+                    comparator_module,
+                    "COMPARATOR_PROPOSAL_CONFIG",
+                    {"binary-mopso-cd": {"repositoryPath": "baselines/external/binary-mopso-cd"}},
+                ),
+            ):
+                self.assertEqual(
+                    comparator_module.configured_binary_repository_path(),
+                    "../Binary MOPSO-CD",
+                )
+
     def test_comparator_config_path_prefers_local_config_when_env_is_missing(self):
         from baselines import comparator as comparator_module
 

@@ -73,20 +73,46 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertTrue(payload["stages"])
         self.assertTrue(all(stage["model"] == "llama3" for stage in payload["stages"].values()))
 
-    def test_proposal_python_executable_detects_venv_for_any_proposal(self):
+    def test_proposal_python_executable_detects_platform_repository_venv(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             repository = root / "baseline"
-            venv_python = repository / "venv" / "Scripts" / "python.exe"
-            venv_python.parent.mkdir(parents=True)
-            venv_python.touch()
+            linux_python = repository / "venv" / "bin" / "python"
+            windows_python = repository / "venv" / "Scripts" / "python.exe"
+            linux_python.parent.mkdir(parents=True)
+            windows_python.parent.mkdir(parents=True)
+            linux_python.touch()
+            windows_python.touch()
 
             proposal = replace(PROPOSALS[0], repository_path="baseline", python_executable="")
 
-            self.assertEqual(
-                comparator_module.proposal_python_executable(root, repository, proposal),
-                str(venv_python),
-            )
+            with patch.object(comparator_module.sys, "platform", "linux"):
+                self.assertEqual(
+                    comparator_module.proposal_python_executable(root, repository, proposal),
+                    str(linux_python),
+                )
+            with patch.object(comparator_module.sys, "platform", "win32"):
+                self.assertEqual(
+                    comparator_module.proposal_python_executable(root, repository, proposal),
+                    str(windows_python),
+                )
+
+    def test_proposal_python_executable_detects_managed_baseline_venv_on_ubuntu(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repository = root / "baselines" / "external" / "evolmd"
+            repository.mkdir(parents=True)
+            managed_python = root / "baselines" / "venvs" / "evolmd" / "bin" / "python"
+            managed_python.parent.mkdir(parents=True)
+            managed_python.touch()
+
+            proposal = replace(PROPOSALS[0], repository_path="baselines/external/evolmd", python_executable="")
+
+            with patch.object(comparator_module.sys, "platform", "linux"):
+                self.assertEqual(
+                    comparator_module.proposal_python_executable(root, repository, proposal),
+                    str(managed_python),
+                )
 
     def test_configured_proposal_python_executable_overrides_local_venv(self):
         with tempfile.TemporaryDirectory() as temp_dir:
