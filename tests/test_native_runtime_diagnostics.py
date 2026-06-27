@@ -49,6 +49,37 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
         self.assertIn("greedy_max_min_indices", code)
         self.assertIn("embeddings[index] @ embeddings[others].T", code)
 
+    def test_binary_run_prompt_reduction_probe_replays_run_artifacts(self):
+        module = load_module()
+
+        code = module.binary_run_prompt_reduction_probe_code(Path("runs/comparator/example/binary/exec/run"))
+
+        self.assertIn("initialization_pool_diagnostics.jsonl", code)
+        self.assertIn("config_effective.yaml", code)
+        self.assertIn("_candidate_vectors", code)
+        self.assertIn("_reduce_by_prompt_diversity", code)
+
+    def test_main_runs_binary_run_replay_when_run_dir_is_provided(self):
+        module = load_module()
+        calls: list[str] = []
+
+        def fake_run_python_probe(name, python_executable, code, timeout, **kwargs):
+            calls.append(name)
+            return module.ProbeResult(name, True, "ok")
+
+        argv = [
+            "diagnose_native_runtime.py",
+            "--skip-portal",
+            "--binary-run-dir",
+            "runs/comparator/example/binary/exec/run",
+        ]
+        with patch.object(sys, "argv", argv):
+            with patch.object(module, "run_python_probe", side_effect=fake_run_python_probe):
+                exit_code = module.main()
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("binary run prompt reduction", calls)
+
     def test_run_python_probe_prints_start_message(self):
         module = load_module()
 

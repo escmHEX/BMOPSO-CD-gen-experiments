@@ -133,6 +133,102 @@ print(
 '''
 
 
+def binary_run_prompt_reduction_probe_code(run_dir: Path) -> str:
+    return f'''
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from binary_mopso_cd.config import RuntimeConfig, load_yaml
+from binary_mopso_cd.initialization import InitialPopulationBuilder
+from binary_mopso_cd.router import ALG_PROMPT_RENDERER, SemanticRouter
+from binary_mopso_cd.services.embedding import EmbeddingCache, EmbeddingService
+from binary_mopso_cd.services.prompt_renderer import DeterministicPromptRenderer
+from binary_mopso_cd.settings import ComponentSettings
+from binary_mopso_cd.utils import rng_from_text
+
+run_dir = Path({str(run_dir)!r})
+config_path = run_dir / "config_effective.yaml"
+diagnostics_path = run_dir / "initialization_pool_diagnostics.jsonl"
+if not config_path.exists():
+    raise FileNotFoundError(f"missing config_effective.yaml: {{config_path}}")
+if not diagnostics_path.exists():
+    raise FileNotFoundError(f"missing initialization_pool_diagnostics.jsonl: {{diagnostics_path}}")
+
+config = RuntimeConfig(load_yaml(config_path))
+components = ComponentSettings.from_config(config).order
+pools = {{component: [] for component in components}}
+rows = []
+with diagnostics_path.open("r", encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if line:
+            rows.append(json.loads(line))
+
+for row in rows:
+    task = str(row.get("task", ""))
+    component = str(row.get("component", ""))
+    if component not in pools or task not in {{"semantic_pool_generation", "semantic_pool_expansion"}}:
+        continue
+    if task == "semantic_pool_generation":
+        current = [str(item) for item in row.get("existing_items", [])]
+    else:
+        current = [str(item) for item in row.get("existing_items") or pools.get(component, [])]
+    current.extend(str(item) for item in row.get("valid_items", []))
+    pools[component] = current
+
+missing = [component for component in components if not pools.get(component)]
+if missing:
+    raise RuntimeError(f"run diagnostics do not contain all component pools: missing={{missing}}")
+
+
+class ReplayExecutor:
+    outdir = None
+
+    def __init__(self, config: RuntimeConfig):
+        self.config = config
+        model_alias = str(config.get("models.sbert.default"))
+        resolved_model_name = str(config.get(f"models.sbert.alternatives.{{model_alias}}", model_alias))
+        self.embedding_service = EmbeddingService(
+            model_name=model_alias,
+            resolved_model_name=resolved_model_name,
+            batch_size=int(config.get("models.sbert.batch_size", 64)),
+            config_version=str(config.get("models.sbert.config_version", "sbert-v1")),
+            cache=EmbeddingCache(None),
+        )
+        self.prompt_renderer = DeterministicPromptRenderer()
+
+    def execute(self, task):
+        if task.alg_name != ALG_PROMPT_RENDERER:
+            raise ValueError(f"replay executor only supports prompt rendering, got {{task.alg_name}}")
+        return self.prompt_renderer.render(
+            dict(task.task_params["components"]),
+            str(task.task_params.get("domain", self.config.get("experiment.domain"))),
+        )
+
+
+executor = ReplayExecutor(config)
+builder = InitialPopulationBuilder(
+    config,
+    SemanticRouter(config),
+    executor,  # type: ignore[arg-type]
+    rng_from_text(config.seed, None),
+)
+domain = str(config.get("experiment.domain"))
+pool_sizes = {{component: len(pools[component]) for component in components}}
+candidates = builder._candidate_vectors(pools)
+target = 2 * config.n
+print(f"run_dir={{run_dir}}")
+print(f"pool_sizes={{pool_sizes}} candidates={{len(candidates)}} target={{target}}")
+reduced = builder._reduce_by_prompt_diversity(candidates, domain, target)
+scores = [score for _, _, score in reduced]
+score_min = min(scores) if scores else 0.0
+score_max = max(scores) if scores else 0.0
+print(f"reduced={{len(reduced)}} score_min={{score_min:.6f}} score_max={{score_max:.6f}}")
+'''
+
+
 def run_python_probe(
     name: str,
     python_executable: Path,
@@ -196,6 +292,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--skip-portal", action="store_true")
     parser.add_argument("--skip-binary", action="store_true")
+    parser.add_argument("--binary-run-dir", type=Path)
     args = parser.parse_args()
 
     print(f"[INFO] python={sys.executable}")
@@ -216,6 +313,15 @@ def main() -> int:
                 args.timeout,
             )
         )
+        if args.binary_run_dir is not None:
+            results.append(
+                run_python_probe(
+                    "binary run prompt reduction",
+                    args.binary_python,
+                    binary_run_prompt_reduction_probe_code(args.binary_run_dir),
+                    args.timeout,
+                )
+            )
 
     for result in results:
         prefix = "OK" if result.ok else "FAIL"
