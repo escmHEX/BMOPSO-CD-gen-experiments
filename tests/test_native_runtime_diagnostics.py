@@ -4,6 +4,7 @@ import importlib.util
 import contextlib
 import io
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -54,12 +55,47 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
 
         code = module.binary_run_prompt_reduction_probe_code(Path("runs/comparator/example/binary/exec/run"))
 
+        compile(code, "<binary-run-prompt-reduction-probe>", "exec")
         self.assertIn("initialization_pool_diagnostics.jsonl", code)
         self.assertIn("config_effective.yaml", code)
         self.assertIn("_candidate_vectors", code)
         self.assertIn("_reduce_by_prompt_diversity", code)
 
-    def test_main_runs_binary_run_replay_when_run_dir_is_provided(self):
+    def test_binary_initial_text_generation_probe_advances_to_llm_and_evaluation(self):
+        module = load_module()
+
+        code = module.binary_initial_text_generation_probe_code(Path("runs/comparator/example/binary/exec/run"), 10)
+
+        compile(code, "<binary-initial-text-generation-probe>", "exec")
+        self.assertIn("reference.txt", code)
+        self.assertIn("_generate_text_candidates", code)
+        self.assertIn("semantic_fidelity_scores", code)
+        self.assertIn("validate_generated_text", code)
+        self.assertIn("generated_success", code)
+
+    def test_binary_smoke_command_runs_module_cli_with_small_overrides(self):
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            (run_dir / "reference.txt").write_text("reference text", encoding="utf-8")
+            (run_dir / "config_effective.yaml").write_text("experiment: {}\n", encoding="utf-8")
+
+            command = module.binary_smoke_command(
+                Path("/tmp/binary-python"),
+                run_dir,
+                n=3,
+                iterations=1,
+            )
+
+        self.assertEqual(command[:3], [str(Path("/tmp/binary-python")), "-m", "binary_mopso_cd"])
+        self.assertIn("--reference-text", command)
+        self.assertIn("--config", command)
+        self.assertIn("experiment.n=3", command)
+        self.assertIn("experiment.iterations=1", command)
+        self.assertTrue(any(value.startswith("runtime.outdir_base=") for value in command))
+
+    def test_main_runs_deeper_binary_probes_when_requested(self):
         module = load_module()
         calls: list[str] = []
 
@@ -67,18 +103,36 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
             calls.append(name)
             return module.ProbeResult(name, True, "ok")
 
-        argv = [
-            "diagnose_native_runtime.py",
-            "--skip-portal",
-            "--binary-run-dir",
-            "runs/comparator/example/binary/exec/run",
-        ]
-        with patch.object(sys, "argv", argv):
-            with patch.object(module, "run_python_probe", side_effect=fake_run_python_probe):
-                exit_code = module.main()
+        def fake_run_command_probe(name, command, timeout, **kwargs):
+            calls.append(name)
+            return module.ProbeResult(name, True, "ok")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            (run_dir / "reference.txt").write_text("reference text", encoding="utf-8")
+            (run_dir / "config_effective.yaml").write_text("experiment: {}\n", encoding="utf-8")
+            argv = [
+                "diagnose_native_runtime.py",
+                "--skip-portal",
+                "--binary-run-dir",
+                str(run_dir),
+                "--binary-initial-text-count",
+                "10",
+                "--binary-smoke-run",
+                "--smoke-n",
+                "3",
+                "--smoke-iterations",
+                "1",
+            ]
+            with patch.object(sys, "argv", argv):
+                with patch.object(module, "run_python_probe", side_effect=fake_run_python_probe):
+                    with patch.object(module, "run_command_probe", side_effect=fake_run_command_probe):
+                        exit_code = module.main()
 
         self.assertEqual(exit_code, 0)
         self.assertIn("binary run prompt reduction", calls)
+        self.assertIn("binary initial text generation", calls)
+        self.assertIn("binary smoke run", calls)
 
     def test_run_python_probe_prints_start_message(self):
         module = load_module()
