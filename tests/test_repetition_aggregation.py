@@ -3589,6 +3589,19 @@ class RepetitionAggregationTests(unittest.TestCase):
 
         self.assertEqual(message, "Process exited with code 1. httpx.ReadTimeout: timed out")
 
+    def test_process_failure_message_names_negative_signal_exit(self):
+        service = ComparatorService(Path("."))
+        run = {
+            "config": {"timeoutMinutes": 60},
+            "logs": [],
+        }
+
+        message = service._process_failure_message(run, "binary-mopso-cd", -4, False)
+
+        self.assertIn("Process terminated by signal 4 (SIGILL).", message)
+        self.assertIn("native Python dependency", message)
+        self.assertIn("scripts/diagnose_native_runtime.py", message)
+
     def test_binary_failed_costs_can_read_existing_output_dir(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_base = Path(temp_dir) / "exec"

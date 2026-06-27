@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -184,6 +185,33 @@ def check_binary_ppdb_files() -> str:
     return f"source={source_path.relative_to(ROOT)}; sqlite will be built on first Binary run"
 
 
+def check_binary_native_runtime(timeout: float) -> str:
+    script = ROOT / "scripts" / "diagnose_native_runtime.py"
+    require(script.exists(), f"native runtime diagnostic script is missing: {script}")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--skip-portal",
+            "--timeout",
+            str(int(timeout)),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=timeout + 30,
+    )
+    output = "\n".join(part.strip() for part in (completed.stdout, completed.stderr) if part.strip())
+    if completed.returncode != 0:
+        lines = [line for line in output.splitlines() if line.strip()]
+        detail = lines[-1] if lines else f"diagnostic exited with code {completed.returncode}"
+        raise RuntimeError(detail)
+    for line in output.splitlines():
+        if line.startswith("[OK] binary sbert:"):
+            return line.removeprefix("[OK] binary sbert:").strip()
+    return "binary native runtime ok"
+
+
 def check_initial_population(base_url: str, timeout: float) -> str:
     payload = request_json(base_url, "/api/initial-population/strategies", timeout=timeout)
     strategies = payload.get("strategies") if isinstance(payload.get("strategies"), list) else []
@@ -231,6 +259,7 @@ def main() -> int:
     parser.add_argument("--model", default=DEFAULT_OLLAMA_MODEL)
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--skip-chat", action="store_true")
+    parser.add_argument("--skip-native-runtime", action="store_true")
     args = parser.parse_args()
 
     checks = [
@@ -244,6 +273,11 @@ def main() -> int:
             check("sbert pair", lambda: check_sbert_pair(args.base_url, args.timeout)),
             check("ppdb status", lambda: check_ppdb_status(args.base_url, args.timeout)),
             check("binary ppdb", check_binary_ppdb_files),
+            *(
+                []
+                if args.skip_native_runtime
+                else [check("binary native runtime", lambda: check_binary_native_runtime(args.timeout))]
+            ),
             check("initial population", lambda: check_initial_population(args.base_url, args.timeout)),
             check("initial population comparison", lambda: check_initial_population_comparison(args.base_url, args.timeout)),
             check("proposal comparator", lambda: check_comparator_proposals(args.base_url, args.timeout)),

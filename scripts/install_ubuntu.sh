@@ -341,6 +341,7 @@ ensure_venv "baselines/venvs/binary-mopso-cd"
 BINARY_PYTHON="$(python_in_venv "baselines/venvs/binary-mopso-cd")"
 uv pip install --python "$BINARY_PYTHON" -e "baselines/external/binary-mopso-cd[models]"
 install_spacy_model "$BINARY_PYTHON"
+"$PORTAL_PYTHON" scripts/diagnose_native_runtime.py --skip-portal --binary-python "$BINARY_PYTHON"
 
 "$PORTAL_PYTHON" scripts/setup_runtime.py --write-comparator-config --platform linux
 prepare_ppdb "$PORTAL_PYTHON"

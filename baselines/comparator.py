@@ -4099,11 +4099,23 @@ class ComparatorService:
     ) -> str:
         if timed_out or return_code == 124:
             base = f"Process timed out after {run['config']['timeoutMinutes']} minute(s)."
+        elif return_code < 0:
+            signum = abs(return_code)
+            try:
+                signal_label = signal.Signals(signum).name
+            except ValueError:
+                signal_label = f"signal {signum}"
+            base = f"Process terminated by signal {signum} ({signal_label})."
         else:
             base = f"Process exited with code {return_code}."
         detail = self._latest_failure_log_detail(run, instance_id)
         if detail:
             return f"{base} {detail}"
+        if return_code == -signal.SIGILL:
+            return (
+                f"{base} A native Python dependency likely used CPU instructions unsupported by this server node. "
+                "Run scripts/diagnose_native_runtime.py to identify the failing runtime."
+            )
         if not timed_out and return_code != 124:
             return f"{base} Check dependencies, Ollama, and model availability."
         return base
