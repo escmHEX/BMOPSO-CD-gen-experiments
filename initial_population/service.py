@@ -19,6 +19,7 @@ from typing import Any
 
 from initial_population.runner import DOMAIN_DEFAULT, PROGRESS_PREFIX
 from llm_studio import LmStudioClient, LmStudioHttpError
+from runtime_defaults import DEFAULT_OLLAMA_MODEL, OLLAMA_OPENAI_API_MODE, OLLAMA_OPENAI_BASE_URL
 
 
 STATUS_QUEUED = "queued"
@@ -31,9 +32,9 @@ DEFAULT_REFERENCE_TEXT = (
     "Our action center has been updated with more information about restaurant shutdowns "
     "and disaster financing options for SMBs."
 )
-DEFAULT_MODEL = "meta-llama-3.1-8b-instruct"
-DEFAULT_LM_STUDIO = "http://127.0.0.1:1234"
-DEFAULT_API_MODE = "native"
+DEFAULT_MODEL = DEFAULT_OLLAMA_MODEL
+DEFAULT_LM_STUDIO = OLLAMA_OPENAI_BASE_URL
+DEFAULT_API_MODE = OLLAMA_OPENAI_API_MODE
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 

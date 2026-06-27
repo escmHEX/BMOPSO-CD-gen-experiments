@@ -160,7 +160,10 @@ const PSO_OPERATORS = {
   },
 };
 
-const TURBULENCE_LLM_DEFAULT_MODEL = "Qwen3.5-2B";
+const DEFAULT_LLM_BASE_URL = "http://127.0.0.1:11434";
+const LM_STUDIO_NATIVE_BASE_URL = "http://127.0.0.1:1234";
+const DEFAULT_LLM_MODEL = "llama3";
+const TURBULENCE_LLM_DEFAULT_MODEL = DEFAULT_LLM_MODEL;
 const TURBULENCE_PPDB_DEFAULT_SOURCE_PATH = "data/external/ppdb/ppdb-2.0-s-all";
 const TURBULENCE_PPDB_DEFAULT_INDEX_PATH = "data/turbulence/ppdb_index.json";
 const OPERATOR_DEFAULT_TEMPERATURES = {
@@ -168,7 +171,7 @@ const OPERATOR_DEFAULT_TEMPERATURES = {
   turbulence: "0.35",
 };
 const OPERATOR_DEFAULT_MODELS = {
-  influence: "meta-llama-3.1-8b-instruct",
+  influence: DEFAULT_LLM_MODEL,
   turbulence: TURBULENCE_LLM_DEFAULT_MODEL,
 };
 
@@ -1089,7 +1092,7 @@ function normalizeEndpoint(endpoint) {
 }
 
 function endpointForMode(mode) {
-  return "http://127.0.0.1:1234";
+  return mode === "native" ? LM_STUDIO_NATIVE_BASE_URL : DEFAULT_LLM_BASE_URL;
 }
 
 function lmStudioBaseUrlFromEndpoint(endpoint) {
@@ -9448,15 +9451,22 @@ dom.solutionLlmModelSelect.addEventListener("change", () => {
 });
 dom.solutionLmApiMode.addEventListener("change", () => {
   dom.solutionLmEndpoint.value = endpointForMode(dom.solutionLmApiMode.value);
-  dom.solutionLlmModelSelect.replaceChildren(new Option("Cargar modelos desde LM Studio", ""));
-  dom.solutionLlmModelManual.value = "meta-llama-3.1-8b-instruct";
+  dom.solutionLlmModelSelect.replaceChildren(new Option("Cargar modelos LLM local", ""));
+  dom.solutionLlmModelManual.value = DEFAULT_LLM_MODEL;
   dom.solutionConnectionText.textContent = "Sin probar conexión";
   dom.solutionConnectionDot.classList.remove("is-error", "is-busy");
 });
 dom.turbulenceLmApiMode.addEventListener("change", () => {
+  dom.turbulenceLmBaseUrl.value = endpointForMode(dom.turbulenceLmApiMode.value);
   dom.turbulenceLlmModel.replaceChildren(new Option(TURBULENCE_LLM_DEFAULT_MODEL, TURBULENCE_LLM_DEFAULT_MODEL));
   dom.turbulenceComparisonConnectionText.textContent = "Sin ejecución";
   dom.turbulenceComparisonConnectionDot.classList.remove("is-error", "is-busy");
+});
+dom.initialLmApiMode.addEventListener("change", () => {
+  dom.initialLmStudioBase.value = endpointForMode(dom.initialLmApiMode.value);
+});
+dom.initialComparisonLmApiMode.addEventListener("change", () => {
+  dom.initialComparisonLmStudioBase.value = endpointForMode(dom.initialComparisonLmApiMode.value);
 });
 dom.simulatePsoSwitch.addEventListener("change", () => {
   updateSimulationModeUi();
@@ -9476,7 +9486,7 @@ dom.llmModelSelect.addEventListener("change", () => {
 });
 dom.lmApiMode.addEventListener("change", () => {
   dom.lmEndpoint.value = endpointForMode(dom.lmApiMode.value);
-  dom.llmModelSelect.replaceChildren(new Option("Cargar modelos desde LM Studio", ""));
+  dom.llmModelSelect.replaceChildren(new Option("Cargar modelos LLM local", ""));
   dom.llmModelManual.value = OPERATOR_DEFAULT_MODELS[selectedPsoOperator()];
   dom.checkerConnectionText.textContent = "Sin probar conexión";
   dom.checkerConnectionDot.classList.remove("is-error", "is-busy");

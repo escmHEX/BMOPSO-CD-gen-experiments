@@ -2,6 +2,9 @@
 runs/
 .server-*.log
 *.tmp
+baselines/comparator_config.local.json
+baselines/venvs/
+baselines/external/binary-mopso-cd/
 
 # External datasets
 data/external/ppdb/

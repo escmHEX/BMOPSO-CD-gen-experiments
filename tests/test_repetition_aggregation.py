@@ -20,6 +20,7 @@ from baselines.comparator_metrics import build_charts_from_rows
 from baselines.comparator_metrics import calculate_contribution
 from baselines.comparator_metrics import calculate_extent
 from baselines.comparator_metrics import calculate_unary_entropy
+from initial_population.service import InitialPopulationService
 from initial_population.comparison import InitialPopulationComparisonService
 from turbulence_comparison.service import aggregate_turbulence_repetitions
 
@@ -63,6 +64,15 @@ def command_set_paths(command: list[str]) -> list[str]:
 
 
 class RepetitionAggregationTests(unittest.TestCase):
+    def test_initial_population_defaults_target_ollama_openai_compatible_endpoint(self):
+        service = InitialPopulationService(Path("."))
+        payload = service.default_config()
+
+        self.assertEqual(payload["lmStudio"]["baseUrl"], "http://127.0.0.1:11434")
+        self.assertEqual(payload["lmStudio"]["apiMode"], "openai")
+        self.assertTrue(payload["stages"])
+        self.assertTrue(all(stage["model"] == "llama3" for stage in payload["stages"].values()))
+
     def test_proposal_python_executable_detects_venv_for_any_proposal(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -19,12 +19,12 @@ Luego abrir:
 http://127.0.0.1:4173/LLM/
 ```
 
-## LM Studio
+## LLM local
 
-El evaluador usa por defecto el endpoint nativo recomendado por LM Studio 0.4.x:
+El evaluador usa por defecto Ollama en modo OpenAI-compatible:
 
 ```text
-http://127.0.0.1:1234/api/v1/chat
+http://127.0.0.1:11434/v1/chat/completions
 ```
 
 El portal se sirve con `server.py`. Las secciones propias de la web llaman a LM Studio a través de la API local `POST /api/lm-studio/chat` y `POST /api/lm-studio/models`, implementada en Python con `llm_studio.py`. El proxy `/lmstudio/...` queda disponible por compatibilidad, pero no es la ruta común usada por los módulos principales.
@@ -34,10 +34,10 @@ Cada ejecución se envía como una solicitud independiente con un único input. 
 La lista de modelos se obtiene desde:
 
 ```text
-http://127.0.0.1:1234/api/v1/models
+http://127.0.0.1:11434/v1/models
 ```
 
-La herramienta también permite cambiar a modo OpenAI-compatible, usando `/v1/models` y `/v1/chat/completions`.
+LM Studio sigue disponible manualmente seleccionando modo `native` y base URL `http://127.0.0.1:1234`.
 
 ## Evaluación semántica
 

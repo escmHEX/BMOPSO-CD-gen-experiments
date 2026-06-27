@@ -16,6 +16,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from baselines.comparator import (
+    PROPOSAL_BY_ID,
+    proposal_python_executable,
+    proposal_python_path_entries,
+    resolve_repository,
+)
 from initial_population.common_metrics import attach_common_metrics, finite_float, format_duration
 from initial_population.service import InitialPopulationService
 
@@ -31,6 +37,10 @@ COMPARISON_PROGRESS_PREFIX = "__INITIAL_POPULATION_COMPARISON_PROGRESS__"
 DEFAULT_REFERENCE_TEXT = "Our action center has been updated with more information about restaurant shutdowns and disaster financing options for SMBs."
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+INITIAL_BASELINE_PROPOSAL_IDS = {
+    "evolmd-initial": "evolmd",
+    "evolmd-mo-initial": "evolmd-mo",
+}
 
 
 @dataclass(frozen=True)
@@ -49,7 +59,7 @@ STRATEGIES: tuple[StrategyDefinition, ...] = (
         strategy_id="hybrid-semantic-v7",
         display_name="Hybrid semantic initialization v7",
         description="Anchors, semantic pools, stratified prompts, prompt-space diversity and generated-text SBERT fidelity.",
-        runtime="LM Studio",
+        runtime="Ollama OpenAI-compatible",
         objective_names=("semantic_fidelity", "semantic_diversity"),
         runner="hybrid",
     ),
@@ -646,6 +656,7 @@ class InitialPopulationComparisonService:
 
     def _run_baseline_process(self, run: dict[str, Any], strategy: StrategyDefinition, strategy_dir: Path, execution_config: dict[str, Any]) -> dict[str, Any]:
         assert strategy.repository_path is not None
+        repository_dir = self._baseline_repository_dir(strategy)
         baseline_config = {
             **execution_config["baselines"],
             "strategyId": strategy.strategy_id,
@@ -653,13 +664,13 @@ class InitialPopulationComparisonService:
             "referenceText": execution_config["referenceText"],
             "n": execution_config["n"],
             "seed": execution_config["seed"],
-            "repositoryDir": str(self.root / strategy.repository_path),
+            "repositoryDir": str(repository_dir),
         }
         config_path = strategy_dir / "baseline_config.json"
         write_json(config_path, baseline_config)
         cost_metrics_path = strategy_dir / "ollama_cost_metrics.json"
         command = [
-            sys.executable,
+            self._baseline_python_executable(strategy, repository_dir),
             str(self.root / "baselines" / "bootstrap.py"),
             str(self.root / "initial_population" / "baseline_runner.py"),
             "--config",
@@ -668,7 +679,39 @@ class InitialPopulationComparisonService:
             str(strategy_dir),
         ]
         timeout_seconds = execution_config["baselines"]["timeoutMinutes"] * 60
-        return self._run_process(run, strategy.strategy_id, command, self.root, timeout_seconds, "minute(s)", cost_metrics_path)
+        return self._run_process(
+            run,
+            strategy.strategy_id,
+            command,
+            self.root,
+            timeout_seconds,
+            "minute(s)",
+            cost_metrics_path,
+            self._baseline_python_path_entries(strategy),
+        )
+
+    def _baseline_proposal(self, strategy: StrategyDefinition):
+        proposal_id = INITIAL_BASELINE_PROPOSAL_IDS.get(strategy.strategy_id)
+        return PROPOSAL_BY_ID.get(proposal_id or "")
+
+    def _baseline_repository_dir(self, strategy: StrategyDefinition) -> Path:
+        proposal = self._baseline_proposal(strategy)
+        if proposal is not None:
+            return resolve_repository(self.root, proposal)
+        assert strategy.repository_path is not None
+        return self.root / strategy.repository_path
+
+    def _baseline_python_executable(self, strategy: StrategyDefinition, repository_dir: Path) -> str:
+        proposal = self._baseline_proposal(strategy)
+        if proposal is not None:
+            return proposal_python_executable(self.root, repository_dir, proposal)
+        return sys.executable
+
+    def _baseline_python_path_entries(self, strategy: StrategyDefinition) -> tuple[str, ...]:
+        proposal = self._baseline_proposal(strategy)
+        if proposal is None:
+            return ()
+        return tuple(proposal_python_path_entries(self.root, proposal))
 
     def _run_process(
         self,
@@ -679,9 +722,14 @@ class InitialPopulationComparisonService:
         timeout_seconds: int,
         timeout_unit_label: str,
         cost_metrics_path: Path | None,
+        python_path_entries: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "utf-8"
+        if python_path_entries:
+            environment["PYTHONPATH"] = os.pathsep.join(
+                [*python_path_entries, environment.get("PYTHONPATH", "")]
+            ).rstrip(os.pathsep)
         if cost_metrics_path is not None:
             environment["BASELINE_COST_METRICS_PATH"] = str(cost_metrics_path)
             environment["BASELINE_PRELOAD_MODULES"] = "torch"
@@ -777,7 +825,7 @@ class InitialPopulationComparisonService:
             native_metrics = result.get("metrics") or {}
             artifacts = self._read_hybrid_artifacts(strategy_dir)
             native_cost = summarize_cost(result.get("cost") or {})
-            native_cost["runtime"] = "LM Studio"
+            native_cost["runtime"] = "Ollama OpenAI-compatible"
         else:
             native_metrics = result.get("nativeMetrics") or {}
             artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {}
@@ -884,7 +932,7 @@ class InitialPopulationComparisonService:
                 "expansion": expansion,
             },
             "runtimeConfig": {
-                "runtime": "LM Studio",
+                "runtime": "Ollama OpenAI-compatible",
             },
         }
 

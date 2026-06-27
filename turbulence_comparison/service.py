@@ -15,6 +15,7 @@ from typing import Any
 
 from initial_population.common_metrics import attach_common_metrics, finite_float, format_duration
 from llm_studio import LmStudioClient
+from runtime_defaults import DEFAULT_OLLAMA_MODEL, OLLAMA_OPENAI_API_MODE, OLLAMA_OPENAI_BASE_URL
 from turbulence_comparison.operators import (
     CandidateRecord,
     DistilBertOperator,
@@ -36,9 +37,9 @@ STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 
-DEFAULT_LM_STUDIO = "http://127.0.0.1:1234"
-DEFAULT_API_MODE = "native"
-DEFAULT_MODEL = "Qwen3.5-2B"
+DEFAULT_LM_STUDIO = OLLAMA_OPENAI_BASE_URL
+DEFAULT_API_MODE = OLLAMA_OPENAI_API_MODE
+DEFAULT_MODEL = DEFAULT_OLLAMA_MODEL
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_DISTILBERT_MODEL = "distilbert/distilbert-base-uncased"
 REFERENCE_TEXT = "streets are flooded and families are asking for shelter after heavy rain"

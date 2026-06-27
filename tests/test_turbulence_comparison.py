@@ -186,6 +186,14 @@ class TurbulenceComparisonTests(unittest.TestCase):
         parsed = service._read_config(payload)
         self.assertFalse(parsed["usePpdb"])
 
+    def test_default_llm_config_targets_ollama_openai_compatible_endpoint(self):
+        service = TurbulenceComparisonService(Path("."))
+        payload = service.default_config()
+
+        self.assertEqual(payload["lmStudio"]["baseUrl"], "http://127.0.0.1:11434")
+        self.assertEqual(payload["lmStudio"]["apiMode"], "openai")
+        self.assertEqual(payload["lmStudio"]["model"], "llama3")
+
     def test_component_preferred_units_by_component_type(self):
         units = [
             MutableUnit("urgent", "urgent", "ADJ", 0, 6, "word"),

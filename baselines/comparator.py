@@ -70,7 +70,20 @@ EXECUTION_MODE_FAIR_SEQUENTIAL = "fair_sequential"
 EXECUTION_MODE_EXPLORATORY_PARALLEL = "exploratory_parallel"
 SUPPORTED_EXECUTION_MODES = {EXECUTION_MODE_FAIR_SEQUENTIAL, EXECUTION_MODE_EXPLORATORY_PARALLEL}
 PROPOSAL_TOTALS = {proposal_id: total for proposal_id, total in (("evolmd", 6), ("mesap", 6), ("evolmd-mo", 5), ("binary-mopso-cd", 6))}
-COMPARATOR_CONFIG_PATH = Path(os.environ.get("COMPARATOR_CONFIG_PATH", Path(__file__).with_name("comparator_config.json")))
+
+
+def resolve_comparator_config_path(config_dir: Path | None = None) -> Path:
+    configured = os.environ.get("COMPARATOR_CONFIG_PATH")
+    if configured:
+        return Path(configured)
+    config_dir = config_dir or Path(__file__).resolve().parent
+    local_config = config_dir / "comparator_config.local.json"
+    if local_config.exists():
+        return local_config
+    return config_dir / "comparator_config.json"
+
+
+COMPARATOR_CONFIG_PATH = resolve_comparator_config_path()
 
 
 def load_comparator_config() -> dict[str, Any]:

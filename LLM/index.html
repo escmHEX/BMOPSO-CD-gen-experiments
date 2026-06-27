@@ -61,23 +61,23 @@
                 <label>
                   <span>API LM Studio</span>
                   <select id="lmApiMode">
+                    <option value="openai" selected>OpenAI-compatible (/v1)</option>
                     <option value="native">REST v1 (/api/v1)</option>
-                    <option value="openai">OpenAI-compatible (/v1)</option>
                   </select>
                 </label>
                 <label>
                   <span>Base URL LM Studio</span>
-                  <input id="lmEndpoint" type="text" value="http://127.0.0.1:1234" autocomplete="off">
+                  <input id="lmEndpoint" type="text" value="http://127.0.0.1:11434" autocomplete="off">
                 </label>
                 <label>
                   <span>Modelo LLM</span>
                   <select id="llmModelSelect">
-                    <option value="">Cargar modelos desde LM Studio</option>
+                    <option value="">Cargar modelos LLM local</option>
                   </select>
                 </label>
                 <label>
                   <span>Modelo manual</span>
-                  <input id="llmModelManual" type="text" value="meta-llama-3.1-8b-instruct" autocomplete="off">
+                  <input id="llmModelManual" type="text" value="llama3" autocomplete="off">
                 </label>
                 <label>
                   <span>Embedding de evaluación</span>
@@ -453,23 +453,23 @@ Each line must follow this format:
                 <label>
                   <span>API LM Studio</span>
                   <select id="solutionLmApiMode">
+                    <option value="openai" selected>OpenAI-compatible (/v1)</option>
                     <option value="native">REST v1 (/api/v1)</option>
-                    <option value="openai">OpenAI-compatible (/v1)</option>
                   </select>
                 </label>
                 <label>
                   <span>Base URL LM Studio</span>
-                  <input id="solutionLmEndpoint" type="text" value="http://127.0.0.1:1234" autocomplete="off">
+                  <input id="solutionLmEndpoint" type="text" value="http://127.0.0.1:11434" autocomplete="off">
                 </label>
                 <label>
                   <span>Modelo LLM</span>
                   <select id="solutionLlmModelSelect">
-                    <option value="">Cargar modelos desde LM Studio</option>
+                    <option value="">Cargar modelos LLM local</option>
                   </select>
                 </label>
                 <label>
                   <span>Modelo manual</span>
-                  <input id="solutionLlmModelManual" type="text" value="meta-llama-3.1-8b-instruct" autocomplete="off">
+                  <input id="solutionLlmModelManual" type="text" value="llama3" autocomplete="off">
                 </label>
                 <label>
                   <span>Soluciones mock</span>
@@ -662,13 +662,13 @@ Each line must follow this format:
                 <label>
                   <span>API LM Studio</span>
                   <select id="initialLmApiMode">
+                    <option value="openai" selected>OpenAI-compatible (/v1)</option>
                     <option value="native">REST v1 (/api/v1)</option>
-                    <option value="openai">OpenAI-compatible (/v1)</option>
                   </select>
                 </label>
                 <label>
                   <span>Base URL LM Studio</span>
-                  <input id="initialLmStudioBase" type="text" value="http://127.0.0.1:1234" autocomplete="off">
+                  <input id="initialLmStudioBase" type="text" value="http://127.0.0.1:11434" autocomplete="off">
                 </label>
                 <label>
                   <span>N individuos</span>
@@ -777,7 +777,7 @@ Each line must follow this format:
                 <label>
                   <span>Modelo</span>
                   <select data-stage-field="model" data-lm-studio-model-select>
-                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                    <option value="llama3">llama3</option>
                   </select>
                 </label>
                 <label>
@@ -839,7 +839,7 @@ General domain:
                 <label>
                   <span>Modelo</span>
                   <select data-stage-field="model" data-lm-studio-model-select>
-                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                    <option value="llama3">llama3</option>
                   </select>
                 </label>
                 <label>
@@ -905,7 +905,7 @@ Semantic anchors for support:
                 <label>
                   <span>Modelo</span>
                   <select data-stage-field="model" data-lm-studio-model-select>
-                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                    <option value="llama3">llama3</option>
                   </select>
                 </label>
                 <label>
@@ -971,7 +971,7 @@ Semantic anchors for support:
                 <label>
                   <span>Modelo</span>
                   <select data-stage-field="model" data-lm-studio-model-select>
-                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                    <option value="llama3">llama3</option>
                   </select>
                 </label>
                 <label>
@@ -1037,7 +1037,7 @@ Semantic anchors for support:
                 <label>
                   <span>Modelo</span>
                   <select data-stage-field="model" data-lm-studio-model-select>
-                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                    <option value="llama3">llama3</option>
                   </select>
                 </label>
                 <label>
@@ -1106,7 +1106,7 @@ Semantic anchors for support:
                 <label>
                   <span>Modelo</span>
                   <select data-stage-field="model" data-lm-studio-model-select>
-                    <option value="meta-llama-3.1-8b-instruct">meta-llama-3.1-8b-instruct</option>
+                    <option value="llama3">llama3</option>
                   </select>
                 </label>
                 <label>
@@ -1418,13 +1418,13 @@ Output rules:
                   <label>
                     <span>API LM Studio</span>
                     <select id="initialComparisonLmApiMode">
+                      <option value="openai" selected>OpenAI-compatible (/v1)</option>
                       <option value="native">REST v1 (/api/v1)</option>
-                      <option value="openai">OpenAI-compatible (/v1)</option>
                     </select>
                   </label>
                   <label>
                     <span>Base URL LM Studio</span>
-                    <input id="initialComparisonLmStudioBase" type="text" value="http://127.0.0.1:1234" autocomplete="off">
+                    <input id="initialComparisonLmStudioBase" type="text" value="http://127.0.0.1:11434" autocomplete="off">
                   </label>
                   <div class="span-2 inline-actions">
                     <button id="loadInitialComparisonModelsButton" class="secondary" type="button">Cargar modelos LM Studio</button>
@@ -1736,19 +1736,19 @@ Output rules:
               <div class="form-grid">
                 <label>
                   <span>Base URL</span>
-                  <input id="turbulenceLmBaseUrl" type="text" value="http://127.0.0.1:1234" autocomplete="off">
+                  <input id="turbulenceLmBaseUrl" type="text" value="http://127.0.0.1:11434" autocomplete="off">
                 </label>
                 <label>
                   <span>API</span>
                   <select id="turbulenceLmApiMode">
+                    <option value="openai" selected>OpenAI-compatible (/v1)</option>
                     <option value="native">REST v1 (/api/v1)</option>
-                    <option value="openai">OpenAI-compatible (/v1)</option>
                   </select>
                 </label>
                 <label>
                   <span>Modelo LLM</span>
-                  <select id="turbulenceLlmModel" data-lm-studio-model-select data-preferred-model="Qwen3.5-2B">
-                    <option value="Qwen3.5-2B">Qwen3.5-2B</option>
+                  <select id="turbulenceLlmModel" data-lm-studio-model-select data-preferred-model="llama3">
+                    <option value="llama3">llama3</option>
                   </select>
                 </label>
                 <label>

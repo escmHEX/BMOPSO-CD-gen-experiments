@@ -1,7 +1,7 @@
 param(
   [string]$HostName = "127.0.0.1",
   [int]$Port = 4173,
-  [string]$LmStudio = "http://127.0.0.1:1234",
+  [string]$LmStudio = "http://127.0.0.1:11434",
   [string]$VenvPath = ".venv",
   [switch]$NoBrowser,
   [switch]$NoMessageBox

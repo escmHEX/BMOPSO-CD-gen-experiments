@@ -29,6 +29,10 @@ class FakeTcpServer:
 
 
 class ToolPortalRestartTests(unittest.TestCase):
+    def test_server_defaults_target_ollama_openai_compatible_endpoint(self):
+        self.assertEqual(server.DEFAULT_PORT, 4173)
+        self.assertEqual(server.DEFAULT_LM_STUDIO, "http://127.0.0.1:11434")
+
     def test_active_work_summary_detects_running_runs(self):
         services = {
             "comparator": SimpleNamespace(

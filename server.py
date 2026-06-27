@@ -22,13 +22,14 @@ from initial_population.comparison import InitialPopulationComparisonService
 from initial_population.service import InitialPopulationService
 from llm_studio import LmStudioClient, LmStudioHttpError
 from reference_text_store import ReferenceTextStore
+from runtime_defaults import OLLAMA_OPENAI_API_MODE, OLLAMA_OPENAI_BASE_URL
 from sbert_service import SbertSimilarityService
 from turbulence_comparison.service import TurbulenceComparisonService
 
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4173
-DEFAULT_LM_STUDIO = "http://127.0.0.1:1234"
+DEFAULT_LM_STUDIO = OLLAMA_OPENAI_BASE_URL
 PROXY_PREFIX = "/lmstudio"
 COMPARATOR_PREFIX = "/api/comparator"
 MIMETYPES = {".mjs": "application/javascript"}
@@ -1019,7 +1020,7 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
 
     def build_lm_studio_client(self, payload: dict) -> LmStudioClient:
         base_url = str(payload.get("baseUrl") or self.lm_studio_base).strip().rstrip("/")
-        api_mode = str(payload.get("apiMode") or "native").strip()
+        api_mode = str(payload.get("apiMode") or OLLAMA_OPENAI_API_MODE).strip()
         model = str(payload.get("model") or "").strip()
         timeout_seconds = float(payload.get("timeoutSeconds") or 120)
         if not base_url.startswith(("http://", "https://")):
@@ -1090,7 +1091,7 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Serve the thesis LLM tool portal with an LM Studio proxy.")
+    parser = argparse.ArgumentParser(description="Serve the thesis LLM tool portal with an Ollama-compatible LLM proxy.")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--lm-studio", default=DEFAULT_LM_STUDIO)

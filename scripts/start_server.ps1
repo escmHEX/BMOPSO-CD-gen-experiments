@@ -1,7 +1,7 @@
 param(
   [string]$HostName = "127.0.0.1",
   [int]$Port = 4173,
-  [string]$LmStudio = "http://127.0.0.1:1234",
+  [string]$LmStudio = "http://127.0.0.1:11434",
   [string]$VenvPath = ".venv"
 )
 
@@ -17,6 +17,11 @@ if (-not (Test-Path $VenvPython)) {
 
 if (-not (Test-Path $Server)) {
   throw "No se encontro $Server"
+}
+
+$LocalComparatorConfig = Join-Path $Root "baselines\comparator_config.local.json"
+if (Test-Path $LocalComparatorConfig) {
+  $env:COMPARATOR_CONFIG_PATH = $LocalComparatorConfig
 }
 
 & $VenvPython $Server --host $HostName --port $Port --lm-studio $LmStudio
