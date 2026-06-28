@@ -12,6 +12,8 @@ Set-StrictMode -Version Latest
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 $SpacyModelWheel = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+$OllamaRuntimeScript = Join-Path $PSScriptRoot "ollama_runtime.ps1"
+. $OllamaRuntimeScript
 
 function Fail([string]$Message) {
   throw $Message
@@ -34,39 +36,6 @@ function Ensure-Uv {
   }
   if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Fail "uv installation finished but uv is not in PATH. Add $uvPath to PATH and rerun."
-  }
-}
-
-function Ensure-Ollama {
-  if (Get-Command ollama -ErrorAction SilentlyContinue) {
-    return
-  }
-  if ($SkipOllamaInstall) {
-    Fail "Ollama is missing and -SkipOllamaInstall was passed."
-  }
-  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-    Fail "Ollama is missing and winget is unavailable. Install Ollama from https://ollama.com/download and rerun."
-  }
-  & winget install --id Ollama.Ollama -e --accept-package-agreements --accept-source-agreements
-  if ($LASTEXITCODE -ne 0) {
-    Fail "winget could not install Ollama."
-  }
-  if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
-    Fail "Ollama installation finished but ollama is not in PATH. Restart PowerShell or add Ollama to PATH and rerun."
-  }
-}
-
-function Ensure-OllamaReady {
-  Ensure-Ollama
-  & ollama list *> $null
-  if ($LASTEXITCODE -eq 0) {
-    return
-  }
-  Start-Process -FilePath "ollama" -ArgumentList @("serve") -WindowStyle Hidden
-  Start-Sleep -Seconds 5
-  & ollama list *> $null
-  if ($LASTEXITCODE -ne 0) {
-    Fail "Ollama is installed but not responding. Start 'ollama serve' and rerun."
   }
 }
 
@@ -93,7 +62,7 @@ function Ensure-Venv([string]$VenvPath) {
   } else {
     Invoke-Checked "uv" @("venv", "--python", "3.13", $VenvPath)
   }
-  Invoke-Checked "uv" @("pip", "install", "--python", $python, "--upgrade", "pip")
+  Write-Host "Using pip bundled with virtual environment: $python"
 }
 
 function Install-Requirements([string]$Python, [string]$Requirements) {
@@ -224,7 +193,7 @@ Invoke-Checked $portalPython @("scripts\setup_runtime.py", "--write-comparator-c
 Prepare-Ppdb $portalPython
 Prepare-BinaryPpdbIndex $binaryPython
 
-Ensure-OllamaReady
+Ensure-OllamaGpuRuntime -SkipInstall:$SkipOllamaInstall
 if (-not $SkipWarmup) {
   $warmupArgs = @("scripts\warmup_runtime.py")
   if ($SkipModelPull) {

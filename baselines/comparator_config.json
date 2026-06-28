@@ -11,7 +11,7 @@
     "proposalParallelism": 1,
     "executionMode": "fair_sequential",
     "timeoutMinutes": 10800,
-    "updateRepositoriesBeforeRun": true
+    "updateRepositoriesBeforeRun": false
   },
   "proposals": {
     "evolmd": {

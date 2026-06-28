@@ -119,6 +119,61 @@ class RuntimeSetupTests(unittest.TestCase):
         self.assertEqual(binary["pythonExecutable"], "")
         self.assertNotIn("C:\\", json.dumps(binary))
 
+    def test_base_comparator_config_disables_repository_updates_by_default(self):
+        config = json.loads(Path("baselines/comparator_config.json").read_text(encoding="utf-8"))
+
+        self.assertIs(config["defaults"]["updateRepositoriesBeforeRun"], False)
+
+    def test_setup_scripts_do_not_auto_upgrade_pip(self):
+        scripts = (
+            Path("scripts/setup_backend_env.ps1"),
+            Path("scripts/install_windows.ps1"),
+            Path("scripts/install_ubuntu.sh"),
+        )
+
+        for script_path in scripts:
+            with self.subTest(script=str(script_path)):
+                script = script_path.read_text(encoding="utf-8")
+                self.assertNotIn("install --upgrade pip", script)
+                self.assertNotIn('"--upgrade", "pip"', script)
+
+    def test_windows_ollama_runtime_pins_gpu_runtime(self):
+        script = Path("scripts/ollama_runtime.ps1").read_text(encoding="utf-8")
+
+        self.assertIn('$OllamaRequiredVersion = "0.30.10"', script)
+        self.assertIn('$OllamaPreferredLibrary = "cuda_v13"', script)
+        self.assertIn('$OllamaFallbackLibrary = "cuda_v12"', script)
+        self.assertIn('$env:CUDA_VISIBLE_DEVICES = "0"', script)
+        self.assertIn("OllamaSetup.exe", script)
+        self.assertIn("releases/download/v$OllamaRequiredVersion/OllamaSetup.exe", script)
+        self.assertIn("sha256sum.txt", script)
+        self.assertIn("Get-FileHash", script)
+        self.assertIn("/api/generate", script)
+        self.assertIn("/api/ps", script)
+        self.assertIn("size_vram", script)
+        self.assertIn("100% CPU", script)
+
+    def test_windows_server_launchers_require_ollama_gpu_runtime(self):
+        for script_path in (
+            Path("scripts/start_server.ps1"),
+            Path("scripts/start_server_daemon_windows.ps1"),
+            Path("scripts/install_windows.ps1"),
+        ):
+            with self.subTest(script=str(script_path)):
+                script = script_path.read_text(encoding="utf-8")
+                self.assertIn('Join-Path $PSScriptRoot "ollama_runtime.ps1"', script)
+                self.assertIn("Ensure-OllamaGpuRuntime", script)
+
+    def test_windows_daemon_stop_cleans_existing_portal_server_processes(self):
+        script = Path("scripts/start_server_daemon_windows.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("function Stop-PortalServerProcesses", script)
+        self.assertIn("Get-CimInstance Win32_Process", script)
+        self.assertIn("Stop-PortalServerProcesses", script)
+        self.assertIn("Start-Process", script)
+        self.assertIn("Wait-PortalBackendHealth", script)
+        self.assertIn("--skip-port-release", script)
+
     def test_binary_repository_fallback_uses_relative_development_sibling(self):
         from baselines import comparator as comparator_module
 

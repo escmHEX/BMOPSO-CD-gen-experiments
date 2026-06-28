@@ -22,8 +22,7 @@ if (-not (Test-Path $VenvPython)) {
   }
 }
 
-Write-Host "Actualizando pip"
-& $VenvPython -m pip install --upgrade pip
+Write-Host "Usando pip incluido en el entorno"
 
 Write-Host "Instalando dependencias del backend desde $Requirements"
 & $VenvPython -m pip install -r $Requirements

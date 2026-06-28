@@ -217,7 +217,7 @@ ensure_venv() {
   else
     uv venv --python 3.13 "$venv_path"
   fi
-  uv pip install --python "$python_bin" --upgrade pip
+  echo "Using pip bundled with virtual environment: $python_bin"
 }
 
 install_requirements() {

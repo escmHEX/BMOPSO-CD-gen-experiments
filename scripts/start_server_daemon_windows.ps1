@@ -17,6 +17,10 @@ $VenvPython = Join-Path (Join-Path $Root $VenvPath) "Scripts\python.exe"
 $Config = Join-Path $Root "baselines\comparator_config.local.json"
 $DaemonDir = Join-Path $Root "runs\server-daemon"
 $LogFile = Join-Path $DaemonDir "windows-server.log"
+$BackendStdoutLog = Join-Path $DaemonDir "windows-backend.out.log"
+$BackendStderrLog = Join-Path $DaemonDir "windows-backend.err.log"
+$OllamaRuntimeScript = Join-Path $PSScriptRoot "ollama_runtime.ps1"
+. $OllamaRuntimeScript
 
 function Fail([string]$Message) {
   throw $Message
@@ -38,13 +42,76 @@ function Require-Runtime {
   }
 }
 
+function Stop-PortalServerProcesses {
+  $serverPath = [IO.Path]::GetFullPath($Server)
+  $processes = Get-CimInstance Win32_Process |
+    Where-Object {
+      -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+      $_.CommandLine -like "*$serverPath*"
+    }
+
+  foreach ($process in $processes) {
+    Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+
+  if ($processes) {
+    Start-Sleep -Seconds 2
+  }
+}
+
+function Wait-PortalBackendHealth {
+  param(
+    [int]$TimeoutSeconds = 30
+  )
+
+  $healthUrl = "http://${HostName}:$Port/api/portal/health"
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    try {
+      Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5 | Out-Null
+      return
+    } catch {
+      Start-Sleep -Seconds 1
+    }
+  } while ((Get-Date) -lt $deadline)
+
+  Fail "Portal backend did not become healthy at $healthUrl within $TimeoutSeconds seconds. See $BackendStderrLog"
+}
+
+function Start-PortalBackend {
+  $arguments = @(
+    $Server,
+    "--host",
+    $HostName,
+    "--port",
+    [string]$Port,
+    "--lm-studio",
+    $LmStudio,
+    "--skip-port-release"
+  )
+
+  $process = Start-Process `
+    -FilePath $VenvPython `
+    -ArgumentList $arguments `
+    -WorkingDirectory $Root `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $BackendStdoutLog `
+    -RedirectStandardError $BackendStderrLog `
+    -PassThru
+
+  Wait-PortalBackendHealth
+  Write-Host "Portal backend started with PID $($process.Id)."
+}
+
 if ($InternalRun) {
   Require-Runtime
   New-Item -ItemType Directory -Force -Path $DaemonDir | Out-Null
   Set-Location $Root
   $env:COMPARATOR_CONFIG_PATH = $Config
-  & $VenvPython $Server --host $HostName --port $Port --lm-studio $LmStudio
-  exit $LASTEXITCODE
+  Ensure-OllamaGpuRuntime
+  Write-Host "Starting portal backend at http://${HostName}:$Port"
+  Start-PortalBackend
+  exit 0
 }
 
 function Register-PortalTask {
@@ -79,9 +146,11 @@ function Stop-PortalTask {
   $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   if (-not $task) {
     Write-Host "Task not registered: $TaskName"
+    Stop-PortalServerProcesses
     return
   }
   Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  Stop-PortalServerProcesses
   Write-Host "Task stopped: $TaskName"
 }
 
