@@ -47,6 +47,11 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
 
         self.assertEqual(_resolve_output_path(args), DEFAULT_FILTERED_OUTPUT)
 
+    def test_cli_accepts_overwrite_flag(self):
+        args = _parse_args(["--filtered", "--overwrite"])
+
+        self.assertTrue(args.overwrite)
+
     def test_discovers_default_id_columns_and_deduplicates_in_stable_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_dir = Path(tmp)
@@ -100,6 +105,28 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
         self.assertIsNone(result.reason)
         self.assertEqual(result.text, "La situación está mejorando con cuidado")
 
+    def test_filter_preserves_real_accents_as_composed_unicode(self):
+        result = filter_tweet_text("La situacio\u0301n esta\u0301 mejorando con cuidado")
+
+        self.assertIsNone(result.reason)
+        self.assertEqual(result.text, "La situación está mejorando con cuidado")
+
+    def test_filter_discards_real_emoji(self):
+        result = filter_tweet_text(
+            "Welp \U0001f937\U0001f3fd\u200d\u2640\ufe0f y'all had better add this to your bingo cards"
+        )
+
+        self.assertEqual(result.reason, "emoji")
+
+    def test_filter_discards_mojibake_emoji_after_repair(self):
+        result = filter_tweet_text(
+            "Welp \u00f0\u0178\u00a4\u00b7\u00f0\u0178\u008f\u00bd"
+            "\u00e2\u20ac\u008d\u00e2\u2122\u20ac\u00ef\u00b8\u008f"
+            " y'all had better add this to your bingo cards"
+        )
+
+        self.assertEqual(result.reason, "emoji")
+
     def test_filter_removes_urls_and_hashtags_from_kept_text(self):
         result = filter_tweet_text("Public health update https://t.co/x pic.twitter.com/abc #COVID19 #Health")
 
@@ -152,9 +179,9 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
                 )
             )
 
-            with output_path.open(encoding="utf-8", newline="") as handle:
+            with output_path.open(encoding="utf-8-sig", newline="") as handle:
                 rows = list(csv.DictReader(handle))
-            with not_hydrated_path.open(encoding="utf-8", newline="") as handle:
+            with not_hydrated_path.open(encoding="utf-8-sig", newline="") as handle:
                 missed = list(csv.DictReader(handle))
 
         self.assertEqual(summary.hydrated, 1)
@@ -162,6 +189,47 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
         self.assertEqual(rows, [{"tweetId": "3333333333333333333", "texto": "line one line two"}])
         self.assertEqual(missed[0]["tweetId"], "4444444444444444444")
         self.assertEqual(missed[0]["reason"], "not_found")
+
+    def test_build_corpus_writes_utf8_bom_once_when_appending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            input_dir.mkdir()
+            (input_dir / "ids.csv").write_text(
+                "tweet_id\n"
+                "4545454545454545454\n"
+                "4646464646464646464\n",
+                encoding="utf-8",
+            )
+            output_path = root / "hydrated" / "corpus.csv"
+            not_hydrated_path = root / "hydrated" / "corpus.not_hydrated.csv"
+            report_path = root / "hydrated" / "corpus.report.json"
+
+            asyncio.run(
+                build_corpus(
+                    input_path=input_dir,
+                    output_path=output_path,
+                    hydrator=FakeHydrator({"4545454545454545454": "first normal text"}),
+                    not_hydrated_path=not_hydrated_path,
+                    report_path=report_path,
+                    limit=1,
+                )
+            )
+            asyncio.run(
+                build_corpus(
+                    input_path=input_dir,
+                    output_path=output_path,
+                    hydrator=FakeHydrator({"4646464646464646464": "second normal text"}),
+                    not_hydrated_path=not_hydrated_path,
+                    report_path=report_path,
+                    limit=1,
+                )
+            )
+
+            data = output_path.read_bytes()
+
+        self.assertTrue(data.startswith(b"\xef\xbb\xbf"))
+        self.assertEqual(data.count(b"\xef\xbb\xbf"), 1)
 
     def test_build_corpus_resumes_by_skipping_existing_output_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -193,7 +261,7 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
                 )
             )
 
-            with output_path.open(encoding="utf-8", newline="") as handle:
+            with output_path.open(encoding="utf-8-sig", newline="") as handle:
                 rows = list(csv.DictReader(handle))
 
         self.assertEqual(hydrator.requested, ["6666666666666666666"])
@@ -290,7 +358,7 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
                 )
             )
 
-            with not_hydrated_path.open(encoding="utf-8", newline="") as handle:
+            with not_hydrated_path.open(encoding="utf-8-sig", newline="") as handle:
                 missed = list(csv.DictReader(handle))
 
         self.assertEqual(summary.not_hydrated, 1)
@@ -306,7 +374,8 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
                 "1313131313131313131\n"
                 "1414141414141414141\n"
                 "1515151515151515151\n"
-                "1616161616161616161\n",
+                "1616161616161616161\n"
+                "1717171717171717171\n",
                 encoding="utf-8",
             )
             output_path = root / "hydrated" / "filtered.csv"
@@ -317,7 +386,8 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
                     "1313131313131313131": "First normal public health sentence",
                     "1414141414141414141": "Mention from @user should be dropped",
                     "1515151515151515151": None,
-                    "1616161616161616161": "Second normal public health sentence",
+                    "1616161616161616161": "Emoji should be dropped \U0001f602 before counting as valid",
+                    "1717171717171717171": "Second normal public health sentence",
                 }
             )
 
@@ -330,15 +400,15 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
                     discarded_path=discarded_path,
                     report_path=root / "hydrated" / "filtered.report.json",
                     target_valid=2,
-                    max_attempts=4,
+                    max_attempts=5,
                 )
             )
 
-            with output_path.open(encoding="utf-8", newline="") as handle:
+            with output_path.open(encoding="utf-8-sig", newline="") as handle:
                 rows = list(csv.DictReader(handle))
-            with discarded_path.open(encoding="utf-8", newline="") as handle:
+            with discarded_path.open(encoding="utf-8-sig", newline="") as handle:
                 discarded = list(csv.DictReader(handle))
-            with not_hydrated_path.open(encoding="utf-8", newline="") as handle:
+            with not_hydrated_path.open(encoding="utf-8-sig", newline="") as handle:
                 missed = list(csv.DictReader(handle))
 
         self.assertEqual(summary.hydrated, 2)
@@ -348,17 +418,62 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
             "1414141414141414141",
             "1515151515151515151",
             "1616161616161616161",
+            "1717171717171717171",
         ])
         self.assertEqual(
             rows,
             [
                 {"tweetId": "1313131313131313131", "texto": "First normal public health sentence"},
-                {"tweetId": "1616161616161616161", "texto": "Second normal public health sentence"},
+                {"tweetId": "1717171717171717171", "texto": "Second normal public health sentence"},
             ],
         )
         self.assertEqual(discarded[0]["tweetId"], "1414141414141414141")
         self.assertEqual(discarded[0]["reason"], "mention")
+        self.assertEqual(discarded[1]["tweetId"], "1616161616161616161")
+        self.assertEqual(discarded[1]["reason"], "emoji")
         self.assertEqual(missed[0]["tweetId"], "1515151515151515151")
+
+    def test_build_filtered_corpus_overwrite_removes_previous_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            input_dir.mkdir()
+            (input_dir / "ids.csv").write_text(
+                "tweet_id\n"
+                "2121212121212121212\n",
+                encoding="utf-8",
+            )
+            output_path = root / "hydrated" / "filtered.csv"
+            not_hydrated_path = root / "hydrated" / "filtered.not_hydrated.csv"
+            discarded_path = root / "hydrated" / "filtered.discarded.csv"
+            report_path = root / "hydrated" / "filtered.report.json"
+            output_path.parent.mkdir()
+            output_path.write_text("tweetId,texto\n9999999999999999999,old row\n", encoding="utf-8")
+            not_hydrated_path.write_text("tweetId,reason\n8888888888888888888,not_found\n", encoding="utf-8")
+            discarded_path.write_text("tweetId,reason,cleanedLength\n7777777777777777777,emoji,20\n", encoding="utf-8")
+            report_path.write_text('{"old": true}', encoding="utf-8")
+
+            summary = asyncio.run(
+                build_filtered_corpus(
+                    input_path=input_dir,
+                    output_path=output_path,
+                    hydrator=FakeHydrator({"2121212121212121212": "Fresh normal public health sentence"}),
+                    not_hydrated_path=not_hydrated_path,
+                    discarded_path=discarded_path,
+                    report_path=report_path,
+                    target_valid=1,
+                    max_attempts=1,
+                    overwrite=True,
+                )
+            )
+
+            with output_path.open(encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+        self.assertEqual(summary.output_rows, 1)
+        self.assertEqual(summary.not_hydrated_rows, 0)
+        self.assertEqual(summary.discarded_rows, 0)
+        self.assertEqual(rows, [{"tweetId": "2121212121212121212", "texto": "Fresh normal public health sentence"}])
 
     def test_build_filtered_corpus_reports_accumulated_resume_totals(self):
         with tempfile.TemporaryDirectory() as tmp:

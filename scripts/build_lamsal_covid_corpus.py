@@ -8,6 +8,7 @@ import itertools
 import json
 import re
 import sys
+import unicodedata
 import zipfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -138,6 +139,9 @@ def filter_tweet_text(text: str) -> FilterResult:
 
     without_urls = URL_PATTERN.sub("", repaired)
     compact_without_urls = normalize_tweet_text(without_urls)
+    if _contains_emoji(compact_without_urls):
+        return FilterResult(text="", reason="emoji", cleaned_length=len(compact_without_urls))
+
     if _is_hashtag_heavy(compact_without_urls):
         return FilterResult(text="", reason="hashtag_heavy", cleaned_length=len(compact_without_urls))
 
@@ -156,7 +160,18 @@ def _fix_text(text: str) -> str:
             "Missing optional dependency 'ftfy'. Install dataset tooling with "
             "'.\\.venv\\Scripts\\python.exe -m pip install -r requirements.dataset.txt'."
         ) from error
-    return fix_text(text)
+    return unicodedata.normalize("NFC", fix_text(text))
+
+
+def _contains_emoji(text: str) -> bool:
+    try:
+        from emoji import replace_emoji
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "Missing optional dependency 'emoji'. Install dataset tooling with "
+            "'.\\.venv\\Scripts\\python.exe -m pip install -r requirements.dataset.txt'."
+        ) from error
+    return replace_emoji(text, replace="") != text
 
 
 def _is_hashtag_heavy(text: str) -> bool:
@@ -290,6 +305,7 @@ async def build_filtered_corpus(
     target_valid: int = DEFAULT_TARGET_VALID,
     max_attempts: int | None = None,
     tweet_timeout_seconds: float = DEFAULT_TWEET_TIMEOUT_SECONDS,
+    overwrite: bool = False,
 ) -> HydrationSummary:
     started_at = _utc_now()
     input_path = Path(input_path)
@@ -298,6 +314,12 @@ async def build_filtered_corpus(
     discarded_path = Path(discarded_path) if discarded_path else output_path.with_suffix(".discarded.csv")
     report_path = Path(report_path) if report_path else None
     max_attempts = max_attempts if max_attempts is not None else max(1000, target_valid * 10)
+
+    if overwrite:
+        artifacts = [output_path, not_hydrated_path, discarded_path]
+        if report_path:
+            artifacts.append(report_path)
+        _remove_existing_artifacts(*artifacts)
 
     output_ids = _read_existing_output_ids(output_path)
     existing_ids = set(output_ids)
@@ -548,8 +570,15 @@ def _read_existing_discarded_ids(discarded_path: Path) -> set[str]:
 
 def _write_header_if_empty(path: Path, handle: TextIO, writer: csv.DictWriter) -> None:
     if not path.exists() or path.stat().st_size == 0:
+        handle.write("\ufeff")
         writer.writeheader()
         handle.flush()
+
+
+def _remove_existing_artifacts(*paths: Path) -> None:
+    for path in paths:
+        if path.exists():
+            path.unlink()
 
 
 def _count_csv_data_rows(path: Path) -> int:
@@ -587,6 +616,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--target-valid", type=int, default=DEFAULT_TARGET_VALID, help="Target valid rows for filtered mode.")
     parser.add_argument("--max-attempts", type=int, default=None, help="Maximum new IDs to attempt in filtered mode.")
     parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Delete existing filtered output, not_hydrated, discarded, and report files before running.",
+    )
+    parser.add_argument(
         "--cookies-file",
         default=str(DEFAULT_COOKIES_FILE),
         help="Local file containing auth_token and ct0 cookies.",
@@ -609,6 +643,8 @@ async def _run_from_args(args: argparse.Namespace) -> HydrationSummary:
         raise ValueError("--target-valid must be zero or greater")
     if args.max_attempts is not None and args.max_attempts < 0:
         raise ValueError("--max-attempts must be zero or greater")
+    if args.overwrite and not args.filtered:
+        raise ValueError("--overwrite is only supported with --filtered")
 
     output_path = _resolve_output_path(args)
     report_path = Path(args.report) if args.report else _default_report_path(output_path)
@@ -631,6 +667,7 @@ async def _run_from_args(args: argparse.Namespace) -> HydrationSummary:
             target_valid=args.target_valid,
             max_attempts=args.max_attempts,
             tweet_timeout_seconds=args.tweet_timeout_seconds,
+            overwrite=args.overwrite,
         )
     return await build_corpus(
         input_path=Path(args.input),
