@@ -5,6 +5,7 @@ import sys
 import tempfile
 import types
 import unittest
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -539,6 +540,92 @@ class RepetitionAggregationTests(unittest.TestCase):
             self.assertEqual([entry["message"] for entry in third["logs"]], ["line 6"])
             self.assertFalse(third["hasMore"])
             self.assertEqual(third["source"], "jsonl")
+
+    def test_comparator_snapshot_zip_contains_complete_run_folder(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_dir = root / "runs" / "comparator" / "run-download"
+            nested_dir = run_dir / "binary-mopso-cd" / "exec"
+            nested_dir.mkdir(parents=True)
+            (run_dir / "summary.json").write_text('{"runId":"run-download"}', encoding="utf-8")
+            (nested_dir / "runtime.log").write_text("ok", encoding="utf-8")
+
+            with tempfile.TemporaryDirectory() as snapshot_temp, tempfile.TemporaryDirectory() as zip_temp:
+                snapshot_dir = service.snapshot_run_directory("run-download", Path(snapshot_temp))
+                zip_path = Path(zip_temp) / "run-download.zip"
+                service.write_run_snapshot_zip(snapshot_dir, zip_path)
+
+                with zipfile.ZipFile(zip_path) as archive:
+                    self.assertEqual(
+                        sorted(archive.namelist()),
+                        [
+                            "run-download/binary-mopso-cd/exec/runtime.log",
+                            "run-download/summary.json",
+                        ],
+                    )
+                    self.assertEqual(archive.read("run-download/summary.json").decode("utf-8"), '{"runId":"run-download"}')
+
+            self.assertEqual((run_dir / "summary.json").read_text(encoding="utf-8"), '{"runId":"run-download"}')
+
+    def test_comparator_snapshot_rejects_run_id_traversal(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = ComparatorService(Path(temp_dir))
+
+            with tempfile.TemporaryDirectory() as snapshot_temp:
+                with self.assertRaises(ValueError):
+                    service.snapshot_run_directory("../outside", Path(snapshot_temp))
+
+    def test_comparator_snapshot_retries_file_that_changes_during_copy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_dir = root / "runs" / "comparator" / "run-changing"
+            run_dir.mkdir(parents=True)
+            source_file = run_dir / "summary.json"
+            source_file.write_text("first", encoding="utf-8")
+            original_copy2 = comparator_module.shutil.copy2
+            copy_attempts = 0
+
+            def changing_copy(src, dst, *args, **kwargs):
+                nonlocal copy_attempts
+                copy_attempts += 1
+                result = original_copy2(src, dst, *args, **kwargs)
+                if copy_attempts == 1:
+                    source_file.write_text("second", encoding="utf-8")
+                return result
+
+            with tempfile.TemporaryDirectory() as snapshot_temp:
+                with patch.object(comparator_module.shutil, "copy2", side_effect=changing_copy):
+                    snapshot_dir = service.snapshot_run_directory("run-changing", Path(snapshot_temp))
+
+                self.assertGreaterEqual(copy_attempts, 2)
+                self.assertEqual((snapshot_dir / "summary.json").read_text(encoding="utf-8"), "second")
+
+    def test_comparator_snapshot_fails_when_file_never_stabilizes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_dir = root / "runs" / "comparator" / "run-unstable"
+            run_dir.mkdir(parents=True)
+            source_file = run_dir / "summary.json"
+            source_file.write_text("0", encoding="utf-8")
+            original_copy2 = comparator_module.shutil.copy2
+            copy_attempts = 0
+
+            def unstable_copy(src, dst, *args, **kwargs):
+                nonlocal copy_attempts
+                copy_attempts += 1
+                result = original_copy2(src, dst, *args, **kwargs)
+                source_file.write_text("x" * (copy_attempts + 1), encoding="utf-8")
+                return result
+
+            with tempfile.TemporaryDirectory() as snapshot_temp:
+                with patch.object(comparator_module.shutil, "copy2", side_effect=unstable_copy):
+                    with self.assertRaises(RuntimeError):
+                        service.snapshot_run_directory("run-unstable", Path(snapshot_temp))
+
+                self.assertEqual(copy_attempts, comparator_module.RUN_SNAPSHOT_COPY_ATTEMPTS)
 
     def test_fair_sequential_forces_effective_parallelism_to_one(self):
         service = ComparatorService(Path("."))

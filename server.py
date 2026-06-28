@@ -10,6 +10,7 @@ import shutil
 import socketserver
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -879,6 +880,10 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(200, payload)
             return
 
+        if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "download":
+            self.send_comparator_run_download(path_parts[1])
+            return
+
         self.send_json(404, {"error": "Not found."})
 
     def handle_comparator_post(self) -> None:
@@ -1199,6 +1204,43 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise ValueError("JSON body must be an object.")
         return payload
+
+    def send_comparator_run_download(self, run_id: str) -> None:
+        with tempfile.TemporaryDirectory(prefix="comparator-run-download-") as temp_dir:
+            temp_root = Path(temp_dir)
+            try:
+                snapshot_dir = self.comparator_service.snapshot_run_directory(run_id, temp_root / "snapshot")
+                if snapshot_dir is None:
+                    self.send_json(404, {"error": "Run not found."})
+                    return
+
+                zip_path = temp_root / f"comparator-run-{snapshot_dir.name}.zip"
+                self.comparator_service.write_run_snapshot_zip(snapshot_dir, zip_path)
+            except ValueError as error:
+                self.send_json(400, {"error": str(error)})
+                return
+            except RuntimeError as error:
+                self.send_json(409, {"error": str(error)})
+                return
+            except OSError as error:
+                self.send_json(500, {"error": str(error)})
+                return
+
+            self.send_binary_file(
+                zip_path,
+                content_type="application/zip",
+                download_name=f"comparator-run-{snapshot_dir.name}.zip",
+            )
+
+    def send_binary_file(self, path: Path, *, content_type: str, download_name: str) -> None:
+        file_path = Path(path)
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
+        self.send_header("Content-Length", str(file_path.stat().st_size))
+        self.end_headers()
+        with file_path.open("rb") as handle:
+            shutil.copyfileobj(handle, self.wfile)
 
     def send_json(self, status: int, payload: dict) -> None:
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")

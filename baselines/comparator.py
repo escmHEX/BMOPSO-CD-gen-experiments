@@ -9,12 +9,14 @@ import csv
 import ctypes
 import ast
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
 import uuid
+import zipfile
 from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -682,6 +684,8 @@ def finite_int_or_none(value: Any) -> int | None:
 
 COMPARATOR_RUN_LOG_LIMIT = max(250, int(finite_float(COMPARATOR_DEFAULTS.get("runLogTailLimit"), 1000)))
 COMPARATOR_LOG_CHUNK_LIMIT = max(1000, int(finite_float(COMPARATOR_DEFAULTS.get("logChunkLimit"), 5000)))
+RUN_SNAPSHOT_COPY_ATTEMPTS = 3
+RUN_SNAPSHOT_COPY_RETRY_DELAY_SECONDS = 0.05
 
 
 def objective_label(vector: list[float]) -> str:
@@ -2270,6 +2274,77 @@ class ComparatorService:
             "source": "jsonl",
             "offsetUnit": "bytes",
         }
+
+    def resolve_run_directory(self, run_id: str) -> Path | None:
+        requested = str(run_id or "").strip()
+        if not requested or requested in {".", ".."} or "/" in requested or "\\" in requested:
+            raise ValueError("Invalid run ID.")
+
+        runs_root = self.runs_root.resolve()
+        run_dir = (runs_root / requested).resolve()
+        try:
+            run_dir.relative_to(runs_root)
+        except ValueError as error:
+            raise ValueError("Invalid run ID.") from error
+
+        if run_dir == runs_root:
+            raise ValueError("Invalid run ID.")
+        if not run_dir.is_dir():
+            return None
+        return run_dir
+
+    def snapshot_run_directory(self, run_id: str, snapshot_parent: Path) -> Path | None:
+        source_dir = self.resolve_run_directory(run_id)
+        if source_dir is None:
+            return None
+
+        target_parent = Path(snapshot_parent)
+        target_parent.mkdir(parents=True, exist_ok=True)
+        snapshot_dir = target_parent / source_dir.name
+        snapshot_dir.mkdir()
+        self._copy_run_snapshot_tree(source_dir, snapshot_dir)
+        return snapshot_dir
+
+    def write_run_snapshot_zip(self, snapshot_dir: Path, zip_path: Path) -> None:
+        source_dir = Path(snapshot_dir)
+        target_path = Path(zip_path)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(target_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(source_dir.rglob("*"), key=lambda item: item.relative_to(source_dir).as_posix()):
+                if path.is_file():
+                    archive.write(path, path.relative_to(source_dir.parent).as_posix())
+
+    def _copy_run_snapshot_tree(self, source_dir: Path, snapshot_dir: Path) -> None:
+        manifest = sorted(source_dir.rglob("*"), key=lambda item: item.relative_to(source_dir).as_posix())
+        for source_path in manifest:
+            relative_path = source_path.relative_to(source_dir)
+            target_path = snapshot_dir / relative_path
+            if source_path.is_dir():
+                target_path.mkdir(parents=True, exist_ok=True)
+                continue
+            if source_path.is_file():
+                self._copy_snapshot_file(source_path, target_path, relative_path)
+                continue
+            raise RuntimeError(f"Cannot snapshot unsupported path: {relative_path.as_posix()}")
+
+    def _copy_snapshot_file(self, source_path: Path, target_path: Path, relative_path: Path) -> None:
+        last_error: BaseException | None = None
+        for attempt in range(RUN_SNAPSHOT_COPY_ATTEMPTS):
+            try:
+                before = source_path.stat()
+                if not source_path.is_file():
+                    raise RuntimeError(f"Snapshot source is not a file: {relative_path.as_posix()}")
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, target_path)
+                after = source_path.stat()
+                if before.st_size == after.st_size and before.st_mtime_ns == after.st_mtime_ns:
+                    return
+                last_error = RuntimeError(f"File changed while creating snapshot: {relative_path.as_posix()}")
+            except OSError as error:
+                last_error = error
+            if attempt < RUN_SNAPSHOT_COPY_ATTEMPTS - 1:
+                time.sleep(RUN_SNAPSHOT_COPY_RETRY_DELAY_SECONDS)
+        raise RuntimeError(f"Could not create stable snapshot for {relative_path.as_posix()}") from last_error
 
     def recompute_run_metrics(self, run_id: str) -> dict[str, Any] | None:
         with self._lock:

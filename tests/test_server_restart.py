@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -144,6 +145,60 @@ class ToolPortalRestartTests(unittest.TestCase):
         server.ToolPortalHandler.handle_comparator_get(fake_handler)
 
         self.assertEqual(sent, [(500, {"error": "No module named numpy"})])
+
+    def test_comparator_run_download_get_returns_zip_response(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_dir = root / "runs" / "comparator" / "run-1"
+            run_dir.mkdir(parents=True)
+            (run_dir / "summary.json").write_text("{}", encoding="utf-8")
+
+            responses: list[int] = []
+            headers: list[tuple[str, str]] = []
+            body = bytearray()
+            fake_handler = SimpleNamespace(
+                path="/api/comparator/runs/run-1/download",
+                comparator_path_parts=lambda: ["runs", "run-1", "download"],
+                comparator_service=comparator_module.ComparatorService(root),
+                send_response=lambda status: responses.append(status),
+                send_header=lambda key, value: headers.append((key, value)),
+                end_headers=lambda: None,
+                wfile=SimpleNamespace(write=lambda chunk: body.extend(chunk)),
+            )
+            fake_handler.send_binary_file = server.ToolPortalHandler.send_binary_file.__get__(fake_handler)
+            fake_handler.send_comparator_run_download = server.ToolPortalHandler.send_comparator_run_download.__get__(
+                fake_handler
+            )
+
+            server.ToolPortalHandler.handle_comparator_get(fake_handler)
+
+            self.assertEqual(responses, [200])
+            self.assertIn(("Content-Type", "application/zip"), headers)
+            self.assertIn(
+                ("Content-Disposition", 'attachment; filename="comparator-run-run-1.zip"'),
+                headers,
+            )
+            zip_path = Path(temp_dir) / "response.zip"
+            zip_path.write_bytes(body)
+            with zipfile.ZipFile(zip_path) as archive:
+                self.assertEqual(archive.namelist(), ["run-1/summary.json"])
+
+    def test_comparator_run_download_get_returns_404_when_run_is_missing(self):
+        sent: list[tuple[int, dict]] = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fake_handler = SimpleNamespace(
+                path="/api/comparator/runs/missing/download",
+                comparator_path_parts=lambda: ["runs", "missing", "download"],
+                comparator_service=comparator_module.ComparatorService(Path(temp_dir)),
+                send_json=lambda status, payload: sent.append((status, payload)),
+            )
+            fake_handler.send_comparator_run_download = server.ToolPortalHandler.send_comparator_run_download.__get__(
+                fake_handler
+            )
+
+            server.ToolPortalHandler.handle_comparator_get(fake_handler)
+
+        self.assertEqual(sent, [(404, {"error": "Run not found."})])
 
     def test_restart_helper_prefers_windowless_python_on_windows(self):
         with patch.object(server.sys, "platform", "win32"), patch.object(
