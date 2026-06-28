@@ -307,6 +307,72 @@ test("front chart points include only non-dominated individuals and selected fro
   assert.deepEqual(points.selected.map((point) => point.label), ["front point"]);
 });
 
+test("binary front chart points preserve native pareto individuals", () => {
+  const charts = {
+    pareto: [
+      {
+        x: 0.8,
+        y: 0.5,
+        instanceId: "binary-mopso-cd-2",
+        proposalId: "binary-mopso-cd",
+        sourceIndex: 1,
+        rank: 1,
+        label: "binary native front",
+        prompt: "binary front prompt",
+      },
+      {
+        x: 0.7,
+        y: 0.4,
+        instanceId: "binary-mopso-cd-2",
+        proposalId: "binary-mopso-cd",
+        sourceIndex: 2,
+        rank: 2,
+        label: "binary native point",
+        prompt: "binary native prompt",
+      },
+    ],
+    nonDominated: [
+      {
+        x: 0.8,
+        y: 0.5,
+        instanceId: "binary-mopso-cd-2",
+        proposalId: "binary-mopso-cd",
+        sourceIndex: 1,
+        rank: 1,
+        label: "binary native front",
+        prompt: "binary front prompt",
+      },
+    ],
+    selected: [
+      {
+        x: 0.8,
+        y: 0.5,
+        instanceId: "binary-mopso-cd-2",
+        proposalId: "binary-mopso-cd",
+        sourceIndex: null,
+        rank: 1,
+        label: "binary native front",
+        prompt: "binary front prompt",
+      },
+      {
+        x: 0.7,
+        y: 0.4,
+        instanceId: "binary-mopso-cd-2",
+        proposalId: "binary-mopso-cd",
+        sourceIndex: null,
+        rank: 2,
+        label: "binary native point",
+        prompt: "binary native prompt",
+      },
+    ],
+  };
+
+  const points = comparatorVisibleFrontChartPoints(charts, "pareto-points");
+
+  assert.deepEqual(points.individuals.map((point) => point.label), ["binary native front", "binary native point"]);
+  assert.deepEqual(points.selected.map((point) => point.label), ["binary native front", "binary native point"]);
+});
+
 test("hypervolume area collapses equal fidelity with maximum diversity", () => {
   const area = comparatorHypervolumeArea([
     { x: 0.5, y: 0.4 },

@@ -60,8 +60,24 @@ function comparatorFrontMembershipKey(point, namespace = "") {
   ].map(stableIdentityValue).filter(Boolean).join("|");
 }
 
+function comparatorChartProposal(charts = {}) {
+  for (const points of [charts.pareto, charts.nonDominated, charts.selected]) {
+    if (!Array.isArray(points)) continue;
+    const point = points.find(Boolean);
+    if (point) {
+      return {
+        proposalId: point.proposalId,
+        instanceId: point.instanceId,
+      };
+    }
+  }
+  return {};
+}
+
 export function comparatorVisibleFrontChartPoints(charts = {}, namespace = "") {
-  const individuals = charts.nonDominated || [];
+  const individuals = comparatorIsBinaryProposal(comparatorChartProposal(charts))
+    ? charts.pareto || []
+    : charts.nonDominated || [];
   const frontKeys = new Set(individuals.map((point) => comparatorFrontMembershipKey(point, namespace)));
   const selected = (charts.selected || []).filter((point) =>
     frontKeys.has(comparatorFrontMembershipKey(point, namespace)),
