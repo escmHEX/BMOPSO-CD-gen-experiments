@@ -10,6 +10,7 @@ baselines/external/binary-mopso-cd/
 
 # External datasets
 data/external/ppdb/
+data/external/covid19_tweets/
 data/turbulence/*.sqlite
 data/turbulence/*.sqlite-*
 
