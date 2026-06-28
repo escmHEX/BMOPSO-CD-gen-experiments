@@ -23,6 +23,7 @@ import {
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
   comparatorSeriesIterationExtent,
+  comparatorVisibleFrontChartPoints,
 } from "./comparator_chart_helpers.mjs";
 import {
   comparatorHistoricalInstancesFromRun,
@@ -8483,8 +8484,9 @@ function comparatorHypervolumeLabel(points) {
 function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa", options = {}) {
   const excludedKeys = options.excludedKeys || new Set();
   const pointNamespace = options.pointNamespace || "pareto-points";
-  const allPoints = (charts.pareto || []).map((point) => comparatorChartPointFromRaw(point));
-  const selectedPoints = (charts.selected || []).map((point) => comparatorChartPointFromRaw(point));
+  const visibleFront = comparatorVisibleFrontChartPoints(charts, pointNamespace);
+  const allPoints = visibleFront.individuals.map((point) => comparatorChartPointFromRaw(point));
+  const selectedPoints = visibleFront.selected.map((point) => comparatorChartPointFromRaw(point));
   const allPartition = comparatorPartitionInteractivePoints(allPoints, excludedKeys, pointNamespace);
   const selectedPartition = comparatorPartitionInteractivePoints(selectedPoints, excludedKeys, pointNamespace);
   const activeAllPoints = allPartition.active.map((entry) => entry.point);

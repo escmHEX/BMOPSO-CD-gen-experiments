@@ -45,6 +45,30 @@ export function comparatorPointInteractionKey(point, fallbackIndex = 0, namespac
   return [stableIdentityValue(namespace), coordinatePart, Math.max(0, Number(fallbackIndex) || 0)].join("|");
 }
 
+function comparatorFrontMembershipKey(point, namespace = "") {
+  const coordinates = comparatorPointCoordinates(point);
+  const coordinatePart = coordinates
+    ? `${cleanAxisNumber(coordinates.x)},${cleanAxisNumber(coordinates.y)}`
+    : "no-coordinates";
+  return [
+    namespace,
+    point?.instanceId,
+    point?.proposalId,
+    point?.labelText ?? point?.label,
+    point?.prompt,
+    coordinatePart,
+  ].map(stableIdentityValue).filter(Boolean).join("|");
+}
+
+export function comparatorVisibleFrontChartPoints(charts = {}, namespace = "") {
+  const individuals = charts.nonDominated || [];
+  const frontKeys = new Set(individuals.map((point) => comparatorFrontMembershipKey(point, namespace)));
+  const selected = (charts.selected || []).filter((point) =>
+    frontKeys.has(comparatorFrontMembershipKey(point, namespace)),
+  );
+  return { individuals, selected };
+}
+
 export function comparatorPartitionPointsByExclusion(points = [], excludedKeys = new Set(), namespace = "") {
   const excluded = excludedKeys instanceof Set ? excludedKeys : new Set(excludedKeys || []);
   return (points || []).reduce((partition, point, index) => {

@@ -27,6 +27,7 @@ import {
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
   comparatorSeriesIterationExtent,
+  comparatorVisibleFrontChartPoints,
 } from "../LLM/comparator_chart_helpers.mjs";
 
 function rgbDistance(left, right) {
@@ -238,6 +239,72 @@ test("hypervolume area ignores dominated points", () => {
 
   assert.deepEqual(withDominated.lineData, withoutDominated.lineData);
   assert.equal(withDominated.area, withoutDominated.area);
+});
+
+test("front chart points include only non-dominated individuals and selected front points", () => {
+  const charts = {
+    pareto: [
+      {
+        x: 0.8,
+        y: 0.5,
+        instanceId: "evolmd-mo-1",
+        proposalId: "evolmd-mo",
+        sourceIndex: 1,
+        rank: 2,
+        label: "front point",
+        prompt: "front prompt",
+      },
+      {
+        x: 0.4,
+        y: 0.2,
+        instanceId: "evolmd-mo-1",
+        proposalId: "evolmd-mo",
+        sourceIndex: 2,
+        rank: 12,
+        label: "dominated point",
+        prompt: "dominated prompt",
+      },
+    ],
+    nonDominated: [
+      {
+        x: 0.8,
+        y: 0.5,
+        instanceId: "evolmd-mo-1",
+        proposalId: "evolmd-mo",
+        sourceIndex: 1,
+        rank: 2,
+        label: "front point",
+        prompt: "front prompt",
+      },
+    ],
+    selected: [
+      {
+        x: 0.8,
+        y: 0.5,
+        instanceId: "evolmd-mo-1",
+        proposalId: "evolmd-mo",
+        sourceIndex: null,
+        rank: 1,
+        label: "front point",
+        prompt: "front prompt",
+      },
+      {
+        x: 0.4,
+        y: 0.2,
+        instanceId: "evolmd-mo-1",
+        proposalId: "evolmd-mo",
+        sourceIndex: null,
+        rank: 2,
+        label: "dominated point",
+        prompt: "dominated prompt",
+      },
+    ],
+  };
+
+  const points = comparatorVisibleFrontChartPoints(charts, "pareto-points");
+
+  assert.deepEqual(points.individuals.map((point) => point.label), ["front point"]);
+  assert.deepEqual(points.selected.map((point) => point.label), ["front point"]);
 });
 
 test("hypervolume area collapses equal fidelity with maximum diversity", () => {
