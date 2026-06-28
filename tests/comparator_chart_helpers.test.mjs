@@ -20,8 +20,13 @@ import {
   comparatorMetricExtremes,
   comparatorMetricMetadata,
   comparatorMetricReferenceLinePatch,
+  comparatorActivePointCount,
+  comparatorLimitSeriesToIteration,
+  comparatorPartitionPointsByExclusion,
+  comparatorPointInteractionKey,
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
+  comparatorSeriesIterationExtent,
 } from "../LLM/comparator_chart_helpers.mjs";
 
 function rgbDistance(left, right) {
@@ -254,6 +259,54 @@ test("hypervolume area collapses equal fidelity with maximum diversity", () => {
 test("hypervolume area returns null without valid points", () => {
   assert.equal(comparatorHypervolumeArea([]), null);
   assert.equal(comparatorHypervolumeArea([{ x: "bad", y: 0.4 }]), null);
+});
+
+test("interactive point keys are stable for cloned chart points", () => {
+  const point = {
+    value: [0.72, 0.44],
+    instanceId: "binary-a",
+    proposalId: "binary-mopso-cd",
+    sourceIndex: 3,
+    repetitionIndex: 1,
+    rank: 2,
+    labelText: "candidate text",
+  };
+
+  assert.equal(
+    comparatorPointInteractionKey({ ...point }, 99, "Individuos"),
+    comparatorPointInteractionKey({ ...point }, 0, "Individuos"),
+  );
+  assert.notEqual(
+    comparatorPointInteractionKey(point, 0, "Individuos"),
+    comparatorPointInteractionKey(point, 0, "Seleccionadas"),
+  );
+});
+
+test("interactive point partition excludes points without mutating source arrays", () => {
+  const points = [
+    { value: [0.4, 0.8], sourceIndex: 1, labelText: "active" },
+    { value: [0.7, 0.5], sourceIndex: 2, labelText: "excluded" },
+    { value: [0.9, 0.3], sourceIndex: 3, labelText: "active-b" },
+  ];
+  const excludedKey = comparatorPointInteractionKey(points[1], 1, "Individuos");
+  const partition = comparatorPartitionPointsByExclusion(points, new Set([excludedKey]), "Individuos");
+
+  assert.deepEqual(partition.active.map((entry) => entry.point.labelText), ["active", "active-b"]);
+  assert.deepEqual(partition.inactive.map((entry) => entry.point.labelText), ["excluded"]);
+  assert.equal(comparatorActivePointCount(points, new Set([excludedKey]), "Individuos"), 2);
+  assert.deepEqual(points.map((point) => point.labelText), ["active", "excluded", "active-b"]);
+});
+
+test("iteration extent and limiter use finite generations without mutating source series", () => {
+  const series = [
+    { name: "A", data: [[1, 0.1], [2, 0.3], [3, 0.4]] },
+    { name: "B", data: [[1, 0.2], [4, 0.6], [Number.NaN, 0.8]] },
+  ];
+  const limited = comparatorLimitSeriesToIteration(series, 2);
+
+  assert.deepEqual(comparatorSeriesIterationExtent(series), { min: 1, max: 4 });
+  assert.deepEqual(limited.map((item) => item.data), [[[1, 0.1], [2, 0.3]], [[1, 0.2]]]);
+  assert.deepEqual(series[0].data, [[1, 0.1], [2, 0.3], [3, 0.4]]);
 });
 
 test("metric extremes respect best direction", () => {

@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import json
 import tempfile
 import unittest
 import zipfile
@@ -358,6 +359,66 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
         self.assertEqual(discarded[0]["tweetId"], "1414141414141414141")
         self.assertEqual(discarded[0]["reason"], "mention")
         self.assertEqual(missed[0]["tweetId"], "1515151515151515151")
+
+    def test_build_filtered_corpus_reports_accumulated_resume_totals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            input_dir.mkdir()
+            (input_dir / "ids.csv").write_text(
+                "tweet_id\n"
+                "1717171717171717171\n"
+                "1818181818181818181\n"
+                "1919191919191919191\n"
+                "2020202020202020202\n",
+                encoding="utf-8",
+            )
+            output_path = root / "hydrated" / "filtered.csv"
+            not_hydrated_path = root / "hydrated" / "filtered.not_hydrated.csv"
+            discarded_path = root / "hydrated" / "filtered.discarded.csv"
+            report_path = root / "hydrated" / "filtered.report.json"
+            output_path.parent.mkdir()
+            output_path.write_text(
+                "tweetId,texto\n"
+                "1717171717171717171,Existing normal text row\n",
+                encoding="utf-8",
+            )
+            not_hydrated_path.write_text(
+                "tweetId,reason\n"
+                "1818181818181818181,not_found\n",
+                encoding="utf-8",
+            )
+            discarded_path.write_text(
+                "tweetId,reason,cleanedLength\n"
+                "1919191919191919191,mention,32\n",
+                encoding="utf-8",
+            )
+            hydrator = FakeHydrator({"2020202020202020202": "New normal public health sentence"})
+
+            summary = asyncio.run(
+                build_filtered_corpus(
+                    input_path=input_dir,
+                    output_path=output_path,
+                    hydrator=hydrator,
+                    not_hydrated_path=not_hydrated_path,
+                    discarded_path=discarded_path,
+                    report_path=report_path,
+                    target_valid=2,
+                    max_attempts=10,
+                )
+            )
+
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(summary.hydrated, 1)
+        self.assertEqual(summary.output_rows, 2)
+        self.assertEqual(summary.not_hydrated_rows, 1)
+        self.assertEqual(summary.discarded_rows, 1)
+        self.assertEqual(report["target_valid"], 2)
+        self.assertEqual(report["max_attempts"], 10)
+        self.assertEqual(report["output_rows"], 2)
+        self.assertEqual(report["not_hydrated_rows"], 1)
+        self.assertEqual(report["discarded_rows"], 1)
 
 
 if __name__ == "__main__":

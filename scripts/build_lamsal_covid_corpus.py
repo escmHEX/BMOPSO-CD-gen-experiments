@@ -71,6 +71,11 @@ class HydrationSummary:
     started_at: str
     completed_at: str
     discarded: int = 0
+    target_valid: int | None = None
+    max_attempts: int | None = None
+    output_rows: int | None = None
+    not_hydrated_rows: int | None = None
+    discarded_rows: int | None = None
 
 
 @dataclass(frozen=True)
@@ -225,12 +230,14 @@ async def build_corpus(
                 text = await asyncio.wait_for(hydrator.fetch_text(tweet_id), timeout=tweet_timeout_seconds)
             except TimeoutError:
                 miss_writer.writerow({"tweetId": tweet_id, "reason": "timeout"})
+                miss_handle.flush()
                 not_hydrated += 1
                 if limit is not None and selected >= limit:
                     break
                 continue
             except Exception as error:
                 miss_writer.writerow({"tweetId": tweet_id, "reason": type(error).__name__})
+                miss_handle.flush()
                 not_hydrated += 1
                 if limit is not None and selected >= limit:
                     break
@@ -239,12 +246,14 @@ async def build_corpus(
             text = normalize_tweet_text(text or "")
             if not text:
                 miss_writer.writerow({"tweetId": tweet_id, "reason": "not_found"})
+                miss_handle.flush()
                 not_hydrated += 1
                 if limit is not None and selected >= limit:
                     break
                 continue
 
             output_writer.writerow({"tweetId": tweet_id, "texto": text})
+            output_handle.flush()
             hydrated += 1
             if limit is not None and selected >= limit:
                 break
@@ -331,15 +340,18 @@ async def build_filtered_corpus(
                 text = await asyncio.wait_for(hydrator.fetch_text(tweet_id), timeout=tweet_timeout_seconds)
             except TimeoutError:
                 miss_writer.writerow({"tweetId": tweet_id, "reason": "timeout"})
+                miss_handle.flush()
                 not_hydrated += 1
                 continue
             except Exception as error:
                 miss_writer.writerow({"tweetId": tweet_id, "reason": type(error).__name__})
+                miss_handle.flush()
                 not_hydrated += 1
                 continue
 
             if not text:
                 miss_writer.writerow({"tweetId": tweet_id, "reason": "not_found"})
+                miss_handle.flush()
                 not_hydrated += 1
                 continue
 
@@ -352,10 +364,12 @@ async def build_filtered_corpus(
                         "cleanedLength": filter_result.cleaned_length,
                     }
                 )
+                discard_handle.flush()
                 discarded += 1
                 continue
 
             output_writer.writerow({"tweetId": tweet_id, "texto": filter_result.text})
+            output_handle.flush()
             hydrated += 1
             if hydrated >= target_new_valid:
                 break
@@ -373,6 +387,11 @@ async def build_filtered_corpus(
         started_at=started_at,
         completed_at=_utc_now(),
         discarded=discarded,
+        target_valid=target_valid,
+        max_attempts=max_attempts,
+        output_rows=_count_csv_data_rows(output_path),
+        not_hydrated_rows=_count_csv_data_rows(not_hydrated_path),
+        discarded_rows=_count_csv_data_rows(discarded_path),
     )
     if report_path:
         report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -531,6 +550,13 @@ def _write_header_if_empty(path: Path, handle: TextIO, writer: csv.DictWriter) -
     if not path.exists() or path.stat().st_size == 0:
         writer.writeheader()
         handle.flush()
+
+
+def _count_csv_data_rows(path: Path) -> int:
+    if not path.exists() or path.stat().st_size == 0:
+        return 0
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return sum(1 for _ in csv.DictReader(handle))
 
 
 def _utc_now() -> str:

@@ -17,6 +17,82 @@ function cleanAxisNumber(value) {
   return Number(Number(value).toPrecision(12));
 }
 
+function stableIdentityValue(value) {
+  if (value === null || value === undefined) return "";
+  const normalized = String(value).trim();
+  return normalized.length ? normalized : "";
+}
+
+export function comparatorPointInteractionKey(point, fallbackIndex = 0, namespace = "") {
+  const coordinates = comparatorPointCoordinates(point);
+  const coordinatePart = coordinates
+    ? `${cleanAxisNumber(coordinates.x)},${cleanAxisNumber(coordinates.y)}`
+    : "no-coordinates";
+  const identityParts = [
+    namespace,
+    point?.instanceId,
+    point?.proposalId,
+    point?.sourceIndex,
+    point?.repetitionIndex,
+    point?.rank,
+    point?.labelText ?? point?.label,
+    point?.prompt,
+  ].map(stableIdentityValue).filter(Boolean);
+
+  if (identityParts.length > (namespace ? 1 : 0)) {
+    return [...identityParts, coordinatePart].join("|");
+  }
+  return [stableIdentityValue(namespace), coordinatePart, Math.max(0, Number(fallbackIndex) || 0)].join("|");
+}
+
+export function comparatorPartitionPointsByExclusion(points = [], excludedKeys = new Set(), namespace = "") {
+  const excluded = excludedKeys instanceof Set ? excludedKeys : new Set(excludedKeys || []);
+  return (points || []).reduce((partition, point, index) => {
+    const key = comparatorPointInteractionKey(point, index, namespace);
+    const entry = { point, key, index };
+    if (excluded.has(key)) {
+      partition.inactive.push(entry);
+    } else {
+      partition.active.push(entry);
+    }
+    return partition;
+  }, { active: [], inactive: [] });
+}
+
+export function comparatorActivePointCount(points = [], excludedKeys = new Set(), namespace = "") {
+  return comparatorPartitionPointsByExclusion(points, excludedKeys, namespace).active.length;
+}
+
+function finiteIterationValue(point) {
+  const value = Array.isArray(point) ? point[0] : point?.generation ?? point?.value?.[0];
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+export function comparatorSeriesIterationExtent(series = []) {
+  const values = (series || [])
+    .flatMap((item) => item?.data || [])
+    .map(finiteIterationValue)
+    .filter((value) => value !== null);
+  if (!values.length) return null;
+  return {
+    min: Math.min(...values),
+    max: Math.max(...values),
+  };
+}
+
+export function comparatorLimitSeriesToIteration(series = [], iterationLimit = null) {
+  const limit = Number(iterationLimit);
+  const hasLimit = Number.isFinite(limit);
+  return (series || []).map((item) => ({
+    ...item,
+    data: (item?.data || []).filter((point) => {
+      const iteration = finiteIterationValue(point);
+      return iteration !== null && (!hasLimit || iteration <= limit);
+    }),
+  }));
+}
+
 const COMPARATOR_BINARY_COLOR = "#2A8C00";
 const COMPARATOR_NON_BINARY_PALETTE = Object.freeze([
   "#1F77B4",
