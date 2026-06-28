@@ -16,9 +16,13 @@ import {
   comparatorMetricExtremes,
   comparatorMetricMetadata,
   comparatorMetricReferenceLinePatch,
+  comparatorLimitSeriesToIteration,
+  comparatorPartitionPointsByExclusion,
   comparatorPointCoordinates,
+  comparatorPointInteractionKey,
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
+  comparatorSeriesIterationExtent,
 } from "./comparator_chart_helpers.mjs";
 import {
   comparatorHistoricalInstancesFromRun,
@@ -831,6 +835,8 @@ const COMPARATOR_LOG_CHUNK_LIMIT = 5000;
 const COMPARATOR_LAST_RUN_ID_STORAGE_KEY = "comparator:lastRunId";
 const COMPARATOR_CHART_ZOOM_FACTOR = 100;
 const COMPARATOR_CHART_PADDING_RATIO = 0.08;
+const COMPARATOR_INACTIVE_POINT_OPACITY = 0.22;
+const COMPARATOR_LINE_HIT_RADIUS_PX = 14;
 const COMPARATOR_METRIC_REFERENCE_TOOL_KEY = "myComparatorMetricReferenceLines";
 const COMPARATOR_METRIC_REFERENCE_HIDE_TITLE = "Ocultar lineas mejor/peor";
 const COMPARATOR_METRIC_REFERENCE_SHOW_TITLE = "Mostrar lineas mejor/peor";
@@ -7615,25 +7621,49 @@ function comparatorInternalBmopsoSection(item, index) {
   window.queueMicrotask(() => {
     const frontChart = window.echarts.init(frontNode);
     comparatorInternalBmopsoCharts.push(frontChart);
-    const frontOption = internalBmopsoParetoChartOption(
+    const frontExcludedKeys = new Set();
+    const buildFrontOption = () => internalBmopsoParetoChartOption(
       "Frente final BMOPSO",
       item.analysis,
       style.color,
+      { excludedKeys: frontExcludedKeys },
     );
-    frontChart.setOption(frontOption);
-    installComparatorLocalLegend(frontChart, frontNode, frontOption.series || []);
+    const frontOption = buildFrontOption();
+    setComparatorChartOption(frontChart, frontNode, frontOption);
+    installComparatorPointToggle(frontChart, frontNode, buildFrontOption, frontExcludedKeys);
 
     const hvChart = window.echarts.init(hvNode);
     comparatorInternalBmopsoCharts.push(hvChart);
-    const hvOption = internalBmopsoHvLineOption(
-      item.displayName || item.instanceId || "Binary MOPSO-CD",
+    const hvSeriesName = item.displayName || item.instanceId || "Binary MOPSO-CD";
+    const rawHvSeries = [{
+      data: (item.analysis.series || [])
+        .filter((point) => point.hypervolume !== null && point.hypervolume !== undefined)
+        .map((point, pointIndex) => comparatorLinePoint(hvSeriesName, [point.generation, point.hypervolume], {
+          instanceId: hvSeriesName,
+          proposalId: "binary-mopso-cd",
+          sourceIndex: point.generation,
+          rank: "internal-hv",
+          labelText: `HV interno ${point.generation}`,
+        }, pointIndex)),
+    }];
+    const hvExtent = comparatorSeriesIterationExtent(rawHvSeries);
+    let hvIterationLimit = hvExtent?.max ?? null;
+    const buildHvOption = () => internalBmopsoHvLineOption(
+      hvChart,
+      hvSeriesName,
       item.analysis,
       style.color,
       style.lineWidth,
+      { iterationLimit: hvIterationLimit },
     );
-    hvChart.setOption(hvOption);
-    installComparatorHideSeriesToolbox(hvChart);
-    installComparatorLocalLegend(hvChart, hvNode, hvOption.series || []);
+    const hvOption = buildHvOption();
+    setComparatorChartOption(hvChart, hvNode, hvOption);
+    installComparatorCurveVisibilityToggle(hvChart);
+    installComparatorIterationSlider(hvNode, hvExtent, (value) => {
+      hvIterationLimit = value;
+      const selected = comparatorLegendSelection(hvChart);
+      setComparatorChartOption(hvChart, hvNode, buildHvOption(), selected);
+    });
   });
   return section;
 }
@@ -7929,6 +7959,7 @@ function comparatorSeriesLegendColor(series) {
 function comparatorSeriesLegendEntries(series = []) {
   const seen = new Set();
   return (series || []).map((item) => {
+    if (item?.showInLegend === false) return null;
     const name = String(item?.name || "").trim();
     if (!name || seen.has(name)) return null;
     seen.add(name);
@@ -7937,6 +7968,41 @@ function comparatorSeriesLegendEntries(series = []) {
       color: comparatorSeriesLegendColor(item),
     };
   }).filter(Boolean);
+}
+
+function comparatorLegendSelection(chart) {
+  const option = chart?.getOption?.() || {};
+  const selected = { ...((option.legend || [])[0]?.selected || {}) };
+  const state = comparatorChartLegendState.get(chart);
+  (state?.entries || []).forEach((entry) => {
+    if (entry.input) selected[entry.name] = entry.input.checked;
+  });
+  return selected;
+}
+
+function setComparatorChartOption(chart, chartNode, option, selected = null) {
+  const nextOption = selected
+    ? { ...option, legend: { ...(option.legend || {}), selected } }
+    : option;
+  chart.setOption(nextOption, true);
+  installComparatorLocalLegend(chart, chartNode, nextOption.series || []);
+}
+
+function comparatorSeriesVisible(chart, seriesName) {
+  const option = chart?.getOption?.() || {};
+  const selected = (option.legend || [])[0]?.selected || {};
+  return selected[seriesName] !== false;
+}
+
+function setComparatorSeriesVisibility(chart, seriesName, visible) {
+  const state = comparatorChartLegendState.get(chart);
+  const entry = (state?.entries || []).find((item) => item.name === seriesName);
+  if (entry?.input) entry.input.checked = visible;
+  chart.dispatchAction({ type: visible ? "legendSelect" : "legendUnSelect", name: seriesName });
+}
+
+function toggleComparatorSeriesVisibility(chart, seriesName) {
+  setComparatorSeriesVisibility(chart, seriesName, !comparatorSeriesVisible(chart, seriesName));
 }
 
 function comparatorHideSeriesToolboxFeature(chart) {
@@ -7986,6 +8052,8 @@ function installComparatorLocalLegend(chart, chartNode, series = []) {
       <span>${escapeHtml(entry.name)}</span>
     `;
     const input = label.querySelector("input");
+    const selected = ((chart.getOption?.() || {}).legend || [])[0]?.selected || {};
+    input.checked = selected[entry.name] !== false;
     input.addEventListener("change", () => {
       chart.dispatchAction({ type: input.checked ? "legendSelect" : "legendUnSelect", name: entry.name });
     });
@@ -7996,6 +8064,7 @@ function installComparatorLocalLegend(chart, chartNode, series = []) {
   chartNode.before(legend);
   comparatorChartLegendState.set(chart, { legend, entries: stateEntries });
   installComparatorHideSeriesToolbox(chart);
+  chart.off("restore");
   chart.on("restore", () => {
     stateEntries.forEach((entry) => {
       entry.input.checked = true;
@@ -8010,6 +8079,70 @@ function syncComparatorChartLocalLegends(root = document) {
     if (!chart || !panel || panel.querySelector(".comparator-local-legend")) return;
     const option = chart.getOption?.() || {};
     installComparatorLocalLegend(chart, chartNode, option.series || []);
+  });
+}
+
+function installComparatorPointToggle(chart, chartNode, buildOption, excludedKeys) {
+  chart.on("click", (params) => {
+    const key = params?.data?.pointInteractionKey;
+    if (!key) return;
+    if (excludedKeys.has(key)) {
+      excludedKeys.delete(key);
+    } else {
+      excludedKeys.add(key);
+    }
+    const selected = comparatorLegendSelection(chart);
+    setComparatorChartOption(chart, chartNode, buildOption(), selected);
+  });
+}
+
+function installComparatorCurveVisibilityToggle(chart) {
+  installComparatorLineClickToggle(chart);
+}
+
+function lineSegmentDistance(point, start, end) {
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  if (dx === 0 && dy === 0) {
+    return Math.hypot(point[0] - start[0], point[1] - start[1]);
+  }
+  const t = Math.max(0, Math.min(1, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / ((dx * dx) + (dy * dy))));
+  const projection = [start[0] + (t * dx), start[1] + (t * dy)];
+  return Math.hypot(point[0] - projection[0], point[1] - projection[1]);
+}
+
+function installComparatorLineClickToggle(chart) {
+  chart.getZr()?.on("click", (event) => {
+    const option = chart.getOption?.() || {};
+    const series = option.series || [];
+    const chartRect = chart.getDom?.()?.getBoundingClientRect?.();
+    const eventPoints = [
+      [event.offsetX, event.offsetY],
+      [event.zrX, event.zrY],
+      [event.event?.offsetX, event.event?.offsetY],
+      chartRect ? [event.event?.clientX - chartRect.left, event.event?.clientY - chartRect.top] : null,
+    ].filter((point) => point && point.every((value) => Number.isFinite(Number(value))));
+    let nearest = null;
+    series.forEach((item, seriesIndex) => {
+      if (item?.type !== "line" || item?.silent || !comparatorSeriesVisible(chart, item.name)) return;
+      const data = (item.data || [])
+        .map((point) => Array.isArray(point) ? point : point?.value)
+        .filter((point) => Array.isArray(point) && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1])));
+      for (let index = 1; index < data.length; index += 1) {
+        const start = chart.convertToPixel({ seriesIndex }, data[index - 1]);
+        const end = chart.convertToPixel({ seriesIndex }, data[index]);
+        if (!Array.isArray(start) || !Array.isArray(end)) continue;
+        for (const eventPoint of eventPoints) {
+          const distance = lineSegmentDistance(eventPoint, start, end);
+          if (distance <= COMPARATOR_LINE_HIT_RADIUS_PX && (!nearest || distance < nearest.distance)) {
+            nearest = { distance, name: item.name };
+          }
+        }
+      }
+    });
+    if (nearest) {
+      toggleComparatorSeriesVisibility(chart, nearest.name);
+    }
   });
 }
 
@@ -8035,9 +8168,17 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
       window.queueMicrotask(() => {
         const normalizedChart = window.echarts.init(normalizedChartNode);
         comparatorCharts.push(normalizedChart);
-        const option = paretoChartOption("Frente comparable normalizado", proposal.charts || {}, proposal.metrics || {}, color);
-        normalizedChart.setOption(option);
-        installComparatorLocalLegend(normalizedChart, normalizedChartNode, option.series || []);
+        const excludedKeys = new Set();
+        const buildOption = () => paretoChartOption(
+          "Frente comparable normalizado",
+          proposal.charts || {},
+          proposal.metrics || {},
+          color,
+          { excludedKeys },
+        );
+        const option = buildOption();
+        setComparatorChartOption(normalizedChart, normalizedChartNode, option);
+        installComparatorPointToggle(normalizedChart, normalizedChartNode, buildOption, excludedKeys);
       });
       return article;
     }),
@@ -8101,32 +8242,58 @@ function renderComparatorContributionChart(proposals, styleMap = comparatorChart
   installComparatorLocalLegend(chart, dom.comparatorContributionChart, option.series || []);
 }
 
-function renderComparatorMetricLine(container, proposals, metricKey, title, styleMap = comparatorChartStyles) {
-  const metadata = comparatorMetricMetadata(metricKey);
-  const series = proposals.map((proposal, index) => {
-    const style = comparatorChartStyleForProposal(proposal, index, styleMap);
-    return {
-      id: `comparator-metric-${metricKey}-${comparatorEntityId(proposal) || index}`,
-      name: proposal.displayName,
-      type: "line",
-      connectNulls: false,
-      showSymbol: false,
-      data: (proposal.series || [])
-        .filter((point) => point[metricKey] !== null && point[metricKey] !== undefined)
-        .map((point) => [point.generation, point[metricKey]]),
-      itemStyle: { color: style.color },
-      lineStyle: { color: style.color, width: style.lineWidth },
-    };
-  });
-  const metricValues = series.flatMap((item) => item.data.map((point) => point[1])).filter(Number.isFinite);
-  const referenceTarget = series.find((item) => item.data.length > 0);
+function comparatorLinePoint(seriesName, value, identity = {}, index = 0) {
+  const point = {
+    value,
+    instanceId: identity.instanceId,
+    proposalId: identity.proposalId,
+    sourceIndex: identity.sourceIndex,
+    repetitionIndex: identity.repetitionIndex,
+    rank: identity.rank,
+    labelText: identity.labelText,
+  };
+  return {
+    ...point,
+    pointInteractionKey: comparatorPointInteractionKey(point, index, seriesName),
+  };
+}
+
+function comparatorLineYValues(series = []) {
+  return series.flatMap((item) =>
+    (item.data || []).map((point) => comparatorPointCoordinates(point)?.y).filter(Number.isFinite),
+  );
+}
+
+function comparatorInteractiveLineSeries(rawSeries, iterationLimit) {
+  const limitedSeries = comparatorLimitSeriesToIteration(rawSeries, iterationLimit);
+  return limitedSeries.map((item) => ({
+    ...item,
+    showSymbol: false,
+  }));
+}
+
+function comparatorInteractiveLineOption({
+  chart,
+  rawSeries,
+  title,
+  description,
+  higherIsBetter,
+  iterationLimit,
+  emptyMessage,
+}) {
+  const activeSeries = comparatorInteractiveLineSeries(rawSeries, iterationLimit);
+  const metricValues = comparatorLineYValues(activeSeries);
+  const referenceTarget = activeSeries.find((item) => item.data.length > 0);
   const referenceLines = referenceTarget && metricValues.length > 0
-    ? comparatorMetricReferenceLines(metricValues, metadata.higherIsBetter)
+    ? comparatorMetricReferenceLines(metricValues, higherIsBetter)
     : null;
+  const referenceLinesHidden = chart && referenceTarget
+    ? comparatorMetricReferenceLinesHidden(chart, referenceTarget.id)
+    : false;
   if (referenceTarget && referenceLines) {
-    referenceTarget.markLine = referenceLines;
+    referenceTarget.markLine = referenceLinesHidden ? { ...referenceLines, data: [] } : referenceLines;
   }
-  const chartPoints = series.flatMap((item) => (item.data || []).map((point) => ({ value: point })));
+  const chartPoints = activeSeries.flatMap((item) => item.data || []);
   const xAxisWindow = comparatorChartAxisWindow(chartPoints, "x", {
     paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
     zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
@@ -8151,18 +8318,7 @@ function renderComparatorMetricLine(container, proposals, metricKey, title, styl
       startValue: yAxisWindow.defaultMin,
       endValue: yAxisWindow.defaultMax,
     } : null,
-    xAxisWindow ? {
-      type: "slider",
-      xAxisIndex: 0,
-      filterMode: "none",
-      height: 18,
-      bottom: 10,
-      startValue: xAxisWindow.defaultMin,
-      endValue: xAxisWindow.defaultMax,
-    } : null,
   ].filter(Boolean);
-  const chart = window.echarts.init(container);
-  comparatorCharts.push(chart);
   const toolboxFeature = {
     saveAsImage: {},
     dataZoom: {},
@@ -8176,11 +8332,11 @@ function renderComparatorMetricLine(container, proposals, metricKey, title, styl
     );
   }
   toolboxFeature[COMPARATOR_HIDE_SERIES_TOOL_KEY] = comparatorHideSeriesToolboxFeature(chart);
-  const option = {
-    title: { text: title, subtext: metadata.description, left: 8, top: 6, textStyle: { fontSize: 13 }, subtextStyle: { fontSize: 11, color: "#64748b" } },
+  return {
+    title: { text: title, subtext: description, left: 8, top: 6, textStyle: { fontSize: 13 }, subtextStyle: { fontSize: 11, color: "#64748b" } },
     tooltip: safeChartTooltip("axis", comparatorLineTooltipFormatter),
     legend: { show: false },
-    grid: { left: 52, right: 22, top: 78, bottom: 70, containLabel: true },
+    grid: { left: 52, right: 22, top: 78, bottom: 58, containLabel: true },
     toolbox: { feature: toolboxFeature, right: 8, top: 38 },
     dataZoom,
     xAxis: {
@@ -8198,189 +8354,300 @@ function renderComparatorMetricLine(container, proposals, metricKey, title, styl
       min: yAxisWindow?.zoomMin,
       max: yAxisWindow?.zoomMax,
     },
-    graphic: comparatorEmptyChartGraphic(
-      series,
-      proposals.length ? "Sin serie disponible para las propuestas filtradas." : "Sin propuestas filtradas.",
-    ),
-    series,
+    graphic: comparatorEmptyChartGraphic(activeSeries, emptyMessage),
+    series: activeSeries,
   };
-  chart.setOption(option);
-  installComparatorLocalLegend(chart, container, option.series || []);
 }
 
-function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa") {
-  const allPoints = (charts.pareto || []).map((point) => ({
+function installComparatorIterationSlider(container, extent, onChange) {
+  const panel = container.closest(".panel") || container.parentElement;
+  if (!panel) return;
+  panel.querySelectorAll(".comparator-iteration-slider").forEach((node) => node.remove());
+  if (!extent || !Number.isFinite(extent.min) || !Number.isFinite(extent.max)) return;
+  const min = Math.floor(extent.min);
+  const max = Math.ceil(extent.max);
+  const wrapper = document.createElement("label");
+  wrapper.className = "comparator-iteration-slider";
+  wrapper.innerHTML = `
+    <span>Iteracion hasta <strong>${escapeHtml(String(max))}</strong></span>
+    <input type="range" min="${escapeHtml(String(min))}" max="${escapeHtml(String(max))}" step="1" value="${escapeHtml(String(max))}">
+  `;
+  const input = wrapper.querySelector("input");
+  const valueLabel = wrapper.querySelector("strong");
+  input.disabled = min === max;
+  input.addEventListener("input", () => {
+    valueLabel.textContent = input.value;
+    onChange(Number(input.value));
+  });
+  container.after(wrapper);
+}
+
+function renderComparatorMetricLine(container, proposals, metricKey, title, styleMap = comparatorChartStyles) {
+  const metadata = comparatorMetricMetadata(metricKey);
+  const rawSeries = proposals.map((proposal, index) => {
+    const style = comparatorChartStyleForProposal(proposal, index, styleMap);
+    const entityId = comparatorEntityId(proposal);
+    return {
+      id: `comparator-metric-${metricKey}-${comparatorEntityId(proposal) || index}`,
+      name: proposal.displayName,
+      type: "line",
+      connectNulls: false,
+      data: (proposal.series || [])
+        .filter((point) => point[metricKey] !== null && point[metricKey] !== undefined)
+        .map((point, pointIndex) => comparatorLinePoint(proposal.displayName, [point.generation, point[metricKey]], {
+          instanceId: entityId,
+          proposalId: proposal.proposalId,
+          sourceIndex: point.generation,
+          rank: metricKey,
+          labelText: `${title} ${point.generation}`,
+        }, pointIndex)),
+      itemStyle: { color: style.color },
+      lineStyle: { color: style.color, width: style.lineWidth },
+    };
+  });
+  const chart = window.echarts.init(container);
+  comparatorCharts.push(chart);
+  const extent = comparatorSeriesIterationExtent(rawSeries);
+  let iterationLimit = extent?.max ?? null;
+  const buildOption = () => comparatorInteractiveLineOption({
+      chart,
+      rawSeries,
+      title,
+      description: metadata.description,
+      higherIsBetter: metadata.higherIsBetter,
+      iterationLimit,
+      emptyMessage: proposals.length ? "Sin serie disponible para las propuestas filtradas." : "Sin propuestas filtradas.",
+    });
+  const option = buildOption();
+  setComparatorChartOption(chart, container, option);
+  installComparatorCurveVisibilityToggle(chart);
+  installComparatorIterationSlider(container, extent, (value) => {
+    iterationLimit = value;
+    const selected = comparatorLegendSelection(chart);
+    setComparatorChartOption(chart, container, buildOption(), selected);
+  });
+}
+
+function comparatorChartPointFromRaw(point, extra = {}) {
+  return {
     value: [point.x, point.y],
     labelText: point.label,
     prompt: point.prompt,
     rank: point.rank,
+    sourceIndex: point.sourceIndex,
+    repetitionIndex: point.repetitionIndex,
+    instanceId: point.instanceId,
+    proposalId: point.proposalId,
+    displayName: point.displayName,
+    baseDisplayName: point.baseDisplayName,
     nativeObjectiveVector: point.nativeObjectiveVector,
     comparableObjectiveVector: point.comparableObjectiveVector,
     coordinateSpace: point.coordinateSpace,
-  }));
-  const selectedPoints = (charts.selected || []).map((point) => ({
-    value: [point.x, point.y],
-    labelText: point.label,
-    prompt: point.prompt,
-    rank: point.rank,
-    nativeObjectiveVector: point.nativeObjectiveVector,
-    comparableObjectiveVector: point.comparableObjectiveVector,
-    coordinateSpace: point.coordinateSpace,
-  }));
-  const hvAreaSeries = comparatorHypervolumeAreaSeries(charts.nonDominated || [], metrics.hypervolumeLabel || "", proposalColor);
+    ...extra,
+  };
+}
+
+function comparatorInteractivePoint(point, namespace, index) {
+  return {
+    ...point,
+    pointInteractionKey: comparatorPointInteractionKey(point, index, namespace),
+  };
+}
+
+function comparatorInactivePoint(entry, color, options = {}) {
+  const sourceStyle = entry.point.itemStyle || {};
+  return {
+    ...entry.point,
+    itemStyle: {
+      ...sourceStyle,
+      color: sourceStyle.color || options.color || color,
+      borderColor: sourceStyle.borderColor || options.borderColor || color,
+      opacity: COMPARATOR_INACTIVE_POINT_OPACITY,
+    },
+  };
+}
+
+function comparatorPartitionInteractivePoints(points, excludedKeys, namespace) {
+  return comparatorPartitionPointsByExclusion(
+    points.map((point, index) => comparatorInteractivePoint(point, namespace, index)),
+    excludedKeys,
+    namespace,
+  );
+}
+
+function comparatorHypervolumeLabel(points) {
+  const area = comparatorHypervolumeArea(points);
+  return area ? formatOptionalNumber(area.area, 6) : "";
+}
+
+function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa", options = {}) {
+  const excludedKeys = options.excludedKeys || new Set();
+  const pointNamespace = options.pointNamespace || "pareto-points";
+  const allPoints = (charts.pareto || []).map((point) => comparatorChartPointFromRaw(point));
+  const selectedPoints = (charts.selected || []).map((point) => comparatorChartPointFromRaw(point));
+  const allPartition = comparatorPartitionInteractivePoints(allPoints, excludedKeys, pointNamespace);
+  const selectedPartition = comparatorPartitionInteractivePoints(selectedPoints, excludedKeys, pointNamespace);
+  const activeAllPoints = allPartition.active.map((entry) => entry.point);
+  const activeSelectedPoints = selectedPartition.active.map((entry) => entry.point);
+  const inactiveAllPoints = allPartition.inactive.map((entry) =>
+    comparatorInactivePoint(entry, proposalColor, { color: proposalColor }),
+  );
+  const inactiveSelectedPoints = selectedPartition.inactive.map((entry) =>
+    comparatorInactivePoint(entry, proposalColor, { color: "#ffffff", borderColor: proposalColor }),
+  );
+  const hvLabel = metrics.hypervolumeLabel === "No aplica" ? "" : comparatorHypervolumeLabel(activeAllPoints);
+  const hvAreaSeries = comparatorHypervolumeAreaSeries(activeAllPoints, hvLabel, proposalColor);
   return baseScatterOption(title, [
     ...hvAreaSeries,
-    { name: "Individuos", type: "scatter", symbolSize: 8, data: allPoints, label: { show: false }, itemStyle: { color: proposalColor, opacity: 0.72 } },
     {
-      name: "Seleccionadas",
+      name: `Individuos (${activeAllPoints.length})`,
+      type: "scatter",
+      symbolSize: 8,
+      data: activeAllPoints,
+      label: { show: false },
+      itemStyle: { color: proposalColor, opacity: 0.72 },
+    },
+    {
+      name: "Individuos inactivos",
+      type: "scatter",
+      symbolSize: 8,
+      data: inactiveAllPoints,
+      label: { show: false },
+      itemStyle: { color: proposalColor, opacity: COMPARATOR_INACTIVE_POINT_OPACITY },
+      showInLegend: false,
+      z: 2,
+    },
+    {
+      name: `Seleccionadas (${activeSelectedPoints.length})`,
       type: "scatter",
       symbol: "circle",
       symbolSize: 15,
-      data: selectedPoints,
+      data: activeSelectedPoints,
       label: { show: false },
       itemStyle: { color: "#ffffff", borderColor: proposalColor, borderWidth: 2.5 },
+      z: 4,
+    },
+    {
+      name: "Seleccionadas inactivas",
+      type: "scatter",
+      symbol: "circle",
+      symbolSize: 15,
+      data: inactiveSelectedPoints,
+      label: { show: false },
+      itemStyle: {
+        color: "#ffffff",
+        borderColor: proposalColor,
+        borderWidth: 2.5,
+        opacity: COMPARATOR_INACTIVE_POINT_OPACITY,
+      },
+      showInLegend: false,
+      z: 3,
     },
   ], {
     description: "Ejes normalizados comparables. Area sombreada: HV dominado respecto a [0, 0].",
+    axisPoints: [...activeAllPoints, ...activeSelectedPoints, ...inactiveAllPoints, ...inactiveSelectedPoints],
+    fixedBadge: hvLabel ? { text: `HV = ${hvLabel}`, color: proposalColor } : null,
   });
 }
 
-function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C00") {
+function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C00", options = {}) {
   const charts = analysis.charts || {};
-  const allPoints = (charts.pareto || []).map((point) => ({
-    value: [point.x, point.y],
-    labelText: point.label,
-    prompt: point.prompt,
-    rank: point.rank,
-    nativeObjectiveVector: point.nativeObjectiveVector,
-    comparableObjectiveVector: point.comparableObjectiveVector,
-    coordinateSpace: point.coordinateSpace,
-  }));
-  const selectedPoints = (charts.selected || []).map((point) => ({
-    value: [point.x, point.y],
-    labelText: point.label,
-    prompt: point.prompt,
-    rank: point.rank,
-    nativeObjectiveVector: point.nativeObjectiveVector,
-    comparableObjectiveVector: point.comparableObjectiveVector,
-    coordinateSpace: point.coordinateSpace,
-  }));
-  const hvAreaSeries = comparatorHypervolumeAreaSeries(
-    charts.nonDominated || [],
-    analysis.metrics?.hypervolumeLabel || "",
-    proposalColor,
+  const excludedKeys = options.excludedKeys || new Set();
+  const pointNamespace = options.pointNamespace || "bmopso-points";
+  const allPoints = (charts.pareto || []).map((point) => comparatorChartPointFromRaw(point));
+  const selectedPoints = (charts.selected || []).map((point) => comparatorChartPointFromRaw(point));
+  const allPartition = comparatorPartitionInteractivePoints(allPoints, excludedKeys, pointNamespace);
+  const selectedPartition = comparatorPartitionInteractivePoints(selectedPoints, excludedKeys, pointNamespace);
+  const activeAllPoints = allPartition.active.map((entry) => entry.point);
+  const activeSelectedPoints = selectedPartition.active.map((entry) => entry.point);
+  const inactiveAllPoints = allPartition.inactive.map((entry) =>
+    comparatorInactivePoint(entry, proposalColor, { color: proposalColor }),
   );
+  const inactiveSelectedPoints = selectedPartition.inactive.map((entry) =>
+    comparatorInactivePoint(entry, proposalColor, { color: "#ffffff", borderColor: proposalColor }),
+  );
+  const hvLabel = analysis.metrics?.hypervolumeLabel === "No aplica" ? "" : comparatorHypervolumeLabel(activeAllPoints);
+  const hvAreaSeries = comparatorHypervolumeAreaSeries(activeAllPoints, hvLabel, proposalColor);
   return baseScatterOption(title, [
     ...hvAreaSeries,
-    { name: "Individuos", type: "scatter", symbolSize: 8, data: allPoints, label: { show: false }, itemStyle: { color: proposalColor, opacity: 0.72 } },
     {
-      name: "Seleccionadas",
+      name: `Individuos (${activeAllPoints.length})`,
+      type: "scatter",
+      symbolSize: 8,
+      data: activeAllPoints,
+      label: { show: false },
+      itemStyle: { color: proposalColor, opacity: 0.72 },
+    },
+    {
+      name: "Individuos inactivos",
+      type: "scatter",
+      symbolSize: 8,
+      data: inactiveAllPoints,
+      label: { show: false },
+      itemStyle: { color: proposalColor, opacity: COMPARATOR_INACTIVE_POINT_OPACITY },
+      showInLegend: false,
+      z: 2,
+    },
+    {
+      name: `Seleccionadas (${activeSelectedPoints.length})`,
       type: "scatter",
       symbol: "circle",
       symbolSize: 15,
-      data: selectedPoints,
+      data: activeSelectedPoints,
       label: { show: false },
       itemStyle: { color: "#ffffff", borderColor: proposalColor, borderWidth: 2.5 },
+      z: 4,
+    },
+    {
+      name: "Seleccionadas inactivas",
+      type: "scatter",
+      symbol: "circle",
+      symbolSize: 15,
+      data: inactiveSelectedPoints,
+      label: { show: false },
+      itemStyle: {
+        color: "#ffffff",
+        borderColor: proposalColor,
+        borderWidth: 2.5,
+        opacity: COMPARATOR_INACTIVE_POINT_OPACITY,
+      },
+      showInLegend: false,
+      z: 3,
     },
   ], {
     description: "Ejes nativos normalizados de Binary MOPSO-CD. Area sombreada: HV interno reportado por BMOPSO.",
+    axisPoints: [...activeAllPoints, ...activeSelectedPoints, ...inactiveAllPoints, ...inactiveSelectedPoints],
+    fixedBadge: hvLabel ? { text: `HV = ${hvLabel}`, color: proposalColor } : null,
   });
 }
 
-function internalBmopsoHvLineOption(seriesName, analysis, color = "#2A8C00", lineWidth = 3) {
-  const series = [{
+function internalBmopsoHvLineOption(chart, seriesName, analysis, color = "#2A8C00", lineWidth = 3, options = {}) {
+  const rawSeries = [{
     id: `bmopso-internal-hv-${seriesName}`,
     name: seriesName,
     type: "line",
     connectNulls: false,
-    showSymbol: false,
     data: (analysis.series || [])
       .filter((point) => point.hypervolume !== null && point.hypervolume !== undefined)
-      .map((point) => [point.generation, point.hypervolume]),
+      .map((point, index) => comparatorLinePoint(seriesName, [point.generation, point.hypervolume], {
+        instanceId: seriesName,
+        proposalId: "binary-mopso-cd",
+        sourceIndex: point.generation,
+        rank: "internal-hv",
+        labelText: `HV interno ${point.generation}`,
+      }, index)),
     itemStyle: { color },
     lineStyle: { color, width: lineWidth },
   }];
-  const metricValues = series.flatMap((item) => item.data.map((point) => point[1])).filter(Number.isFinite);
-  const referenceTarget = series.find((item) => item.data.length > 0);
-  const referenceLines = referenceTarget && metricValues.length > 0
-    ? comparatorMetricReferenceLines(metricValues, true)
-    : null;
-  if (referenceTarget && referenceLines) {
-    referenceTarget.markLine = referenceLines;
-  }
-  const chartPoints = series.flatMap((item) => (item.data || []).map((point) => ({ value: point })));
-  const xAxisWindow = comparatorChartAxisWindow(chartPoints, "x", {
-    paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
-    zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
-    minSpan: 1,
+  return comparatorInteractiveLineOption({
+    chart,
+    rawSeries,
+    title: "HV(t) interno BMOPSO",
+    description: "Serie nativa reportada por evolucion_metricas.csv; no usa recomputo post-hoc.",
+    higherIsBetter: true,
+    iterationLimit: options.iterationLimit,
+    emptyMessage: "Sin serie HV interna disponible.",
   });
-  const yAxisWindow = comparatorChartAxisWindow(chartPoints, "y", {
-    paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
-    zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
-  });
-  const dataZoom = [
-    xAxisWindow ? {
-      type: "inside",
-      xAxisIndex: 0,
-      filterMode: "none",
-      startValue: xAxisWindow.defaultMin,
-      endValue: xAxisWindow.defaultMax,
-    } : null,
-    yAxisWindow ? {
-      type: "inside",
-      yAxisIndex: 0,
-      filterMode: "none",
-      startValue: yAxisWindow.defaultMin,
-      endValue: yAxisWindow.defaultMax,
-    } : null,
-    xAxisWindow ? {
-      type: "slider",
-      xAxisIndex: 0,
-      filterMode: "none",
-      height: 18,
-      bottom: 10,
-      startValue: xAxisWindow.defaultMin,
-      endValue: xAxisWindow.defaultMax,
-    } : null,
-  ].filter(Boolean);
-  const toolboxFeature = {
-    saveAsImage: {},
-    dataZoom: {},
-    restore: { title: "Reset" },
-  };
-  const option = {
-    title: {
-      text: "HV(t) interno BMOPSO",
-      subtext: "Serie nativa reportada por evolucion_metricas.csv; no usa recomputo post-hoc.",
-      left: 8,
-      top: 6,
-      textStyle: { fontSize: 13 },
-      subtextStyle: { fontSize: 11, color: "#64748b" },
-    },
-    tooltip: safeChartTooltip("axis", comparatorLineTooltipFormatter),
-    legend: { show: false },
-    grid: { left: 52, right: 22, top: 78, bottom: 70, containLabel: true },
-    toolbox: { feature: toolboxFeature, right: 8, top: 38 },
-    dataZoom,
-    xAxis: {
-      type: "value",
-      name: "Iteracion",
-      nameLocation: "middle",
-      nameGap: 34,
-      minInterval: 1,
-      min: xAxisWindow?.zoomMin,
-      max: xAxisWindow?.zoomMax,
-    },
-    yAxis: {
-      type: "value",
-      scale: true,
-      min: yAxisWindow?.zoomMin,
-      max: yAxisWindow?.zoomMax,
-    },
-    graphic: comparatorEmptyChartGraphic(series, "Sin serie HV interna disponible."),
-    series,
-  };
-  return option;
 }
 
 function comparatorHypervolumeAreaSeries(points, hypervolumeLabel, color = "#2563eb") {
@@ -8398,24 +8665,43 @@ function comparatorHypervolumeAreaSeries(points, hypervolumeLabel, color = "#256
       lineStyle: { color, width: 1.2, opacity: 0.5 },
       areaStyle: { color: hexToRgba(color, 0.16) },
       z: 0,
-      markPoint: {
-        silent: true,
-        symbol: "rect",
-        symbolSize: [92, 26],
-        itemStyle: {
-          color: "rgba(255, 255, 255, 0.9)",
-          borderColor: color,
-          borderWidth: 1,
+    },
+  ];
+}
+
+function comparatorFixedBadgeGraphic(badge) {
+  if (!badge?.text) return [];
+  const width = Math.max(92, Math.min(156, (String(badge.text).length * 7) + 20));
+  const height = 28;
+  return [
+    {
+      type: "group",
+      right: 34,
+      top: 122,
+      silent: true,
+      z: 100,
+      children: [
+        {
+          type: "rect",
+          shape: { width, height, r: 3 },
+          style: {
+            fill: "rgba(255, 255, 255, 0.92)",
+            stroke: badge.color || "#2563eb",
+            lineWidth: 1,
+          },
         },
-        label: {
-          show: true,
-          formatter: `HV = ${hypervolumeLabel}`,
-          color,
-          fontWeight: 700,
-          fontSize: 11,
+        {
+          type: "text",
+          left: 10,
+          top: 8,
+          style: {
+            text: badge.text,
+            fill: badge.color || "#2563eb",
+            fontSize: 11,
+            fontWeight: 700,
+          },
         },
-        data: [{ coord: area.labelPosition }],
-      },
+      ],
     },
   ];
 }
@@ -8423,7 +8709,7 @@ function comparatorHypervolumeAreaSeries(points, hypervolumeLabel, color = "#256
 function baseScatterOption(title, series, options = {}) {
   const idealSeries = options.includeIdeal === false ? null : comparatorIdealSeries(series, options.idealPoint);
   const renderedSeries = idealSeries ? [...series, idealSeries] : series;
-  const chartPoints = renderedSeries.flatMap((item) => (item.data || []).map((point) =>
+  const axisSource = options.axisPoints || renderedSeries.flatMap((item) => (item.data || []).map((point) =>
     Array.isArray(point) ? { value: point } : point,
   ));
   const hasExplicitXBounds = Number.isFinite(Number(options.xAxisMin)) && Number.isFinite(Number(options.xAxisMax));
@@ -8432,7 +8718,7 @@ function baseScatterOption(title, series, options = {}) {
     ? comparatorExpandedAxisWindow(Number(options.xAxisMin), Number(options.xAxisMax), {
         zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
       })
-    : comparatorChartAxisWindow(chartPoints, "x", {
+    : comparatorChartAxisWindow(axisSource, "x", {
         paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
         zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
       });
@@ -8440,7 +8726,7 @@ function baseScatterOption(title, series, options = {}) {
     ? comparatorExpandedAxisWindow(Number(options.yAxisMin), Number(options.yAxisMax), {
         zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
       })
-    : comparatorChartAxisWindow(chartPoints, "y", {
+    : comparatorChartAxisWindow(axisSource, "y", {
         paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
         zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
       });
@@ -8501,7 +8787,10 @@ function baseScatterOption(title, series, options = {}) {
       min: yAxisWindow?.zoomMin,
       max: yAxisWindow?.zoomMax,
     },
-    graphic: comparatorEmptyChartGraphic(renderedSeries, "Sin puntos disponibles para las propuestas filtradas."),
+    graphic: [
+      ...comparatorEmptyChartGraphic(renderedSeries, "Sin puntos disponibles para las propuestas filtradas."),
+      ...comparatorFixedBadgeGraphic(options.fixedBadge),
+    ],
     series: renderedSeries,
   };
 }
@@ -8597,7 +8886,7 @@ function comparatorMetricReferenceLineToggleFeature(chart, seriesId, referenceLi
 }
 
 function comparatorMetricReferenceLinesHidden(chart, seriesId) {
-  const option = chart.getOption();
+  const option = chart.getOption?.() || {};
   const target = (option.series || []).find((series) => series.id === seriesId);
   const markLine = Array.isArray(target?.markLine) ? target.markLine[0] : target?.markLine;
   return Array.isArray(markLine?.data) && markLine.data.length === 0;

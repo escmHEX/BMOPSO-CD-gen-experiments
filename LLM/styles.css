@@ -1355,8 +1355,23 @@ input[type="checkbox"]:disabled {
 }
 
 .chart-panel.is-chart-minimized .chart-surface,
-.chart-panel.is-chart-minimized .chart-help {
+.chart-panel.is-chart-minimized .chart-help,
+.chart-panel.is-chart-minimized .comparator-iteration-slider {
   display: none;
+}
+
+.comparator-iteration-slider {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.comparator-iteration-slider input {
+  width: 100%;
+  accent-color: var(--accent);
 }
 
 .inline-select-field {
