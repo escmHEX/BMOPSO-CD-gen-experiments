@@ -107,6 +107,19 @@ class NativeRuntimeDiagnosticsTests(unittest.TestCase):
         self.assertIn("experiment.iterations=1", command)
         self.assertTrue(any(value.startswith("runtime.outdir_base=") for value in command))
 
+    def test_default_binary_python_uses_sibling_repository_venv_when_managed_venv_is_missing(self):
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "Experimentos"
+            sibling_python = root.parent / "Binary MOPSO-CD" / ".venv" / "Scripts" / "python.exe"
+            sibling_python.parent.mkdir(parents=True)
+            sibling_python.write_text("", encoding="utf-8")
+
+            resolved = module.default_binary_python(root, platform_name="win32")
+
+        self.assertEqual(resolved, sibling_python)
+
     def test_main_runs_deeper_binary_probes_when_requested(self):
         module = load_module()
         calls: list[str] = []

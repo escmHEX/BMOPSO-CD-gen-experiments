@@ -27,6 +27,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROBE_HEARTBEAT_SECONDS = 30.0
+BINARY_PROPOSAL_ID = "binary-mopso-cd"
+BINARY_LOCAL_REPOSITORY = Path("baselines") / "external" / BINARY_PROPOSAL_ID
+BINARY_DEVELOPMENT_REPOSITORY = "Binary MOPSO-CD"
 BINARY_COMMON_MODEL_TASKS = (
     "semantic_anchor_extraction",
     "semantic_pool_generation",
@@ -45,10 +48,50 @@ class ProbeResult:
     stderr: str = ""
 
 
-def default_binary_python() -> Path:
-    if platform.system().lower() == "windows":
-        return ROOT / "baselines" / "venvs" / "binary-mopso-cd" / "Scripts" / "python.exe"
-    return ROOT / "baselines" / "venvs" / "binary-mopso-cd" / "bin" / "python"
+def is_windows_platform(platform_name: str | None = None) -> bool:
+    value = platform_name or platform.system()
+    value = value.lower()
+    return value == "windows" or value.startswith("win")
+
+
+def managed_binary_python(root: Path, platform_name: str | None = None) -> Path:
+    venv_root = root / "baselines" / "venvs" / BINARY_PROPOSAL_ID
+    if is_windows_platform(platform_name):
+        return venv_root / "Scripts" / "python.exe"
+    return venv_root / "bin" / "python"
+
+
+def repository_python_candidates(repository: Path, platform_name: str | None = None) -> list[Path]:
+    windows_candidates = [
+        repository / ".venv" / "Scripts" / "python.exe",
+        repository / "venv" / "Scripts" / "python.exe",
+    ]
+    posix_candidates = [
+        repository / ".venv" / "bin" / "python",
+        repository / "venv" / "bin" / "python",
+    ]
+    if is_windows_platform(platform_name):
+        return windows_candidates + posix_candidates
+    return posix_candidates + windows_candidates
+
+
+def binary_repository_candidates(root: Path) -> list[Path]:
+    return [
+        root / BINARY_LOCAL_REPOSITORY,
+        root.parent / BINARY_DEVELOPMENT_REPOSITORY,
+    ]
+
+
+def default_binary_python(root: Path | None = None, platform_name: str | None = None) -> Path:
+    root = root or ROOT
+    managed_python = managed_binary_python(root, platform_name)
+    if managed_python.exists():
+        return managed_python
+    for repository in binary_repository_candidates(root):
+        for candidate in repository_python_candidates(repository, platform_name):
+            if candidate.exists():
+                return candidate
+    return managed_python
 
 
 def signal_name(signum: int) -> str:

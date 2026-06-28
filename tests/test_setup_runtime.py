@@ -10,6 +10,25 @@ from pathlib import Path
 from unittest.mock import patch
 
 
+def write_minimal_comparator_config(root: Path) -> None:
+    config_path = root / "baselines" / "comparator_config.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "defaults": {},
+                "proposals": {
+                    "evolmd": {},
+                    "evolmd-mo": {},
+                    "mesap": {},
+                    "binary-mopso-cd": {"git": {}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 class RuntimeSetupTests(unittest.TestCase):
     def test_warmup_direct_runtime_imports_are_backend_requirements(self):
         import scripts.warmup_runtime as warmup_runtime
@@ -73,7 +92,15 @@ class RuntimeSetupTests(unittest.TestCase):
     def test_build_comparator_local_config_uses_ubuntu_venvs(self):
         from scripts.setup_runtime import build_comparator_local_config
 
-        config = build_comparator_local_config(platform_name="linux")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_minimal_comparator_config(root)
+            for proposal_id in ("evolmd", "evolmd-mo", "mesap", "binary-mopso-cd"):
+                python_path = root / "baselines" / "venvs" / proposal_id / "bin" / "python"
+                python_path.parent.mkdir(parents=True, exist_ok=True)
+                python_path.touch()
+
+            config = build_comparator_local_config(root=root, platform_name="linux")
 
         self.assertEqual(
             config["proposals"]["evolmd"]["pythonExecutable"],
@@ -100,7 +127,15 @@ class RuntimeSetupTests(unittest.TestCase):
     def test_build_comparator_local_config_uses_windows_venvs(self):
         from scripts.setup_runtime import build_comparator_local_config
 
-        config = build_comparator_local_config(platform_name="win32")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_minimal_comparator_config(root)
+            for proposal_id in ("evolmd", "evolmd-mo", "mesap", "binary-mopso-cd"):
+                python_path = root / "baselines" / "venvs" / proposal_id / "Scripts" / "python.exe"
+                python_path.parent.mkdir(parents=True, exist_ok=True)
+                python_path.touch()
+
+            config = build_comparator_local_config(root=root, platform_name="win32")
 
         self.assertEqual(
             config["proposals"]["evolmd"]["pythonExecutable"],
@@ -110,6 +145,18 @@ class RuntimeSetupTests(unittest.TestCase):
             config["proposals"]["binary-mopso-cd"]["pythonExecutable"],
             "baselines/venvs/binary-mopso-cd/Scripts/python.exe",
         )
+
+    def test_build_comparator_local_config_keeps_python_fallbacks_when_managed_venvs_are_absent(self):
+        from scripts.setup_runtime import build_comparator_local_config
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_minimal_comparator_config(root)
+
+            config = build_comparator_local_config(root=root, platform_name="win32")
+
+        for proposal_id in ("evolmd", "evolmd-mo", "mesap", "binary-mopso-cd"):
+            self.assertEqual(config["proposals"][proposal_id]["pythonExecutable"], "")
 
     def test_base_comparator_config_does_not_hardcode_local_binary_windows_path(self):
         config = json.loads(Path("baselines/comparator_config.json").read_text(encoding="utf-8"))

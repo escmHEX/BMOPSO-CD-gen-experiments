@@ -36,6 +36,11 @@ def venv_python_path(proposal_id: str, platform_name: str | None = None) -> str:
     return _slash_path("baselines", "venvs", venv_name, "bin", "python")
 
 
+def existing_venv_python_path(root: Path, proposal_id: str, platform_name: str | None = None) -> str:
+    python_path = venv_python_path(proposal_id, platform_name)
+    return python_path if (root / python_path).exists() else ""
+
+
 def load_base_comparator_config(root: Path | None = None) -> dict[str, Any]:
     root = root or project_root()
     config_path = root / "baselines" / "comparator_config.json"
@@ -49,6 +54,7 @@ def build_comparator_local_config(
     root: Path | None = None,
     platform_name: str | None = None,
 ) -> dict[str, Any]:
+    root = root or project_root()
     config = copy.deepcopy(load_base_comparator_config(root))
     proposals = config.setdefault("proposals", {})
     if not isinstance(proposals, dict):
@@ -59,14 +65,14 @@ def build_comparator_local_config(
         if not isinstance(proposal, dict):
             raise ValueError(f"Comparator proposal config must be an object: {proposal_id}")
         proposal["repositoryPath"] = _slash_path("baselines", "external", proposal_id)
-        proposal["pythonExecutable"] = venv_python_path(proposal_id, platform_name)
+        proposal["pythonExecutable"] = existing_venv_python_path(root, proposal_id, platform_name)
         proposal.setdefault("pythonPathEntries", [])
 
     binary = proposals.setdefault("binary-mopso-cd", {})
     if not isinstance(binary, dict):
         raise ValueError("Comparator Binary proposal config must be an object.")
     binary["repositoryPath"] = BINARY_LOCAL_REPOSITORY
-    binary["pythonExecutable"] = venv_python_path("binary-mopso-cd", platform_name)
+    binary["pythonExecutable"] = existing_venv_python_path(root, "binary-mopso-cd", platform_name)
     binary.setdefault("pythonPathEntries", [])
     git_config = binary.setdefault("git", {})
     if not isinstance(git_config, dict):
