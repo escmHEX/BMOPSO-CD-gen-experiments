@@ -85,6 +85,106 @@ export function comparatorVisibleFrontChartPoints(charts = {}, namespace = "") {
   return { individuals, selected };
 }
 
+function finiteRepetitionIndex(value) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
+function normalChartPayload(charts) {
+  return charts && typeof charts === "object"
+    ? charts
+    : { pareto: [], nonDominated: [], selected: [], series: [] };
+}
+
+function normalMetricsPayload(metrics) {
+  return metrics && typeof metrics === "object" ? metrics : {};
+}
+
+function normalPointChartRepetition(item = {}, fallbackIndex = null) {
+  const repetitionIndex = finiteRepetitionIndex(item.repetitionIndex) ?? finiteRepetitionIndex(fallbackIndex);
+  const payload = {
+    repetitionIndex,
+    repetitionSeed: item.repetitionSeed ?? null,
+    charts: normalChartPayload(item.charts),
+    metrics: normalMetricsPayload(item.metrics),
+    embeddingFrontRows: Array.isArray(item.embeddingFrontRows) ? item.embeddingFrontRows : [],
+  };
+  if (item.internalBmopsoAnalysis && typeof item.internalBmopsoAnalysis === "object") {
+    payload.internalBmopsoAnalysis = item.internalBmopsoAnalysis;
+  }
+  return payload;
+}
+
+export function comparatorPointChartRepetitions(proposal = {}) {
+  if (Array.isArray(proposal.pointChartRepetitions) && proposal.pointChartRepetitions.length) {
+    return proposal.pointChartRepetitions
+      .filter((item) => item && typeof item === "object")
+      .map((item) => normalPointChartRepetition(item));
+  }
+
+  if (Array.isArray(proposal.repetitions) && proposal.repetitions.length) {
+    const repetitions = proposal.repetitions
+      .filter((item) => item && typeof item === "object" && item.status === "completed")
+      .map((item) => normalPointChartRepetition(item));
+    if (repetitions.length) return repetitions;
+  }
+
+  return [normalPointChartRepetition({
+    repetitionIndex: null,
+    repetitionSeed: null,
+    charts: proposal.charts,
+    metrics: proposal.metrics,
+    embeddingFrontRows: proposal.embeddingFrontRows,
+    internalBmopsoAnalysis: proposal.internalBmopsoAnalysis,
+  })];
+}
+
+export function comparatorPointChartRepetitionOptions(proposals = []) {
+  const indexes = new Set();
+  (proposals || []).forEach((proposal) => {
+    comparatorPointChartRepetitions(proposal).forEach((item) => {
+      const repetitionIndex = finiteRepetitionIndex(item.repetitionIndex);
+      if (repetitionIndex !== null) indexes.add(repetitionIndex);
+    });
+  });
+  return [...indexes]
+    .sort((left, right) => left - right)
+    .map((repetitionIndex) => ({ repetitionIndex, label: `Rep ${repetitionIndex}` }));
+}
+
+export function comparatorPointChartViewProposal(proposal = {}, selectedRepetitionIndex = null) {
+  const requestedIndex = finiteRepetitionIndex(selectedRepetitionIndex);
+  const repetitions = comparatorPointChartRepetitions(proposal);
+  const selected = requestedIndex === null
+    ? repetitions[0]
+    : repetitions.find((item) => finiteRepetitionIndex(item.repetitionIndex) === requestedIndex);
+
+  if (!selected) {
+    return {
+      ...proposal,
+      charts: { pareto: [], nonDominated: [], selected: [], series: [] },
+      metrics: normalMetricsPayload(proposal.metrics),
+      embeddingFrontRows: [],
+      internalBmopsoAnalysis: null,
+      pointChartRepetition: {
+        repetitionIndex: requestedIndex,
+        repetitionSeed: null,
+      },
+      pointChartUnavailable: true,
+    };
+  }
+
+  return {
+    ...proposal,
+    charts: selected.charts,
+    metrics: Object.keys(selected.metrics).length ? selected.metrics : normalMetricsPayload(proposal.metrics),
+    embeddingFrontRows: selected.embeddingFrontRows,
+    internalBmopsoAnalysis: selected.internalBmopsoAnalysis || null,
+    pointChartRepetition: selected,
+    pointChartUnavailable: false,
+  };
+}
+
 export function comparatorPartitionPointsByExclusion(points = [], excludedKeys = new Set(), namespace = "") {
   const excluded = excludedKeys instanceof Set ? excludedKeys : new Set(excludedKeys || []);
   return (points || []).reduce((partition, point, index) => {

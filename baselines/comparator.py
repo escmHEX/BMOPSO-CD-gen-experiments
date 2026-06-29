@@ -1557,6 +1557,85 @@ def proposal_embedding_front_rows(proposal: dict[str, Any]) -> list[dict[str, An
     )
 
 
+def point_chart_repetition_payload(result: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(result, dict) or result.get("status") != STATUS_COMPLETED:
+        return None
+    charts = result.get("charts") if isinstance(result.get("charts"), dict) else {}
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    embedding_front_rows = [
+        row for row in (result.get("embeddingFrontRows") or [])
+        if isinstance(row, dict)
+    ]
+    payload: dict[str, Any] = {
+        "repetitionIndex": result.get("repetitionIndex"),
+        "repetitionSeed": result.get("repetitionSeed"),
+        "charts": charts,
+        "metrics": metrics,
+        "embeddingFrontRows": embedding_front_rows,
+    }
+    internal_analysis = result.get("internalBmopsoAnalysis")
+    if isinstance(internal_analysis, dict):
+        payload["internalBmopsoAnalysis"] = internal_analysis
+    return payload
+
+
+def proposal_point_chart_repetitions(proposal: dict[str, Any]) -> list[dict[str, Any]]:
+    explicit = proposal.get("pointChartRepetitions")
+    if isinstance(explicit, list):
+        return [item for item in explicit if isinstance(item, dict)]
+
+    repetitions = proposal.get("repetitions")
+    if isinstance(repetitions, list):
+        payloads = [
+            payload
+            for item in repetitions
+            for payload in [point_chart_repetition_payload(item)]
+            if payload
+        ]
+        if payloads:
+            return payloads
+
+    return [
+        {
+            "repetitionIndex": None,
+            "repetitionSeed": None,
+            "charts": proposal.get("charts") if isinstance(proposal.get("charts"), dict) else {},
+            "metrics": proposal.get("metrics") if isinstance(proposal.get("metrics"), dict) else {},
+            "embeddingFrontRows": proposal_embedding_front_rows(proposal),
+            **(
+                {"internalBmopsoAnalysis": proposal.get("internalBmopsoAnalysis")}
+                if isinstance(proposal.get("internalBmopsoAnalysis"), dict)
+                else {}
+            ),
+        }
+    ]
+
+
+def selected_point_chart_repetition(proposal: dict[str, Any], repetition: int | None = None) -> dict[str, Any] | None:
+    repetitions = proposal_point_chart_repetitions(proposal)
+    if not repetitions:
+        return None
+    if repetition is None:
+        return repetitions[0]
+    for item in repetitions:
+        if finite_int_or_none(item.get("repetitionIndex")) == repetition:
+            return item
+    return None
+
+
+def proposal_embedding_front_rows_for_repetition(
+    proposal: dict[str, Any],
+    repetition: int | None = None,
+) -> list[dict[str, Any]]:
+    selected = selected_point_chart_repetition(proposal, repetition)
+    if selected is None:
+        return []
+    rows = selected.get("embeddingFrontRows")
+    if isinstance(rows, list):
+        return [row for row in rows if isinstance(row, dict) and str(row.get("text") or "").strip()]
+    return proposal_embedding_front_rows(proposal)
+
+
 def aggregate_proposal_repetitions(
     proposal: ProposalDefinition,
     proposal_dir: Path,
@@ -1632,6 +1711,12 @@ def aggregate_proposal_repetitions(
     metrics = attach_terminal_series_diagnostics(aggregate_comparator_metrics(completed, proposal_dir), series)
     if not embedding_front_rows:
         embedding_front_rows = embedding_front_rows_from_rows(rows, selected_rows)
+    point_chart_repetitions = [
+        payload
+        for result in completed
+        for payload in [point_chart_repetition_payload(result)]
+        if payload
+    ]
 
     return {
         **identity,
@@ -1643,6 +1728,7 @@ def aggregate_proposal_repetitions(
         "metrics": metrics,
         "series": series,
         "charts": build_charts_from_rows(rows, selected_rows, series),
+        "pointChartRepetitions": point_chart_repetitions,
         "cost": aggregate_comparator_costs(completed),
         "error": None if len(completed) == repetitions_k else f"{repetitions_k - len(completed)} repeticion(es) fallaron.",
         "repetitionsK": repetitions_k,
@@ -2145,7 +2231,12 @@ class ComparatorService:
             return self._with_metric_recompute_status(read_json(summary_path))
         return None
 
-    def get_run_embedding_projection(self, run_id: str, method: str = "pca") -> dict[str, Any] | None:
+    def get_run_embedding_projection(
+        self,
+        run_id: str,
+        method: str = "pca",
+        repetition: int | None = None,
+    ) -> dict[str, Any] | None:
         requested_method = normalize_projection_method(method)
         run = self.get_run(run_id)
         if not run:
@@ -2159,12 +2250,13 @@ class ComparatorService:
         for proposal_index, proposal in enumerate(run.get("proposals") or []):
             if not isinstance(proposal, dict) or proposal.get("status") != STATUS_COMPLETED:
                 continue
-            rows = proposal_embedding_front_rows(proposal)
+            rows = proposal_embedding_front_rows_for_repetition(proposal, repetition)
             proposal_payload = {
                 "instanceId": proposal.get("instanceId") or proposal.get("proposalId") or "",
                 "proposalId": proposal.get("proposalId") or "",
                 "displayName": proposal.get("displayName") or proposal.get("proposalId") or "",
                 "baseDisplayName": proposal.get("baseDisplayName") or proposal.get("displayName") or "",
+                "repetitionIndex": repetition,
                 "points": [],
             }
             proposals.append(proposal_payload)
@@ -2177,6 +2269,7 @@ class ComparatorService:
                 "method": requested_method,
                 "effectiveMethod": None,
                 "embeddingModel": POSTHOC_EMBEDDING_MODEL,
+                "repetitionIndex": repetition,
                 "reference": {"text": reference_text, "x": None, "y": None},
                 "proposals": proposals,
                 "warnings": ["No hay textos del frente final disponibles para proyectar."],
@@ -2217,6 +2310,7 @@ class ComparatorService:
             "sourceModel": cost["sourceModel"],
             "embeddingTexts": cost["embeddingTexts"],
             "embeddingWallClockSeconds": cost["embeddingWallClockSeconds"],
+            "repetitionIndex": repetition,
             "reference": {
                 "text": reference_text,
                 "x": reference_coordinates[0],
@@ -5647,7 +5741,15 @@ class ComparatorService:
                 continue
             enriched = dict(result)
             if enriched.get("proposalId") == BINARY_PROPOSAL_ID and enriched.get("status") == STATUS_COMPLETED:
-                analysis = self._build_internal_bmopso_analysis(enriched)
+                repetition_analyses = self._build_internal_bmopso_repetition_analyses(enriched)
+                if repetition_analyses:
+                    analysis = self._aggregate_internal_bmopso_analyses(enriched, repetition_analyses)
+                    enriched["pointChartRepetitions"] = self._attach_internal_bmopso_to_point_repetitions(
+                        enriched,
+                        repetition_analyses,
+                    )
+                else:
+                    analysis = self._build_single_internal_bmopso_analysis(enriched, enriched)
                 if analysis:
                     enriched["internalBmopsoAnalysis"] = analysis
                 else:
@@ -5659,17 +5761,39 @@ class ComparatorService:
         return run
 
     def _build_internal_bmopso_analysis(self, result: dict[str, Any]) -> dict[str, Any] | None:
+        repetition_analyses = self._build_internal_bmopso_repetition_analyses(result)
+        if repetition_analyses:
+            return self._aggregate_internal_bmopso_analyses(result, repetition_analyses)
+        return self._build_single_internal_bmopso_analysis(result, result)
+
+    def _build_internal_bmopso_repetition_analyses(self, result: dict[str, Any]) -> list[dict[str, Any]]:
         repetitions = result.get("repetitions") if isinstance(result.get("repetitions"), list) else []
-        repetition_analyses = [
+        return [
             analysis
             for repetition in repetitions
             if isinstance(repetition, dict) and repetition.get("status") == STATUS_COMPLETED
             for analysis in [self._build_single_internal_bmopso_analysis(repetition, result)]
             if analysis
         ]
-        if repetition_analyses:
-            return self._aggregate_internal_bmopso_analyses(result, repetition_analyses)
-        return self._build_single_internal_bmopso_analysis(result, result)
+
+    def _attach_internal_bmopso_to_point_repetitions(
+        self,
+        result: dict[str, Any],
+        analyses: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        analyses_by_repetition = {
+            finite_int_or_none(analysis.get("repetitionIndex")): analysis
+            for analysis in analyses
+            if finite_int_or_none(analysis.get("repetitionIndex")) is not None
+        }
+        repetitions: list[dict[str, Any]] = []
+        for item in proposal_point_chart_repetitions(result):
+            copied = dict(item)
+            analysis = analyses_by_repetition.get(finite_int_or_none(copied.get("repetitionIndex")))
+            if analysis:
+                copied["internalBmopsoAnalysis"] = analysis
+            repetitions.append(copied)
+        return repetitions
 
     def _build_single_internal_bmopso_analysis(
         self,
@@ -5699,6 +5823,8 @@ class ComparatorService:
             "instanceId": instance.instance_id,
             "proposalId": instance.proposal_id,
             "displayName": instance.display_name,
+            "repetitionIndex": result.get("repetitionIndex"),
+            "repetitionSeed": result.get("repetitionSeed"),
             "source": "evolucion_metricas.csv",
             "coordinateSpace": BINARY_INTERNAL_COORDINATE_SPACE,
             "metrics": {

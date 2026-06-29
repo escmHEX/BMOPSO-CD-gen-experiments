@@ -1381,6 +1381,10 @@ input[type="checkbox"]:disabled {
   margin: 0;
 }
 
+.inline-select-field[hidden] {
+  display: none;
+}
+
 .inline-select-field span {
   color: var(--muted);
   font-size: 0.72rem;

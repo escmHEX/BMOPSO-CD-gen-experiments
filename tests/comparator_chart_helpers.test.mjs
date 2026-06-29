@@ -23,6 +23,8 @@ import {
   comparatorActivePointCount,
   comparatorLimitSeriesToIteration,
   comparatorPartitionPointsByExclusion,
+  comparatorPointChartRepetitionOptions,
+  comparatorPointChartViewProposal,
   comparatorPointInteractionKey,
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
@@ -371,6 +373,86 @@ test("binary front chart points preserve native pareto individuals", () => {
 
   assert.deepEqual(points.individuals.map((point) => point.label), ["binary native front", "binary native point"]);
   assert.deepEqual(points.selected.map((point) => point.label), ["binary native front", "binary native point"]);
+});
+
+test("point chart view proposal selects a single repetition without merging K", () => {
+  const proposal = {
+    proposalId: "binary-mopso-cd",
+    instanceId: "binary-a",
+    displayName: "Binary A",
+    charts: {
+      pareto: [{ label: "aggregated top k" }],
+      nonDominated: [{ label: "aggregated top k" }],
+      selected: [],
+    },
+    pointChartRepetitions: [
+      {
+        repetitionIndex: 1,
+        repetitionSeed: 42,
+        metrics: { hypervolumeLabel: "0.110000" },
+        charts: {
+          pareto: [{ label: "rep 1 a" }, { label: "rep 1 b" }],
+          nonDominated: [{ label: "rep 1 a" }],
+          selected: [],
+        },
+      },
+      {
+        repetitionIndex: 2,
+        repetitionSeed: 43,
+        metrics: { hypervolumeLabel: "0.220000" },
+        charts: {
+          pareto: [{ label: "rep 2 a" }, { label: "rep 2 b" }, { label: "rep 2 c" }],
+          nonDominated: [{ label: "rep 2 a" }],
+          selected: [],
+        },
+      },
+    ],
+  };
+
+  const selected = comparatorPointChartViewProposal(proposal, 2);
+
+  assert.equal(selected.pointChartRepetition.repetitionIndex, 2);
+  assert.equal(selected.pointChartUnavailable, false);
+  assert.deepEqual(selected.charts.pareto.map((point) => point.label), ["rep 2 a", "rep 2 b", "rep 2 c"]);
+  assert.equal(selected.metrics.hypervolumeLabel, "0.220000");
+});
+
+test("point chart view proposal marks missing repetitions unavailable", () => {
+  const proposal = {
+    proposalId: "evolmd-mo",
+    instanceId: "evolmd-mo-a",
+    displayName: "EVOLMD-MO A",
+    pointChartRepetitions: [
+      {
+        repetitionIndex: 1,
+        charts: { pareto: [{ label: "rep 1 only" }], nonDominated: [{ label: "rep 1 only" }], selected: [] },
+      },
+    ],
+  };
+
+  const selected = comparatorPointChartViewProposal(proposal, 2);
+
+  assert.equal(selected.pointChartUnavailable, true);
+  assert.deepEqual(selected.charts.pareto, []);
+  assert.equal(selected.pointChartRepetition.repetitionIndex, 2);
+});
+
+test("point chart repetition options use the union of completed repetition indexes", () => {
+  const options = comparatorPointChartRepetitionOptions([
+    {
+      pointChartRepetitions: [
+        { repetitionIndex: 1 },
+        { repetitionIndex: 3 },
+      ],
+    },
+    {
+      pointChartRepetitions: [
+        { repetitionIndex: 2 },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(options.map((item) => item.repetitionIndex), [1, 2, 3]);
 });
 
 test("hypervolume area collapses equal fidelity with maximum diversity", () => {

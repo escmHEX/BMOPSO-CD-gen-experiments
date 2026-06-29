@@ -849,9 +849,11 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "embedding-projection":
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             try:
+                repetition = first_query_value(query, "repetition")
                 payload = self.comparator_service.get_run_embedding_projection(
                     path_parts[1],
                     method=first_query_value(query, "method") or "pca",
+                    repetition=int(repetition) if repetition else None,
                 )
             except ValueError as error:
                 self.send_json(400, {"error": str(error)})
