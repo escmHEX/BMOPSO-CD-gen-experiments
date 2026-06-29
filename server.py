@@ -19,7 +19,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from baselines.comparator import ComparatorService
+from baselines.comparator import ComparatorRunConflictError, ComparatorService
 from initial_population.comparison import InitialPopulationComparisonService
 from initial_population.service import InitialPopulationService
 from llm_studio import LmStudioClient, LmStudioHttpError
@@ -915,7 +915,18 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, run)
                 return
 
+            if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "recontinue":
+                self.read_request_body()
+                run = self.comparator_service.recontinue_run(path_parts[1])
+                if not run:
+                    self.send_json(404, {"error": "Run not found."})
+                    return
+                self.send_json(202, run)
+                return
+
             self.send_json(404, {"error": "Not found."})
+        except ComparatorRunConflictError as error:
+            self.send_json(409, {"error": str(error)})
         except ValueError as error:
             message = str(error)
             payload = {"error": message}

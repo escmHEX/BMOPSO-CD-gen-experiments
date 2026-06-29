@@ -7,6 +7,7 @@ import {
   comparatorBestCostProposalIds,
   comparatorBestMetricProposalIds,
   comparatorHasBmopsoInternalAnalysis,
+  comparatorCanRecontinueRun,
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
   comparatorHypervolumeArea,
@@ -838,4 +839,13 @@ test("cost winners do not treat missing reports as zero", () => {
   }, { costsComparable: true });
 
   assert.equal(winners.size, 0);
+});
+
+test("recontinue availability is blocked only for missing or completed runs", () => {
+  assert.equal(comparatorCanRecontinueRun(null), false);
+  assert.equal(comparatorCanRecontinueRun({ runId: "run-1", status: "completed" }), false);
+  assert.equal(comparatorCanRecontinueRun({ runId: "run-1", status: "running" }), true);
+  assert.equal(comparatorCanRecontinueRun({ runId: "run-1", status: "queued" }), true);
+  assert.equal(comparatorCanRecontinueRun({ runId: "run-1", status: "failed" }), true);
+  assert.equal(comparatorCanRecontinueRun({ runId: "run-1", status: "cancelled" }), true);
 });

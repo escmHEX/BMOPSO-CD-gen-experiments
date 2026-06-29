@@ -36,6 +36,25 @@ class ComparatorFrontendDownloadTests(unittest.TestCase):
             app,
         )
 
+    def test_recontinue_button_is_next_to_clear_and_uses_recontinue_route(self):
+        html = (self.root / "LLM" / "index.html").read_text(encoding="utf-8")
+        clear_index = html.index('id="clearComparatorButton"')
+        recontinue_index = html.index('id="recontinueComparatorButton"')
+        self.assertGreater(recontinue_index, clear_index)
+        self.assertLess(recontinue_index - clear_index, 180)
+        self.assertIn(">Re-continuar</button>", html[recontinue_index:recontinue_index + 120])
+
+        app = (self.root / "LLM" / "app.js").read_text(encoding="utf-8")
+        self.assertIn(
+            'recontinueComparatorButton: document.querySelector("#recontinueComparatorButton")',
+            app,
+        )
+        self.assertIn('/recontinue', app)
+        self.assertIn(
+            'dom.recontinueComparatorButton?.addEventListener("click", recontinueComparatorRun)',
+            app,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

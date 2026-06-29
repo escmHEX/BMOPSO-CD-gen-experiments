@@ -2,6 +2,7 @@ import {
   comparatorBmopsoInternalAnalyses,
   comparatorBenchmarkProposals,
   comparatorBestMetricProposalIds,
+  comparatorCanRecontinueRun,
   comparatorChartAxisWindow,
   comparatorCountByProposal,
   comparatorExpandedAxisWindow,
@@ -410,6 +411,7 @@ let comparatorProjectionSignature = "";
 let comparatorProjectionLoadToken = 0;
 let comparatorInternalBmopsoCharts = [];
 let comparatorInternalBmopsoSignature = "";
+let comparatorRecontinueInFlight = false;
 let comparatorChoiceInstances = [];
 let comparatorChartFilterIds = new Set();
 let comparatorChartFilterSignature = "";
@@ -752,6 +754,7 @@ const dom = {
   recomputeComparatorMetricsButton: document.querySelector("#recomputeComparatorMetricsButton"),
   downloadComparatorRunDataButton: document.querySelector("#downloadComparatorRunDataButton"),
   clearComparatorButton: document.querySelector("#clearComparatorButton"),
+  recontinueComparatorButton: document.querySelector("#recontinueComparatorButton"),
   comparatorResumeRunId: document.querySelector("#comparatorResumeRunId"),
   resumeComparatorButton: document.querySelector("#resumeComparatorButton"),
   comparatorConnectionDot: document.querySelector("#comparatorConnectionDot"),
@@ -4699,6 +4702,7 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
     dom.resumeComparatorButton.disabled = isRunning;
   }
   syncComparatorDownloadButton();
+  syncComparatorRecontinueButton();
   [
     dom.comparatorReferencePreset,
     dom.comparatorReferenceSaveLabel,
@@ -4792,6 +4796,7 @@ function storeComparatorRunId(runId) {
     // Local storage is optional; the visible input still supports manual reattach.
   }
   syncComparatorDownloadButton();
+  syncComparatorRecontinueButton();
 }
 
 function clearStoredComparatorRunId() {
@@ -4804,6 +4809,7 @@ function clearStoredComparatorRunId() {
     // Nothing to clear when local storage is unavailable.
   }
   syncComparatorDownloadButton();
+  syncComparatorRecontinueButton(null);
 }
 
 function comparatorDownloadRunId() {
@@ -4813,6 +4819,17 @@ function comparatorDownloadRunId() {
 function syncComparatorDownloadButton() {
   if (!dom.downloadComparatorRunDataButton) return;
   dom.downloadComparatorRunDataButton.disabled = !comparatorDownloadRunId();
+}
+
+function syncComparatorRecontinueButton(run = latestComparatorRun) {
+  if (!dom.recontinueComparatorButton) return;
+  const runId = comparatorDownloadRunId();
+  const knownSameRun = run?.runId && run.runId === runId;
+  const knownBlocked = knownSameRun && !comparatorCanRecontinueRun(run);
+  dom.recontinueComparatorButton.disabled = comparatorRecontinueInFlight || !runId || Boolean(knownBlocked);
+  dom.recontinueComparatorButton.title = knownBlocked
+    ? "Disponible solo para corridas no completadas."
+    : "Continua el mismo Run ID desde la primera instancia no completada.";
 }
 
 function downloadComparatorRunData() {
@@ -6804,6 +6821,68 @@ async function recomputeComparatorMetrics() {
   }
 }
 
+async function recontinueComparatorRun() {
+  const runId = comparatorDownloadRunId();
+  if (!runId) {
+    setStatus(
+      dom.comparatorStatusTone,
+      dom.comparatorStatusTitle,
+      dom.comparatorStatusDetail,
+      "Run ID requerido",
+      "Ingresa o carga una corrida antes de continuar la ejecucion.",
+      "error",
+    );
+    return;
+  }
+
+  stopComparatorPolling();
+  comparatorPollFailureCount = 0;
+  currentComparatorRunId = runId;
+  storeComparatorRunId(runId);
+  comparatorRecontinueInFlight = true;
+  if (dom.recontinueComparatorButton) {
+    dom.recontinueComparatorButton.disabled = true;
+    dom.recontinueComparatorButton.textContent = "Ejecutando...";
+  }
+  setComparatorRunning(true, false);
+  dom.comparatorConnectionDot.classList.add("is-busy");
+  dom.comparatorConnectionDot.classList.remove("is-error");
+  dom.comparatorConnectionText.textContent = "Ejecutando";
+  setStatus(
+    dom.comparatorStatusTone,
+    dom.comparatorStatusTitle,
+    dom.comparatorStatusDetail,
+    "Ejecutando comparador",
+    `Ejecutando ${runId}.`,
+    "busy",
+  );
+
+  try {
+    const run = await requestComparatorJson(`/runs/${encodeURIComponent(runId)}/recontinue`, {
+      method: "POST",
+      body: "{}",
+    });
+    currentComparatorRunId = run.runId;
+    storeComparatorRunId(run.runId);
+    renderComparatorRun(run);
+    setComparatorRunning(!COMPARATOR_TERMINAL_STATUSES.has(run.status), Boolean(run.cancelRequested));
+    if (!COMPARATOR_TERMINAL_STATUSES.has(run.status)) {
+      comparatorPollTimer = window.setInterval(() => refreshComparatorRun(currentComparatorRunId), 2000);
+      await refreshComparatorRun(currentComparatorRunId);
+    }
+  } catch (error) {
+    setComparatorRunning(false);
+    syncComparatorRecontinueButton(latestComparatorRun);
+    setStatus(dom.comparatorStatusTone, dom.comparatorStatusTitle, dom.comparatorStatusDetail, "No se pudo ejecutar", error.message, "error");
+  } finally {
+    comparatorRecontinueInFlight = false;
+    if (dom.recontinueComparatorButton) {
+      dom.recontinueComparatorButton.textContent = "Re-continuar";
+      syncComparatorRecontinueButton(latestComparatorRun);
+    }
+  }
+}
+
 async function cancelComparatorRun() {
   if (!currentComparatorRunId) {
     return;
@@ -6929,6 +7008,7 @@ function renderComparatorRun(run) {
   dom.comparatorConnectionDot.classList.toggle("is-busy", run.status === "queued" || run.status === "running");
   dom.comparatorConnectionDot.classList.toggle("is-error", run.status === "failed");
   syncComparatorRecomputeButton(run);
+  syncComparatorRecontinueButton(run);
 
   renderComparatorProgress(run.progress || null, run.config || null);
   renderComparatorCostSummary(run.costSummary || null);
@@ -9793,8 +9873,12 @@ dom.cancelComparatorButton.addEventListener("click", cancelComparatorRun);
 dom.recomputeComparatorMetricsButton?.addEventListener("click", recomputeComparatorMetrics);
 dom.downloadComparatorRunDataButton?.addEventListener("click", downloadComparatorRunData);
 dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
+dom.recontinueComparatorButton?.addEventListener("click", recontinueComparatorRun);
 dom.resumeComparatorButton?.addEventListener("click", resumeComparatorRun);
-dom.comparatorResumeRunId?.addEventListener("input", syncComparatorDownloadButton);
+dom.comparatorResumeRunId?.addEventListener("input", () => {
+  syncComparatorDownloadButton();
+  syncComparatorRecontinueButton(latestComparatorRun);
+});
 dom.copyComparatorLogButton.addEventListener("click", copyComparatorLog);
 dom.comparatorChartProposalFilters?.addEventListener("change", onComparatorChartFilterChange);
 dom.comparatorPointRepetitionSelect?.addEventListener("change", () => {

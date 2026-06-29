@@ -48,6 +48,11 @@ STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 
+
+class ComparatorRunConflictError(RuntimeError):
+    pass
+
+
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 STAGE_RE = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s+(.+)$")
 GENERATION_RE = re.compile(r"(?:Generaci[oó]n|generation)\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
@@ -2547,6 +2552,169 @@ class ComparatorService:
             write_json(summary_path, recomputed_run)
             return self._with_metric_recompute_status(recomputed_run)
 
+    def recontinue_run(self, run_id: str) -> dict[str, Any] | None:
+        summary_path = self.runs_root / run_id / "summary.json"
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                if not summary_path.exists():
+                    return None
+                run = read_json(summary_path)
+                run["activeProcesses"] = {}
+                run["startedAtEpoch"] = None
+                self._runs[run_id] = run
+
+            if run.get("status") == STATUS_COMPLETED:
+                raise ValueError("No se puede re-continuar una corrida completada.")
+            if self._has_live_processes_unlocked(run):
+                raise ComparatorRunConflictError("La corrida todavia tiene procesos activos.")
+            run["activeProcesses"] = {}
+
+            remaining_instances = self._prepare_recontinue_unlocked(run)
+            if not remaining_instances:
+                run["status"] = STATUS_COMPLETED
+                run["error"] = None
+                run["updatedAt"] = utc_now()
+                self._refresh_run_progress_unlocked(run)
+                self._refresh_cost_summary_unlocked(run)
+                self._write_summary_unlocked(run)
+                return self._public_run(run)
+
+            run["status"] = STATUS_RUNNING
+            run["cancelRequested"] = False
+            run["error"] = None
+            run["startedAtEpoch"] = time.time()
+            run["updatedAt"] = utc_now()
+            self._refresh_run_progress_unlocked(run)
+            self._refresh_cost_summary_unlocked(run)
+            self._write_summary_unlocked(run)
+
+        thread = threading.Thread(target=self._recontinue_worker, args=(run_id, remaining_instances), daemon=True)
+        thread.start()
+        with self._lock:
+            return self._public_run(self._runs[run_id])
+
+    def _has_live_processes_unlocked(self, run: dict[str, Any]) -> bool:
+        for process in (run.get("activeProcesses") or {}).values():
+            if process is None:
+                continue
+            poll = getattr(process, "poll", None)
+            if not callable(poll):
+                return True
+            try:
+                if poll() is None:
+                    return True
+            except Exception:
+                return True
+        return False
+
+    def _prepare_recontinue_unlocked(self, run: dict[str, Any]) -> list[ProposalRunInstance]:
+        config = run.get("config") if isinstance(run.get("config"), dict) else {}
+        selected_instances = self._selected_instances(config)
+        states = run.setdefault("proposalStates", {})
+        total_repetitions = max(1, int(config.get("repetitionsK") or 1))
+        completed_ids = {
+            str(instance_id)
+            for instance_id, state in states.items()
+            if isinstance(state, dict) and state.get("status") == STATUS_COMPLETED
+        }
+        completed_ids.update(
+            str(proposal.get("instanceId") or proposal.get("proposalId") or "")
+            for proposal in (run.get("proposals") or [])
+            if isinstance(proposal, dict) and proposal.get("status") == STATUS_COMPLETED
+        )
+        completed_ids.discard("")
+        for instance in selected_instances:
+            state = states.setdefault(instance.instance_id, self._initial_proposal_state(instance, total_repetitions))
+            if instance.instance_id in completed_ids:
+                state.update(
+                    {
+                        "status": STATUS_COMPLETED,
+                        "stageLabel": comparator_status_message(STATUS_COMPLETED),
+                        "progress": 1.0,
+                        "completedRepetitions": total_repetitions,
+                        "currentRepetitionIndex": total_repetitions,
+                        "totalRepetitions": total_repetitions,
+                        "updatedAt": utc_now(),
+                    }
+                )
+        first_incomplete_index = next(
+            (
+                index
+                for index, instance in enumerate(selected_instances)
+                if instance.instance_id not in completed_ids
+            ),
+            None,
+        )
+        if first_incomplete_index is None:
+            return []
+
+        remaining_instances = [
+            instance
+            for instance in selected_instances[first_incomplete_index:]
+            if instance.instance_id not in completed_ids
+        ]
+        reset_ids = {instance.instance_id for instance in remaining_instances}
+
+        run["proposals"] = [
+            proposal
+            for proposal in (run.get("proposals") or [])
+            if str(proposal.get("instanceId") or proposal.get("proposalId") or "") not in reset_ids
+        ]
+
+        run_dir = Path(str(run.get("runDir") or ""))
+        for instance_id in reset_ids:
+            self._delete_run_instance_dir(run_dir, instance_id)
+
+        for instance in remaining_instances:
+            states[instance.instance_id] = self._initial_proposal_state(instance, total_repetitions)
+
+        self._filter_run_logs_unlocked(run, reset_ids)
+        self._sort_proposals_unlocked(run)
+        self._refresh_run_progress_unlocked(run)
+        self._refresh_cost_summary_unlocked(run)
+        return remaining_instances
+
+    def _delete_run_instance_dir(self, run_dir: Path, instance_id: str) -> None:
+        if not run_dir:
+            raise ValueError("No existe runDir para limpiar la instancia.")
+        run_root = run_dir.resolve(strict=True)
+        target = run_dir / instance_id
+        target_resolved = target.resolve(strict=False)
+        if target_resolved.parent != run_root:
+            raise ValueError(f"Ruta de instancia fuera del runDir: {instance_id}")
+        if not target.exists():
+            return
+        if target.is_dir():
+            shutil.rmtree(target)
+            return
+        target.unlink()
+
+    def _filter_run_logs_unlocked(self, run: dict[str, Any], reset_ids: set[str]) -> None:
+        run["logs"] = [
+            entry
+            for entry in (run.get("logs") or [])
+            if not isinstance(entry, dict) or str(entry.get("proposalId") or "") not in reset_ids
+        ]
+        log_path = self._run_log_path(run)
+        if not log_path.exists():
+            return
+        kept_lines: list[str] = []
+        with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                stripped = line.rstrip("\n")
+                try:
+                    entry = json.loads(stripped)
+                except json.JSONDecodeError:
+                    kept_lines.append(stripped)
+                    continue
+                if isinstance(entry, dict) and str(entry.get("proposalId") or "") in reset_ids:
+                    continue
+                kept_lines.append(stripped)
+        with log_path.open("w", encoding="utf-8") as handle:
+            if kept_lines:
+                handle.write("\n".join(kept_lines) + "\n")
+
     def cancel_run(self, run_id: str) -> dict[str, Any] | None:
         with self._lock:
             run = self._runs.get(run_id)
@@ -3655,23 +3823,7 @@ class ComparatorService:
                 self._run_proposals_parallel(run, selected_instances, parallelism)
 
             with self._lock:
-                self._sort_proposals_unlocked(run)
-                self._apply_contribution_metrics_unlocked(run)
-                failed = [item for item in run["proposals"] if item["status"] == STATUS_FAILED]
-                if run["cancelRequested"]:
-                    run["status"] = STATUS_CANCELLED
-                elif failed and len(failed) == len(selected_instances):
-                    run["status"] = STATUS_FAILED
-                    run["error"] = "All proposal executions failed."
-                elif failed:
-                    run["status"] = STATUS_FAILED
-                    failed_names = ", ".join(item["displayName"] for item in failed)
-                    run["error"] = f"Proposal executions failed: {failed_names}."
-                else:
-                    run["status"] = STATUS_COMPLETED
-                run["updatedAt"] = utc_now()
-                self._refresh_cost_summary_unlocked(run)
-                self._append_log_unlocked(run, "system", f"Comparator run finished with status {run['status']}.")
+                self._finish_run_execution_unlocked(run, len(selected_instances))
                 self._write_summary_unlocked(run)
         except Exception as error:
             with self._lock:
@@ -3681,6 +3833,52 @@ class ComparatorService:
                 self._refresh_cost_summary_unlocked(run)
                 self._append_log_unlocked(run, "system", f"Unexpected error: {error}")
                 self._write_summary_unlocked(run)
+
+    def _recontinue_worker(self, run_id: str, remaining_instances: list[ProposalRunInstance]) -> None:
+        try:
+            with self._lock:
+                run = self._runs[run_id]
+                parallelism = min(run["config"].get("effectiveProposalParallelism", 1), len(remaining_instances))
+
+            if parallelism <= 1:
+                self._run_proposals_sequential(run, remaining_instances)
+            else:
+                self._run_proposals_parallel(run, remaining_instances, parallelism)
+
+            with self._lock:
+                total_instances = len(self._selected_instances(run["config"]))
+                self._finish_run_execution_unlocked(run, total_instances)
+                self._write_summary_unlocked(run)
+        except Exception as error:
+            with self._lock:
+                run = self._runs[run_id]
+                run["status"] = STATUS_FAILED
+                run["error"] = str(error)
+                run["updatedAt"] = utc_now()
+                self._refresh_cost_summary_unlocked(run)
+                self._append_log_unlocked(run, "system", f"Unexpected error: {error}")
+                self._write_summary_unlocked(run)
+
+    def _finish_run_execution_unlocked(self, run: dict[str, Any], total_instances: int) -> None:
+        self._sort_proposals_unlocked(run)
+        self._apply_contribution_metrics_unlocked(run)
+        failed = [item for item in run["proposals"] if item["status"] == STATUS_FAILED]
+        if run.get("cancelRequested"):
+            run["status"] = STATUS_CANCELLED
+        elif failed and len(failed) == total_instances:
+            run["status"] = STATUS_FAILED
+            run["error"] = "All proposal executions failed."
+        elif failed:
+            run["status"] = STATUS_FAILED
+            failed_names = ", ".join(item["displayName"] for item in failed)
+            run["error"] = f"Proposal executions failed: {failed_names}."
+        else:
+            run["status"] = STATUS_COMPLETED
+            run["error"] = None
+        run["updatedAt"] = utc_now()
+        self._refresh_run_progress_unlocked(run)
+        self._refresh_cost_summary_unlocked(run)
+        self._append_log_unlocked(run, "system", f"Comparator run finished with status {run['status']}.")
 
     def _run_proposals_sequential(self, run: dict[str, Any], proposals: list[ProposalDefinition | ProposalRunInstance]) -> None:
         for proposal in proposals:

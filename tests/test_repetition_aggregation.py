@@ -510,6 +510,337 @@ class RepetitionAggregationTests(unittest.TestCase):
             self.assertEqual(result["instanceId"], "binary-a")
             self.assertEqual(result["proposalId"], "binary-mopso-cd")
 
+    def test_recontinue_run_preserves_completed_instances_and_cleans_partial_state(self):
+        class InstantThread:
+            def __init__(self, target, args=(), daemon=None):
+                self._target = target
+                self._args = args
+                self.daemon = daemon
+
+            def start(self):
+                self._target(*self._args)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            config = service._read_config(
+                {
+                    "referenceText": "reference",
+                    "selectedProposalIds": ["binary-mopso-cd"],
+                    "repetitionsK": 2,
+                    "seed": 7,
+                    "proposalInstances": [
+                        {
+                            "instanceId": "binary-1",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary 1",
+                            "proposalConfig": {"cliValues": {"selection.k": "1"}},
+                        },
+                        {
+                            "instanceId": "binary-2",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary 2",
+                            "proposalConfig": {"cliValues": {"selection.k": "2"}},
+                        },
+                        {
+                            "instanceId": "binary-3",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary 3",
+                            "proposalConfig": {"cliValues": {"selection.k": "3"}},
+                        },
+                        {
+                            "instanceId": "binary-4",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary 4",
+                            "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        },
+                    ],
+                }
+            )
+            instances = service._selected_instances(config)
+            run_dir = root / "runs" / "comparator" / "recontinue-run"
+            run_dir.mkdir(parents=True)
+            for name in ("binary-1", "binary-2", "binary-3", "binary-4"):
+                instance_dir = run_dir / name
+                instance_dir.mkdir()
+                (instance_dir / "marker.txt").write_text(name, encoding="utf-8")
+            proposals = [
+                {
+                    "instanceId": "binary-1",
+                    "proposalId": "binary-mopso-cd",
+                    "displayName": "Binary 1",
+                    "status": "completed",
+                    "completedRepetitions": 2,
+                    "repetitionsK": 2,
+                    "cost": {},
+                    "metrics": {},
+                    "charts": {},
+                    "rows": [],
+                },
+                {
+                    "instanceId": "binary-2",
+                    "proposalId": "binary-mopso-cd",
+                    "displayName": "Binary 2",
+                    "status": "completed",
+                    "completedRepetitions": 2,
+                    "repetitionsK": 2,
+                    "cost": {},
+                    "metrics": {},
+                    "charts": {},
+                    "rows": [],
+                },
+                {
+                    "instanceId": "binary-3",
+                    "proposalId": "binary-mopso-cd",
+                    "displayName": "Binary 3",
+                    "status": "failed",
+                    "completedRepetitions": 1,
+                    "repetitionsK": 2,
+                    "cost": {},
+                    "metrics": {},
+                    "charts": {},
+                    "rows": [],
+                    "error": "partial crash",
+                },
+            ]
+            states = {instance.instance_id: service._initial_proposal_state(instance, 2) for instance in instances}
+            states["binary-1"].update({"status": "completed", "progress": 1.0, "completedRepetitions": 2})
+            states["binary-2"].update({"status": "completed", "progress": 1.0, "completedRepetitions": 2})
+            states["binary-3"].update({"status": "running", "progress": 0.45, "completedRepetitions": 1, "currentRepetitionIndex": 2})
+            run = {
+                "runId": "recontinue-run",
+                "runDir": str(run_dir),
+                "status": "running",
+                "startedAtEpoch": None,
+                "config": config,
+                "proposalStates": states,
+                "proposals": proposals,
+                "progress": {},
+                "costSummary": {},
+                "logs": [
+                    {"proposalId": "binary-1", "message": "completed log"},
+                    {"proposalId": "binary-3", "message": "partial log"},
+                    {"proposalId": "binary-4", "message": "queued partial log"},
+                ],
+                "repositoryUpdates": {},
+                "cancelRequested": False,
+                "activeProcesses": {},
+            }
+            service._runs["recontinue-run"] = run
+            log_path = run_dir / "logs.jsonl"
+            log_path.write_text(
+                "\n".join(
+                    json.dumps(entry, ensure_ascii=False)
+                    for entry in [
+                        {"proposalId": "binary-1", "message": "completed log"},
+                        {"proposalId": "binary-3", "message": "partial log"},
+                        {"proposalId": "binary-4", "message": "queued partial log"},
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            launched: list[str] = []
+
+            def fake_run_proposals_sequential(run_payload, remaining_instances):
+                launched.extend(instance.instance_id for instance in remaining_instances)
+                for instance in remaining_instances:
+                    service._record_proposal_result_unlocked(
+                        run_payload,
+                        {
+                            "instanceId": instance.instance_id,
+                            "proposalId": instance.proposal_id,
+                            "displayName": instance.display_name,
+                            "baseDisplayName": instance.base_display_name,
+                            "proposalConfig": instance.proposal_config,
+                            "status": "completed",
+                            "completedRepetitions": 2,
+                            "repetitionsK": 2,
+                            "cost": {},
+                            "metrics": {},
+                            "charts": {},
+                            "rows": [],
+                            "error": None,
+                        },
+                    )
+
+            with patch("baselines.comparator.threading.Thread", InstantThread):
+                with patch.object(service, "_run_proposals_sequential", side_effect=fake_run_proposals_sequential):
+                    result = service.recontinue_run("recontinue-run")
+
+            self.assertEqual(launched, ["binary-3", "binary-4"])
+            self.assertEqual(result["status"], "completed")
+            self.assertTrue((run_dir / "binary-1" / "marker.txt").exists())
+            self.assertTrue((run_dir / "binary-2" / "marker.txt").exists())
+            self.assertFalse((run_dir / "binary-3" / "marker.txt").exists())
+            self.assertFalse((run_dir / "binary-4" / "marker.txt").exists())
+            self.assertNotIn("partial crash", json.dumps(result, ensure_ascii=False))
+            self.assertEqual([proposal["instanceId"] for proposal in result["proposals"]], ["binary-1", "binary-2", "binary-3", "binary-4"])
+            log_text = log_path.read_text(encoding="utf-8")
+            self.assertIn("completed log", log_text)
+            self.assertNotIn("partial log", log_text)
+            self.assertNotIn("queued partial log", log_text)
+            self.assertNotIn("recontinu", log_text.lower())
+            self.assertNotIn("binary-3", [entry["proposalId"] for entry in run["logs"]])
+            self.assertNotIn("binary-4", [entry["proposalId"] for entry in run["logs"]])
+
+    def test_recontinue_run_rejects_completed_run_without_touching_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_dir = root / "runs" / "comparator" / "completed-run"
+            run_dir.mkdir(parents=True)
+            preserved = run_dir / "binary-1" / "marker.txt"
+            preserved.parent.mkdir()
+            preserved.write_text("keep", encoding="utf-8")
+            run = {
+                "runId": "completed-run",
+                "runDir": str(run_dir),
+                "status": "completed",
+                "config": {"proposalInstances": []},
+                "proposalStates": {},
+                "proposals": [],
+                "progress": {},
+                "logs": [],
+                "costSummary": {},
+                "activeProcesses": {},
+            }
+            service._runs["completed-run"] = run
+
+            with self.assertRaises(ValueError):
+                service.recontinue_run("completed-run")
+
+            self.assertTrue(preserved.exists())
+
+    def test_recontinue_run_rejects_live_process_without_touching_files(self):
+        class LiveProcess:
+            def poll(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_dir = root / "runs" / "comparator" / "live-run"
+            run_dir.mkdir(parents=True)
+            preserved = run_dir / "binary-1" / "marker.txt"
+            preserved.parent.mkdir()
+            preserved.write_text("keep", encoding="utf-8")
+            run = {
+                "runId": "live-run",
+                "runDir": str(run_dir),
+                "status": "running",
+                "config": {"proposalInstances": []},
+                "proposalStates": {},
+                "proposals": [],
+                "progress": {},
+                "logs": [],
+                "costSummary": {},
+                "activeProcesses": {"binary-1": LiveProcess()},
+            }
+            service._runs["live-run"] = run
+
+            with self.assertRaises(RuntimeError):
+                service.recontinue_run("live-run")
+
+            self.assertTrue(preserved.exists())
+
+    def test_recontinue_run_can_load_stale_running_summary_from_disk(self):
+        class InstantThread:
+            def __init__(self, target, args=(), daemon=None):
+                self._target = target
+                self._args = args
+                self.daemon = daemon
+
+            def start(self):
+                self._target(*self._args)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            config = service._read_config(
+                {
+                    "referenceText": "reference",
+                    "selectedProposalIds": ["binary-mopso-cd"],
+                    "proposalInstances": [
+                        {
+                            "instanceId": "binary-1",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary 1",
+                            "proposalConfig": {"cliValues": {"selection.k": "1"}},
+                        },
+                        {
+                            "instanceId": "binary-2",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary 2",
+                            "proposalConfig": {"cliValues": {"selection.k": "2"}},
+                        },
+                    ],
+                }
+            )
+            instances = service._selected_instances(config)
+            run_dir = root / "runs" / "comparator" / "disk-run"
+            run_dir.mkdir(parents=True)
+            (run_dir / "binary-2").mkdir()
+            (run_dir / "binary-2" / "partial.txt").write_text("partial", encoding="utf-8")
+            states = {instance.instance_id: service._initial_proposal_state(instance, 1) for instance in instances}
+            states["binary-1"].update({"status": "completed", "progress": 1.0, "completedRepetitions": 1})
+            states["binary-2"].update({"status": "running", "progress": 0.2})
+            summary = {
+                "runId": "disk-run",
+                "runDir": str(run_dir),
+                "status": "running",
+                "config": config,
+                "proposalStates": states,
+                "proposals": [
+                    {
+                        "instanceId": "binary-1",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary 1",
+                        "status": "completed",
+                        "cost": {},
+                        "metrics": {},
+                        "charts": {},
+                        "rows": [],
+                    }
+                ],
+                "progress": {},
+                "logs": [{"proposalId": "binary-2", "message": "partial"}],
+                "costSummary": {},
+                "cancelRequested": False,
+            }
+            (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+            launched: list[str] = []
+
+            def fake_run_proposals_sequential(run_payload, remaining_instances):
+                launched.extend(instance.instance_id for instance in remaining_instances)
+                for instance in remaining_instances:
+                    service._record_proposal_result_unlocked(
+                        run_payload,
+                        {
+                            "instanceId": instance.instance_id,
+                            "proposalId": instance.proposal_id,
+                            "displayName": instance.display_name,
+                            "status": "completed",
+                            "completedRepetitions": 1,
+                            "repetitionsK": 1,
+                            "cost": {},
+                            "metrics": {},
+                            "charts": {},
+                            "rows": [],
+                            "error": None,
+                        },
+                    )
+
+            with patch("baselines.comparator.threading.Thread", InstantThread):
+                with patch.object(service, "_run_proposals_sequential", side_effect=fake_run_proposals_sequential):
+                    result = service.recontinue_run("disk-run")
+
+            self.assertEqual(launched, ["binary-2"])
+            self.assertEqual(result["status"], "completed")
+            self.assertFalse((run_dir / "binary-2" / "partial.txt").exists())
+
     def test_comparator_reads_full_logs_in_chunks(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
