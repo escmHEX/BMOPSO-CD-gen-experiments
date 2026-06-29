@@ -27,6 +27,7 @@ import {
   comparatorProposalColor,
   comparatorSeriesIterationExtent,
   comparatorVisibleFrontChartPoints,
+  comparatorVisibleFrontPointCount,
 } from "./comparator_chart_helpers.mjs";
 import {
   comparatorHistoricalInstancesFromRun,
@@ -7455,7 +7456,7 @@ async function renderComparatorEmbeddingProjection(run) {
     proposals: completedProposals.map((proposal) => ({
       instanceId: comparatorEntityId(proposal),
       proposalId: proposal.proposalId,
-      frontRows: (comparatorPointChartViewProposal(proposal, comparatorPointChartRepetitionIndex).embeddingFrontRows || []).length,
+      frontRows: comparatorVisibleFrontPointCount(proposal, comparatorPointChartRepetitionIndex),
       fallbackFront: ((proposal.charts || {}).nonDominated || []).length,
     })),
   });

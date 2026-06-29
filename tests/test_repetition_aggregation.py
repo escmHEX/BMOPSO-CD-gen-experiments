@@ -3551,12 +3551,27 @@ class RepetitionAggregationTests(unittest.TestCase):
                         "pointChartRepetitions": [
                             {
                                 "repetitionIndex": 1,
+                                "charts": {
+                                    "pareto": [
+                                        {"label": "rep 1 front", "proposalId": "binary-mopso-cd"},
+                                    ],
+                                    "nonDominated": [],
+                                    "selected": [],
+                                },
                                 "embeddingFrontRows": [
                                     {"text": "rep 1 front", "proposalId": "binary-mopso-cd"},
                                 ],
                             },
                             {
                                 "repetitionIndex": 2,
+                                "charts": {
+                                    "pareto": [
+                                        {"label": "rep 2 front a", "proposalId": "binary-mopso-cd"},
+                                        {"label": "rep 2 front b", "proposalId": "binary-mopso-cd"},
+                                    ],
+                                    "nonDominated": [],
+                                    "selected": [],
+                                },
                                 "embeddingFrontRows": [
                                     {"text": "rep 2 front a", "proposalId": "binary-mopso-cd"},
                                     {"text": "rep 2 front b", "proposalId": "binary-mopso-cd"},
@@ -3576,6 +3591,231 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(
             [point["text"] for point in payload["proposals"][0]["points"]],
             ["rep 2 front a", "rep 2 front b"],
+        )
+
+    def test_embedding_projection_uses_binary_visible_pareto_for_selected_repetition(self):
+        class FakeSbertService:
+            def encode_texts(self, model_name, texts):
+                embeddings = [[1.0, 0.0, 0.0]]
+                for index, _text in enumerate(texts[1:], start=1):
+                    embeddings.append([0.0, float(index), 1.0 - (index * 0.01)])
+                return (
+                    embeddings,
+                    {
+                        "embeddingModel": model_name,
+                        "sourceModel": "sentence-transformers/all-MiniLM-L6-v2",
+                        "embeddingTexts": len(texts),
+                        "embeddingWallClockSeconds": 0.01,
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_id = "binary-visible-projection-run"
+            run_dir = root / "runs" / "comparator" / run_id
+            run_dir.mkdir(parents=True)
+            summary = {
+                "runId": run_id,
+                "status": "completed",
+                "runDir": str(run_dir),
+                "config": {"referenceText": "reference"},
+                "proposals": [
+                    {
+                        "proposalId": "binary-mopso-cd",
+                        "instanceId": "binary-mopso-cd-2",
+                        "displayName": "Binary MOPSO-CD - c1>c2",
+                        "status": "completed",
+                        "embeddingFrontRows": [
+                            {"text": f"aggregated {index}", "proposalId": "binary-mopso-cd"}
+                            for index in range(45)
+                        ],
+                        "pointChartRepetitions": [
+                            {
+                                "repetitionIndex": 1,
+                                "charts": {
+                                    "pareto": [{"label": "rep 1 native", "proposalId": "binary-mopso-cd"}],
+                                    "nonDominated": [{"label": "rep 1 comparable", "proposalId": "binary-mopso-cd"}],
+                                    "selected": [],
+                                },
+                                "embeddingFrontRows": [{"text": "rep 1 comparable", "proposalId": "binary-mopso-cd"}],
+                            },
+                            {
+                                "repetitionIndex": 2,
+                                "charts": {
+                                    "pareto": [
+                                        {"label": f"rep 2 native {index}", "proposalId": "binary-mopso-cd"}
+                                        for index in range(37)
+                                    ],
+                                    "nonDominated": [
+                                        {"label": f"rep 2 comparable {index}", "proposalId": "binary-mopso-cd"}
+                                        for index in range(29)
+                                    ],
+                                    "selected": [],
+                                },
+                                "embeddingFrontRows": [
+                                    {"text": f"rep 2 comparable {index}", "proposalId": "binary-mopso-cd"}
+                                    for index in range(29)
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+            (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+            with patch.object(comparator_module, "shared_sbert_service", return_value=FakeSbertService()):
+                payload = service.get_run_embedding_projection(run_id, "pca", repetition=2)
+
+        self.assertEqual(payload["repetitionIndex"], 2)
+        self.assertEqual(payload["embeddingTexts"], 38)
+        self.assertEqual(len(payload["proposals"][0]["points"]), 37)
+        self.assertEqual(payload["proposals"][0]["points"][0]["text"], "rep 2 native 0")
+        self.assertEqual(payload["proposals"][0]["points"][-1]["text"], "rep 2 native 36")
+
+    def test_embedding_projection_uses_non_binary_visible_non_dominated_for_selected_repetition(self):
+        class FakeSbertService:
+            def encode_texts(self, model_name, texts):
+                embeddings = [[1.0, 0.0, 0.0]]
+                for index, _text in enumerate(texts[1:], start=1):
+                    embeddings.append([0.0, float(index), 1.0 - (index * 0.1)])
+                return (
+                    embeddings,
+                    {
+                        "embeddingModel": model_name,
+                        "sourceModel": "sentence-transformers/all-MiniLM-L6-v2",
+                        "embeddingTexts": len(texts),
+                        "embeddingWallClockSeconds": 0.01,
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_id = "non-binary-visible-projection-run"
+            run_dir = root / "runs" / "comparator" / run_id
+            run_dir.mkdir(parents=True)
+            summary = {
+                "runId": run_id,
+                "status": "completed",
+                "runDir": str(run_dir),
+                "config": {"referenceText": "reference"},
+                "proposals": [
+                    {
+                        "proposalId": "evolmd-mo",
+                        "instanceId": "evolmd-mo-1",
+                        "displayName": "EVOLMD-MO",
+                        "status": "completed",
+                        "pointChartRepetitions": [
+                            {
+                                "repetitionIndex": 2,
+                                "charts": {
+                                    "pareto": [
+                                        {"label": "dominated visible candidate", "proposalId": "evolmd-mo"},
+                                        {"label": "front a", "proposalId": "evolmd-mo"},
+                                        {"label": "front b", "proposalId": "evolmd-mo"},
+                                    ],
+                                    "nonDominated": [
+                                        {"label": "front a", "proposalId": "evolmd-mo"},
+                                        {"label": "front b", "proposalId": "evolmd-mo"},
+                                    ],
+                                    "selected": [],
+                                },
+                                "embeddingFrontRows": [
+                                    {"text": "legacy front a", "proposalId": "evolmd-mo"},
+                                    {"text": "legacy front b", "proposalId": "evolmd-mo"},
+                                    {"text": "legacy extra", "proposalId": "evolmd-mo"},
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+            (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+            with patch.object(comparator_module, "shared_sbert_service", return_value=FakeSbertService()):
+                payload = service.get_run_embedding_projection(run_id, "pca", repetition=2)
+
+        self.assertEqual(payload["embeddingTexts"], 3)
+        self.assertEqual(
+            [point["text"] for point in payload["proposals"][0]["points"]],
+            ["front a", "front b"],
+        )
+
+    def test_embedding_projection_uses_repetition_charts_when_point_chart_repetitions_are_absent(self):
+        class FakeSbertService:
+            def encode_texts(self, model_name, texts):
+                embeddings = [[1.0, 0.0, 0.0]]
+                for index, _text in enumerate(texts[1:], start=1):
+                    embeddings.append([0.0, float(index), 1.0 - (index * 0.1)])
+                return (
+                    embeddings,
+                    {
+                        "embeddingModel": model_name,
+                        "sourceModel": "sentence-transformers/all-MiniLM-L6-v2",
+                        "embeddingTexts": len(texts),
+                        "embeddingWallClockSeconds": 0.01,
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_id = "legacy-repetition-chart-projection-run"
+            run_dir = root / "runs" / "comparator" / run_id
+            run_dir.mkdir(parents=True)
+            summary = {
+                "runId": run_id,
+                "status": "completed",
+                "runDir": str(run_dir),
+                "config": {"referenceText": "reference"},
+                "proposals": [
+                    {
+                        "proposalId": "binary-mopso-cd",
+                        "instanceId": "binary-mopso-cd-legacy",
+                        "displayName": "Binary MOPSO-CD",
+                        "status": "completed",
+                        "embeddingFrontRows": [
+                            {"text": f"aggregated {index}", "proposalId": "binary-mopso-cd"}
+                            for index in range(6)
+                        ],
+                        "repetitions": [
+                            {
+                                "status": "completed",
+                                "repetitionIndex": 1,
+                                "charts": {
+                                    "pareto": [{"label": "rep 1 visible", "proposalId": "binary-mopso-cd"}],
+                                    "nonDominated": [],
+                                    "selected": [],
+                                },
+                                "embeddingFrontRows": [{"text": "rep 1 legacy", "proposalId": "binary-mopso-cd"}],
+                            },
+                            {
+                                "status": "completed",
+                                "repetitionIndex": 2,
+                                "charts": {
+                                    "pareto": [
+                                        {"label": "rep 2 visible a", "proposalId": "binary-mopso-cd"},
+                                        {"label": "rep 2 visible b", "proposalId": "binary-mopso-cd"},
+                                    ],
+                                    "nonDominated": [],
+                                    "selected": [],
+                                },
+                                "embeddingFrontRows": [{"text": "rep 2 legacy", "proposalId": "binary-mopso-cd"}],
+                            },
+                        ],
+                    }
+                ],
+            }
+            (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+            with patch.object(comparator_module, "shared_sbert_service", return_value=FakeSbertService()):
+                payload = service.get_run_embedding_projection(run_id, "pca", repetition=2)
+
+        self.assertEqual(payload["embeddingTexts"], 3)
+        self.assertEqual(
+            [point["text"] for point in payload["proposals"][0]["points"]],
+            ["rep 2 visible a", "rep 2 visible b"],
         )
 
     def test_binary_internal_bmopso_analysis_is_attached_per_point_repetition(self):

@@ -185,6 +185,11 @@ export function comparatorPointChartViewProposal(proposal = {}, selectedRepetiti
   };
 }
 
+export function comparatorVisibleFrontPointCount(proposal = {}, selectedRepetitionIndex = null, namespace = "pareto-points") {
+  const viewProposal = comparatorPointChartViewProposal(proposal, selectedRepetitionIndex);
+  return comparatorVisibleFrontChartPoints(viewProposal.charts, namespace).individuals.length;
+}
+
 export function comparatorPartitionPointsByExclusion(points = [], excludedKeys = new Set(), namespace = "") {
   const excluded = excludedKeys instanceof Set ? excludedKeys : new Set(excludedKeys || []);
   return (points || []).reduce((partition, point, index) => {

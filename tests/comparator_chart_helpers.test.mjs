@@ -29,6 +29,7 @@ import {
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
   comparatorSeriesIterationExtent,
+  comparatorVisibleFrontPointCount,
   comparatorVisibleFrontChartPoints,
 } from "../LLM/comparator_chart_helpers.mjs";
 
@@ -415,6 +416,39 @@ test("point chart view proposal selects a single repetition without merging K", 
   assert.equal(selected.pointChartUnavailable, false);
   assert.deepEqual(selected.charts.pareto.map((point) => point.label), ["rep 2 a", "rep 2 b", "rep 2 c"]);
   assert.equal(selected.metrics.hypervolumeLabel, "0.220000");
+});
+
+test("visible front point count follows selected repetition chart semantics", () => {
+  const proposal = {
+    proposalId: "binary-mopso-cd",
+    instanceId: "binary-a",
+    pointChartRepetitions: [
+      {
+        repetitionIndex: 1,
+        charts: {
+          pareto: [{ label: "rep 1 native", proposalId: "binary-mopso-cd" }],
+          nonDominated: [],
+          selected: [],
+        },
+        embeddingFrontRows: [{ text: "rep 1 legacy" }],
+      },
+      {
+        repetitionIndex: 2,
+        charts: {
+          pareto: [
+            { label: "rep 2 native a", proposalId: "binary-mopso-cd" },
+            { label: "rep 2 native b", proposalId: "binary-mopso-cd" },
+            { label: "rep 2 native c", proposalId: "binary-mopso-cd" },
+          ],
+          nonDominated: [{ label: "rep 2 comparable", proposalId: "binary-mopso-cd" }],
+          selected: [],
+        },
+        embeddingFrontRows: [{ text: "rep 2 legacy" }],
+      },
+    ],
+  };
+
+  assert.equal(comparatorVisibleFrontPointCount(proposal, 2), 3);
 });
 
 test("point chart view proposal marks missing repetitions unavailable", () => {

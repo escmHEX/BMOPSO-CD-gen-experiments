@@ -1557,6 +1557,79 @@ def proposal_embedding_front_rows(proposal: dict[str, Any]) -> list[dict[str, An
     )
 
 
+def proposal_is_binary_payload(proposal: dict[str, Any]) -> bool:
+    proposal_id = str(proposal.get("proposalId") or proposal.get("baseProposalId") or "")
+    instance_id = str(proposal.get("instanceId") or "")
+    return (
+        proposal_id == BINARY_PROPOSAL_ID
+        or instance_id == BINARY_PROPOSAL_ID
+        or instance_id.startswith(f"{BINARY_PROPOSAL_ID}:")
+        or instance_id.startswith(f"{BINARY_PROPOSAL_ID}-")
+    )
+
+
+def chart_point_text(point: dict[str, Any]) -> str:
+    for key in ("label", "text", "labelText", "generatedText", "generated_text"):
+        text = str(point.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def selected_chart_point_metadata(charts: dict[str, Any]) -> tuple[set[str], dict[str, Any]]:
+    selected_texts: set[str] = set()
+    selected_ranks: dict[str, Any] = {}
+    for point in charts.get("selected") or []:
+        if not isinstance(point, dict):
+            continue
+        key = canonical_generated_text(chart_point_text(point))
+        if not key:
+            continue
+        selected_texts.add(key)
+        selected_ranks[key] = point.get("selectionRank") or point.get("rank")
+    return selected_texts, selected_ranks
+
+
+def visible_front_chart_rows_for_projection(
+    proposal: dict[str, Any],
+    selected: dict[str, Any],
+) -> list[dict[str, Any]]:
+    charts = selected.get("charts") if isinstance(selected.get("charts"), dict) else {}
+    visible_key = "pareto" if proposal_is_binary_payload(proposal) else "nonDominated"
+    selected_texts, selected_ranks = selected_chart_point_metadata(charts)
+    rows: list[dict[str, Any]] = []
+    for point in charts.get(visible_key) or []:
+        if not isinstance(point, dict):
+            continue
+        text = chart_point_text(point)
+        if not text:
+            continue
+        key = canonical_generated_text(text)
+        rows.append(
+            {
+                "text": text,
+                "selected": bool(point.get("selected")) or key in selected_texts,
+                "rank": point.get("rank"),
+                "selectionRank": point.get("selectionRank") or selected_ranks.get(key),
+                "repetitionIndex": point.get("repetitionIndex") or selected.get("repetitionIndex"),
+                "repetitionSeed": point.get("repetitionSeed") or selected.get("repetitionSeed"),
+                "sourceIndex": point.get("sourceIndex"),
+                "objectiveLabel": point.get("comparableObjectiveLabel")
+                or point.get("nativeObjectiveLabel")
+                or point.get("objectiveLabel")
+                or "--",
+                "proposalId": point.get("proposalId") or proposal.get("proposalId") or "",
+                "instanceId": point.get("instanceId") or proposal.get("instanceId") or proposal.get("proposalId") or "",
+                "displayName": point.get("displayName") or proposal.get("displayName") or "",
+            }
+        )
+    return rows
+
+
+def proposal_has_repetition_chart_payloads(proposal: dict[str, Any]) -> bool:
+    return isinstance(proposal.get("pointChartRepetitions"), list) or isinstance(proposal.get("repetitions"), list)
+
+
 def point_chart_repetition_payload(result: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(result, dict) or result.get("status") != STATUS_COMPLETED:
         return None
@@ -1630,6 +1703,9 @@ def proposal_embedding_front_rows_for_repetition(
     selected = selected_point_chart_repetition(proposal, repetition)
     if selected is None:
         return []
+    rows = visible_front_chart_rows_for_projection(proposal, selected)
+    if rows or proposal_has_repetition_chart_payloads(proposal):
+        return rows
     rows = selected.get("embeddingFrontRows")
     if isinstance(rows, list):
         return [row for row in rows if isinstance(row, dict) and str(row.get("text") or "").strip()]
