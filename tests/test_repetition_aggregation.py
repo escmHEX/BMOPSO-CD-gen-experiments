@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import time
 import types
 import unittest
 import zipfile
@@ -196,6 +197,64 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual([instance.instance_id for instance in instances], ["binary-a", "binary-b"])
         self.assertEqual(instances[0].proposal_config["cliValues"]["selection.k"], "4")
         self.assertEqual(instances[1].proposal_config["cliValues"]["selection.k"], "5")
+
+    def test_comparator_config_accepts_same_initial_population_generator(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "proposalInstances": [
+                    {
+                        "instanceId": "binary-a",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary A",
+                        "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                    },
+                    {
+                        "instanceId": "binary-b",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary B",
+                        "proposalConfig": {"cliValues": {"selection.k": "5"}},
+                    },
+                ],
+                "sameInitialPopulationForBmopso": {
+                    "enabled": True,
+                    "generatorInstanceId": "binary-a",
+                },
+            }
+        )
+
+        self.assertEqual(
+            parsed["sameInitialPopulationForBmopso"],
+            {"enabled": True, "generatorInstanceId": "binary-a", "scope": "per_repetition"},
+        )
+
+    def test_comparator_config_rejects_non_binary_same_initial_population_generator(self):
+        service = ComparatorService(Path("."))
+        with self.assertRaisesRegex(ValueError, "generatorInstanceId must reference a Binary MOPSO-CD instance"):
+            service._read_config(
+                {
+                    "referenceText": "reference",
+                    "proposalInstances": [
+                        {
+                            "instanceId": "binary-a",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary A",
+                            "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        },
+                        {
+                            "instanceId": "mesap-a",
+                            "proposalId": "mesap",
+                            "displayName": "MESAP A",
+                            "proposalConfig": {"cliValues": {}},
+                        },
+                    ],
+                    "sameInitialPopulationForBmopso": {
+                        "enabled": True,
+                        "generatorInstanceId": "mesap-a",
+                    },
+                }
+            )
 
     def test_comparator_config_rejects_duplicate_instances_for_same_proposal(self):
         service = ComparatorService(Path("."))
@@ -2133,6 +2192,236 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertNotIn("mopso.guided_trajectory_relative_margin", command_set_values(second_command))
         self.assertEqual(command_set_values(first_command)["experiment.seed"], "777")
         self.assertEqual(command_set_values(second_command)["experiment.seed"], "778")
+
+    def test_binary_command_injects_same_initial_population_paths_for_dependent_instance(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_dir = root / "runs" / "comparator" / "run-1"
+            population_path = run_dir / "binary-a" / "exec" / "native-run" / "data_initial_population.json"
+            context_path = run_dir / "binary-a" / "exec" / "native-run" / "reference_context.json"
+            population_path.parent.mkdir(parents=True)
+            population_path.write_text("[]", encoding="utf-8")
+            context_path.write_text("{}", encoding="utf-8")
+            config = service._read_config(
+                {
+                    "referenceText": "reference",
+                    "proposalInstances": [
+                        {
+                            "instanceId": "binary-a",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary A",
+                            "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        },
+                        {
+                            "instanceId": "binary-b",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary B",
+                            "proposalConfig": {"cliValues": {"selection.k": "5"}},
+                        },
+                    ],
+                    "sameInitialPopulationForBmopso": {
+                        "enabled": True,
+                        "generatorInstanceId": "binary-a",
+                    },
+                }
+            )
+            first, second = service._selected_instances(config)
+            run = {
+                "config": config,
+                "runDir": str(run_dir),
+                "sameInitialPopulationArtifacts": {
+                    "binary-a": {
+                        "populationPath": str(population_path),
+                        "referenceContextPath": str(context_path),
+                        "repetitions": {},
+                    }
+                },
+            }
+
+            first_values = command_set_values(
+                service._build_command(run, first, Path("."), run_dir / "binary-a" / "exec", Path("reference.txt"), 777)
+            )
+            second_values = command_set_values(
+                service._build_command(run, second, Path("."), run_dir / "binary-b" / "exec", Path("reference.txt"), 778)
+            )
+
+            self.assertNotIn("initialization.population_input_path", first_values)
+            self.assertEqual(json.loads(second_values["initialization.population_input_path"]), str(population_path.resolve()))
+            self.assertEqual(json.loads(second_values["initialization.reference_context_input_path"]), str(context_path.resolve()))
+
+    def test_binary_command_uses_repetition_specific_same_initial_population_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_dir = root / "runs" / "comparator" / "run-1"
+            rep2_population_path = run_dir / "binary-a" / "rep-002" / "exec" / "native-run" / "data_initial_population.json"
+            rep2_context_path = run_dir / "binary-a" / "rep-002" / "exec" / "native-run" / "reference_context.json"
+            rep2_population_path.parent.mkdir(parents=True)
+            rep2_population_path.write_text("[]", encoding="utf-8")
+            rep2_context_path.write_text("{}", encoding="utf-8")
+            single_population_path = run_dir / "binary-a" / "exec" / "native-run" / "data_initial_population.json"
+            single_context_path = run_dir / "binary-a" / "exec" / "native-run" / "reference_context.json"
+            single_population_path.parent.mkdir(parents=True)
+            single_population_path.write_text("[]", encoding="utf-8")
+            single_context_path.write_text("{}", encoding="utf-8")
+            config = service._read_config(
+                {
+                    "referenceText": "reference",
+                    "repetitionsK": 2,
+                    "proposalInstances": [
+                        {
+                            "instanceId": "binary-a",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary A",
+                            "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        },
+                        {
+                            "instanceId": "binary-b",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary B",
+                            "proposalConfig": {"cliValues": {"selection.k": "5"}},
+                        },
+                    ],
+                    "sameInitialPopulationForBmopso": {
+                        "enabled": True,
+                        "generatorInstanceId": "binary-a",
+                    },
+                }
+            )
+            _first, second = service._selected_instances(config)
+            run = {
+                "config": config,
+                "runDir": str(run_dir),
+                "sameInitialPopulationArtifacts": {
+                    "binary-a": {
+                        "populationPath": str(run_dir / "binary-a" / "exec" / "native-run" / "data_initial_population.json"),
+                        "referenceContextPath": str(run_dir / "binary-a" / "exec" / "native-run" / "reference_context.json"),
+                        "repetitions": {
+                            "2": {
+                                "populationPath": str(rep2_population_path),
+                                "referenceContextPath": str(rep2_context_path),
+                            }
+                        },
+                    }
+                },
+            }
+
+            values = command_set_values(
+                service._build_command(
+                    run,
+                    second,
+                    Path("."),
+                    run_dir / "binary-b" / "rep-002" / "exec",
+                    Path("reference.txt"),
+                    778,
+                )
+            )
+
+            self.assertEqual(json.loads(values["initialization.population_input_path"]), str(rep2_population_path.resolve()))
+            self.assertEqual(json.loads(values["initialization.reference_context_input_path"]), str(rep2_context_path.resolve()))
+
+    def test_parallel_same_initial_population_waits_for_generator_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            run_dir = root / "runs" / "comparator" / "run-1"
+            run_dir.mkdir(parents=True)
+            config = service._read_config(
+                {
+                    "referenceText": "reference",
+                    "executionMode": "exploratory_parallel",
+                    "proposalParallelism": 3,
+                    "proposalInstances": [
+                        {
+                            "instanceId": "binary-a",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary A",
+                            "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        },
+                        {
+                            "instanceId": "binary-b",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary B",
+                            "proposalConfig": {"cliValues": {"selection.k": "5"}},
+                        },
+                        {
+                            "instanceId": "mesap-a",
+                            "proposalId": "mesap",
+                            "displayName": "MESAP A",
+                            "proposalConfig": {"cliValues": {}},
+                        },
+                    ],
+                    "sameInitialPopulationForBmopso": {
+                        "enabled": True,
+                        "generatorInstanceId": "binary-a",
+                    },
+                }
+            )
+            instances = service._selected_instances(config)
+            run = {
+                "runId": "run-1",
+                "runDir": str(run_dir),
+                "status": "running",
+                "startedAtEpoch": time.time(),
+                "config": config,
+                "proposalStates": {
+                    instance.instance_id: service._initial_proposal_state(instance, config.get("repetitionsK"))
+                    for instance in instances
+                },
+                "proposals": [],
+                "progress": {},
+                "costSummary": {},
+                "logs": [],
+                "repositoryUpdates": {},
+                "sameInitialPopulationArtifacts": {},
+                "cancelRequested": False,
+                "activeProcesses": {},
+            }
+            started: list[str] = []
+
+            def completed_result(instance, output_dir):
+                return {
+                    "instanceId": instance.instance_id,
+                    "proposalId": instance.proposal_id,
+                    "displayName": instance.display_name,
+                    "baseDisplayName": instance.base_display_name,
+                    "proposalConfig": instance.proposal_config,
+                    "status": "completed",
+                    "outputDir": str(output_dir),
+                    "rows": [],
+                    "embeddingFrontRows": [],
+                    "metrics": {},
+                    "charts": {},
+                    "cost": {},
+                    "error": None,
+                    "completedRepetitions": 1,
+                    "repetitionsK": 1,
+                }
+
+            def fake_execute(run_payload, proposal):
+                instance = service._coerce_instance(proposal, run_payload.get("config"))
+                started.append(instance.instance_id)
+                if instance.instance_id == "binary-a":
+                    output_dir = run_dir / "binary-a" / "exec" / "native-run"
+                    output_dir.mkdir(parents=True)
+                    (output_dir / "data_initial_population.json").write_text("[]", encoding="utf-8")
+                    (output_dir / "reference_context.json").write_text("{}", encoding="utf-8")
+                    return completed_result(instance, output_dir)
+                if instance.instance_id == "binary-b":
+                    self.assertIn("binary-a", run_payload["sameInitialPopulationArtifacts"])
+                    output_dir = run_dir / "binary-b" / "exec" / "native-run"
+                    output_dir.mkdir(parents=True)
+                    return completed_result(instance, output_dir)
+                output_dir = run_dir / instance.instance_id
+                output_dir.mkdir(parents=True)
+                return completed_result(instance, output_dir)
+
+            with patch.object(service, "_execute_proposal", side_effect=fake_execute):
+                service._run_proposals_parallel(run, instances, 3)
+
+            self.assertLess(started.index("binary-a"), started.index("binary-b"))
+            self.assertEqual({proposal["instanceId"] for proposal in run["proposals"]}, {"binary-a", "binary-b", "mesap-a"})
 
     def test_binary_parallelism_auto_defaults_are_instance_specific(self):
         service = ComparatorService(Path("."))

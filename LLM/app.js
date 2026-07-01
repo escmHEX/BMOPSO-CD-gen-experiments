@@ -32,6 +32,7 @@ import {
 } from "./comparator_chart_helpers.mjs";
 import {
   comparatorHistoricalInstancesFromRun,
+  comparatorSameInitialPopulationForBmopsoPayload,
 } from "./comparator_instance_helpers.mjs";
 
 const EMBEDDING_MODELS = {
@@ -397,6 +398,11 @@ let comparatorPollFailureCount = 0;
 let latestComparatorRun = null;
 let comparatorProposals = [];
 let comparatorInstances = [];
+let comparatorSameInitialPopulationForBmopso = {
+  enabled: false,
+  generatorInstanceId: null,
+  scope: "per_repetition",
+};
 let comparatorOllamaModelCapabilities = {};
 let comparatorInstancesInitialized = false;
 let comparatorInstancesReadOnly = false;
@@ -738,6 +744,7 @@ const dom = {
   comparatorExecutionModeNote: document.querySelector("#comparatorExecutionModeNote"),
   comparatorProposalParallelism: document.querySelector("#comparatorProposalParallelism"),
   comparatorTimeoutMinutes: document.querySelector("#comparatorTimeoutMinutes"),
+  comparatorSameInitialPopulationForBmopso: document.querySelector("#comparatorSameInitialPopulationForBmopso"),
   comparatorUpdateReposBeforeRun: document.querySelector("#comparatorUpdateReposBeforeRun"),
   comparatorProposalSelector: document.querySelector("#comparatorProposalSelector"),
   comparatorProposalConfigPanels: document.querySelector("#comparatorProposalConfigPanels"),
@@ -4716,6 +4723,7 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
     dom.comparatorExecutionMode,
     dom.comparatorProposalParallelism,
     dom.comparatorTimeoutMinutes,
+    dom.comparatorSameInitialPopulationForBmopso,
     dom.comparatorUpdateReposBeforeRun,
     dom.comparatorN,
     dom.comparatorGeneraciones,
@@ -5165,6 +5173,19 @@ function ensureComparatorInstances() {
   comparatorInstancesInitialized = true;
 }
 
+function syncComparatorSameInitialPopulationState(source = null) {
+  const requested = source || {
+    enabled: Boolean(dom.comparatorSameInitialPopulationForBmopso?.checked),
+    generatorInstanceId: comparatorSameInitialPopulationForBmopso.generatorInstanceId,
+    scope: comparatorSameInitialPopulationForBmopso.scope,
+  };
+  comparatorSameInitialPopulationForBmopso = comparatorSameInitialPopulationForBmopsoPayload(requested, comparatorInstances);
+  if (dom.comparatorSameInitialPopulationForBmopso) {
+    dom.comparatorSameInitialPopulationForBmopso.checked = comparatorSameInitialPopulationForBmopso.enabled;
+  }
+  return comparatorSameInitialPopulationForBmopso;
+}
+
 function hydrateComparatorInstancesFromRun(run) {
   const instances = comparatorHistoricalInstancesFromRun(run);
   if (!instances.length) return;
@@ -5174,6 +5195,7 @@ function hydrateComparatorInstancesFromRun(run) {
   comparatorInstancesInitialized = true;
   comparatorInstancesReadOnly = true;
   comparatorInstancesSourceRunId = runId;
+  syncComparatorSameInitialPopulationState(run?.config?.sameInitialPopulationForBmopso || null);
   renderComparatorProposalControls(comparatorProposals);
 }
 
@@ -5274,6 +5296,8 @@ function renderComparatorProposalControls(proposals) {
 
 function renderComparatorInstanceList() {
   if (!dom.comparatorProposalConfigPanels) return;
+  const sameInitialPopulation = syncComparatorSameInitialPopulationState();
+  const showSameInitialSelector = sameInitialPopulation.enabled && !comparatorInstancesReadOnly;
   if (!comparatorInstances.length) {
     dom.comparatorProposalConfigPanels.innerHTML = `
       <article class="proposal-config-card comparator-instance-empty">
@@ -5287,10 +5311,26 @@ function renderComparatorInstanceList() {
     ...comparatorInstances.map((instance) => {
       const proposal = comparatorProposalById(instance.proposalId);
       const article = document.createElement("article");
-      article.className = `proposal-config-card comparator-instance-card${comparatorInstancesReadOnly ? " is-readonly" : ""}`;
+      const canGenerateSameInitialPopulation = showSameInitialSelector && instance.proposalId === "binary-mopso-cd";
+      article.className = [
+        "proposal-config-card",
+        "comparator-instance-card",
+        comparatorInstancesReadOnly ? "is-readonly" : "",
+        canGenerateSameInitialPopulation ? "has-same-initial-selector" : "",
+      ].filter(Boolean).join(" ");
       article.dataset.comparatorInstanceCard = instance.instanceId;
       article.dataset.proposalId = instance.proposalId;
       article.innerHTML = `
+        ${canGenerateSameInitialPopulation ? `
+          <label class="same-initial-population-selector">
+            <input
+              type="checkbox"
+              data-comparator-same-initial-generator="${escapeHtml(instance.instanceId)}"
+              ${sameInitialPopulation.generatorInstanceId === instance.instanceId ? "checked" : ""}
+            >
+            <span>Genera pob. inicial</span>
+          </label>
+        ` : ""}
         <div>
           <span class="eyebrow">${escapeHtml(proposal?.displayName || instance.proposalId)}</span>
           <h3>${escapeHtml(instance.displayName || instance.instanceId)}</h3>
@@ -6460,6 +6500,7 @@ function readComparatorConfig() {
     error.code = "duplicateProposalInstances";
     throw error;
   }
+  const sameInitialPopulationForBmopso = syncComparatorSameInitialPopulationState();
 
   return {
     referenceText,
@@ -6467,6 +6508,7 @@ function readComparatorConfig() {
     selectedProposalIds,
     proposalConfigs: comparatorProposalConfigs(),
     proposalInstances: comparatorProposalInstancesPayload(),
+    sameInitialPopulationForBmopso,
     executionMode: dom.comparatorExecutionMode?.value || "fair_sequential",
     updateRepositoriesBeforeRun: Boolean(dom.comparatorUpdateReposBeforeRun?.checked),
     proposalGitConfigs: comparatorProposalGitConfigs(),
@@ -9901,6 +9943,14 @@ dom.comparatorProjectionMethod?.addEventListener("change", () => {
   }
 });
 dom.comparatorExecutionMode.addEventListener("change", () => syncComparatorExecutionModeControls(false));
+dom.comparatorSameInitialPopulationForBmopso?.addEventListener("change", () => {
+  syncComparatorSameInitialPopulationState({
+    enabled: Boolean(dom.comparatorSameInitialPopulationForBmopso?.checked),
+    generatorInstanceId: comparatorSameInitialPopulationForBmopso.generatorInstanceId,
+    scope: comparatorSameInitialPopulationForBmopso.scope,
+  });
+  renderComparatorInstanceList();
+});
 dom.comparatorModel?.addEventListener("change", syncComparatorModelCustomField);
 dom.comparatorModelCustom?.addEventListener("input", () => syncComparatorTaskThinkingControls(dom.comparatorInstanceModalBody));
 dom.comparatorProposalSelector?.addEventListener("click", (event) => {
@@ -9918,6 +9968,16 @@ dom.comparatorProposalSelector?.addEventListener("click", (event) => {
 dom.comparatorProposalConfigPanels?.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) return;
   if (comparatorInstancesReadOnly) return;
+  const sameInitialGenerator = event.target.closest("[data-comparator-same-initial-generator]");
+  if (sameInitialGenerator) {
+    syncComparatorSameInitialPopulationState({
+      enabled: true,
+      generatorInstanceId: sameInitialGenerator.dataset.comparatorSameInitialGenerator,
+      scope: "per_repetition",
+    });
+    renderComparatorInstanceList();
+    return;
+  }
   const editButton = event.target.closest("[data-edit-comparator-instance]");
   if (editButton) {
     const instance = comparatorInstances.find((item) => item.instanceId === editButton.dataset.editComparatorInstance);

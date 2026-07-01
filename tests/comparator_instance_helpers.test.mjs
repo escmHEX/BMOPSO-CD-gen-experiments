@@ -3,6 +3,8 @@ import { test } from "node:test";
 
 import {
   comparatorHistoricalInstancesFromRun,
+  comparatorSameInitialPopulationForBmopsoPayload,
+  comparatorSameInitialPopulationGeneratorCandidates,
 } from "../LLM/comparator_instance_helpers.mjs";
 
 test("historical comparator instances prefer config proposalInstances over proposal results", () => {
@@ -128,4 +130,46 @@ test("historical comparator instances fall back to proposal results for legacy r
   assert.equal(instances[0].proposalConfig.extraArgs, "--set custom.flag=1");
   assert.equal(instances[0].proposalConfig.cliValues["selection.k"], "4");
   assert.deepEqual(instances[1].proposalConfig, { extraArgs: "", cliValues: {} });
+});
+
+test("same initial population generator candidates are limited to Binary instances", () => {
+  const instances = [
+    { instanceId: "binary-a", proposalId: "binary-mopso-cd", displayName: "Binary A" },
+    { instanceId: "mesap-a", proposalId: "mesap", displayName: "MESAP A" },
+    { instanceId: "binary-b", proposalId: "binary-mopso-cd", displayName: "Binary B" },
+  ];
+
+  const candidates = comparatorSameInitialPopulationGeneratorCandidates(instances);
+
+  assert.deepEqual(candidates.map((candidate) => candidate.instanceId), ["binary-a", "binary-b"]);
+});
+
+test("same initial population payload reassigns invalid generator to first Binary instance", () => {
+  const instances = [
+    { instanceId: "mesap-a", proposalId: "mesap", displayName: "MESAP A" },
+    { instanceId: "binary-b", proposalId: "binary-mopso-cd", displayName: "Binary B" },
+  ];
+
+  const payload = comparatorSameInitialPopulationForBmopsoPayload(
+    { enabled: true, generatorInstanceId: "deleted-binary" },
+    instances,
+  );
+
+  assert.deepEqual(payload, {
+    enabled: true,
+    generatorInstanceId: "binary-b",
+    scope: "per_repetition",
+  });
+});
+
+test("same initial population payload stays disabled by default", () => {
+  const payload = comparatorSameInitialPopulationForBmopsoPayload(null, [
+    { instanceId: "binary-a", proposalId: "binary-mopso-cd" },
+  ]);
+
+  assert.deepEqual(payload, {
+    enabled: false,
+    generatorInstanceId: null,
+    scope: "per_repetition",
+  });
 });

@@ -30,6 +30,41 @@ function normalizeHistoricalInstance(value, index) {
   };
 }
 
+const SAME_INITIAL_POPULATION_SCOPE = "per_repetition";
+const BINARY_PROPOSAL_ID = "binary-mopso-cd";
+
+export function comparatorSameInitialPopulationGeneratorCandidates(instances = []) {
+  return (Array.isArray(instances) ? instances : [])
+    .map((item) => objectValue(item))
+    .filter((item) => stringValue(item.proposalId) === BINARY_PROPOSAL_ID)
+    .map((item) => ({
+      instanceId: stringValue(item.instanceId),
+      proposalId: stringValue(item.proposalId),
+      displayName: stringValue(item.displayName || item.instanceId),
+    }))
+    .filter((item) => item.instanceId);
+}
+
+export function comparatorSameInitialPopulationForBmopsoPayload(value, instances = []) {
+  const config = objectValue(value);
+  const enabled = Boolean(config.enabled);
+  const candidates = comparatorSameInitialPopulationGeneratorCandidates(instances);
+  if (!enabled || !candidates.length) {
+    return {
+      enabled: false,
+      generatorInstanceId: null,
+      scope: SAME_INITIAL_POPULATION_SCOPE,
+    };
+  }
+  const requestedGeneratorId = stringValue(config.generatorInstanceId);
+  const selected = candidates.find((candidate) => candidate.instanceId === requestedGeneratorId) || candidates[0];
+  return {
+    enabled: true,
+    generatorInstanceId: selected.instanceId,
+    scope: SAME_INITIAL_POPULATION_SCOPE,
+  };
+}
+
 export function comparatorHistoricalInstancesFromRun(run) {
   const config = objectValue(run?.config);
   const configuredInstances = Array.isArray(config.proposalInstances) ? config.proposalInstances : [];

@@ -18,7 +18,7 @@ import time
 import uuid
 import zipfile
 from collections import Counter
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -161,7 +161,10 @@ BINARY_MANAGED_CONFIG_PATHS = {
     "experiment.seed",
     "runtime.outdir_base",
     "ollama.default_model",
+    "initialization.population_input_path",
+    "initialization.reference_context_input_path",
 }
+SAME_INITIAL_POPULATION_SCOPE = "per_repetition"
 BINARY_AUTO_PARALLELISM_PATHS = (
     "parallelism.particle_update_max_concurrent",
     "parallelism.initial_text_generation_max_concurrent",
@@ -2288,6 +2291,14 @@ class ComparatorService:
             },
             "costSummary": summarize_costs([], 0.0),
             "repositoryUpdates": {},
+            "sameInitialPopulationArtifacts": {},
+            "sameInitialPopulationForBmopso": {
+                **config.get(
+                    "sameInitialPopulationForBmopso",
+                    {"enabled": False, "generatorInstanceId": None, "scope": SAME_INITIAL_POPULATION_SCOPE},
+                ),
+                "artifacts": {},
+            },
             "error": None,
             "cancelRequested": False,
             "activeProcesses": {},
@@ -2935,6 +2946,10 @@ class ComparatorService:
             "selectedProposalIds": selected,
             "proposalConfigs": proposal_configs,
             "proposalInstances": proposal_instances,
+            "sameInitialPopulationForBmopso": self._same_initial_population_config(
+                payload.get("sameInitialPopulationForBmopso"),
+                proposal_instances,
+            ),
             "updateRepositoriesBeforeRun": self._bool_config_value(
                 payload.get("updateRepositoriesBeforeRun", DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN),
                 "updateRepositoriesBeforeRun",
@@ -2943,6 +2958,37 @@ class ComparatorService:
         }
         self._validate_binary_task_thinking_config(config)
         return config
+
+    def _same_initial_population_config(
+        self,
+        value: Any,
+        proposal_instances: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        disabled = {"enabled": False, "generatorInstanceId": None, "scope": SAME_INITIAL_POPULATION_SCOPE}
+        if value in (None, ""):
+            return disabled
+        if not isinstance(value, dict):
+            raise ValueError("sameInitialPopulationForBmopso must be an object.")
+        enabled = self._bool_config_value(value.get("enabled", False), "sameInitialPopulationForBmopso.enabled")
+        scope = str(value.get("scope") or SAME_INITIAL_POPULATION_SCOPE).strip()
+        if scope != SAME_INITIAL_POPULATION_SCOPE:
+            raise ValueError(f"sameInitialPopulationForBmopso.scope must be {SAME_INITIAL_POPULATION_SCOPE}.")
+        if not enabled:
+            return disabled
+        generator_id = str(value.get("generatorInstanceId") or "").strip()
+        if not generator_id:
+            raise ValueError("sameInitialPopulationForBmopso.generatorInstanceId is required when enabled.")
+        instances_by_id = {
+            str(instance.get("instanceId") or ""): instance
+            for instance in proposal_instances
+            if isinstance(instance, dict)
+        }
+        generator = instances_by_id.get(generator_id)
+        if generator is None:
+            raise ValueError("sameInitialPopulationForBmopso.generatorInstanceId must reference an existing instance.")
+        if str(generator.get("proposalId") or "") != BINARY_PROPOSAL_ID:
+            raise ValueError("sameInitialPopulationForBmopso.generatorInstanceId must reference a Binary MOPSO-CD instance.")
+        return {"enabled": True, "generatorInstanceId": generator_id, "scope": SAME_INITIAL_POPULATION_SCOPE}
 
     def _validate_binary_task_thinking_config(self, config: dict[str, Any]) -> None:
         capabilities = comparator_ollama_model_capabilities()
@@ -3881,7 +3927,9 @@ class ComparatorService:
         self._append_log_unlocked(run, "system", f"Comparator run finished with status {run['status']}.")
 
     def _run_proposals_sequential(self, run: dict[str, Any], proposals: list[ProposalDefinition | ProposalRunInstance]) -> None:
-        for proposal in proposals:
+        with self._lock:
+            self._refresh_same_initial_population_artifacts_unlocked(run)
+        for proposal in self._same_initial_population_execution_order(run, proposals):
             with self._lock:
                 if run["cancelRequested"]:
                     run["status"] = STATUS_CANCELLED
@@ -3895,6 +3943,19 @@ class ComparatorService:
                 self._write_summary_unlocked(run)
 
     def _run_proposals_parallel(self, run: dict[str, Any], proposals: list[ProposalDefinition | ProposalRunInstance], parallelism: int) -> None:
+        with self._lock:
+            self._refresh_same_initial_population_artifacts_unlocked(run)
+        if self._same_initial_population_enabled(run):
+            self._run_proposals_parallel_with_same_initial_population(run, proposals, parallelism)
+            return
+        self._run_proposals_parallel_unrestricted(run, proposals, parallelism)
+
+    def _run_proposals_parallel_unrestricted(
+        self,
+        run: dict[str, Any],
+        proposals: list[ProposalDefinition | ProposalRunInstance],
+        parallelism: int,
+    ) -> None:
         with ThreadPoolExecutor(max_workers=parallelism, thread_name_prefix="comparator") as executor:
             futures: dict[Future[dict[str, Any]], ProposalDefinition | ProposalRunInstance] = {
                 executor.submit(self._execute_proposal, run, proposal): proposal
@@ -3902,18 +3963,7 @@ class ComparatorService:
             }
 
             for future in as_completed(futures):
-                proposal = self._coerce_instance(futures[future], run.get("config"))
-                if future.cancelled():
-                    result = self._cancelled_result(proposal, Path(run["runDir"]) / proposal.instance_id)
-                else:
-                    try:
-                        result = future.result()
-                    except Exception as error:
-                        result = self._failed_result(
-                            proposal,
-                            Path(run["runDir"]) / proposal.instance_id,
-                            f"Unexpected proposal error: {error}",
-                        )
+                result = self._result_from_proposal_future(run, futures[future], future)
 
                 with self._lock:
                     self._record_proposal_result_unlocked(run, result)
@@ -3923,6 +3973,294 @@ class ComparatorService:
                                 pending.cancel()
                         self._mark_queued_as_cancelled_unlocked(run)
                     self._write_summary_unlocked(run)
+
+    def _run_proposals_parallel_with_same_initial_population(
+        self,
+        run: dict[str, Any],
+        proposals: list[ProposalDefinition | ProposalRunInstance],
+        parallelism: int,
+    ) -> None:
+        generator_id = self._same_initial_population_generator_id(run)
+        if not generator_id:
+            self._run_proposals_parallel_unrestricted(run, proposals, parallelism)
+            return
+
+        generator: ProposalDefinition | ProposalRunInstance | None = None
+        dependents: list[ProposalDefinition | ProposalRunInstance] = []
+        independent: list[ProposalDefinition | ProposalRunInstance] = []
+        for proposal in proposals:
+            instance = self._coerce_instance(proposal, run.get("config"))
+            if instance.instance_id == generator_id:
+                generator = proposal
+            elif instance.proposal_id == BINARY_PROPOSAL_ID:
+                dependents.append(proposal)
+            else:
+                independent.append(proposal)
+
+        if generator is None:
+            self._run_proposals_parallel_unrestricted(run, proposals, parallelism)
+            return
+
+        dependency_resolved = False
+        with ThreadPoolExecutor(max_workers=parallelism, thread_name_prefix="comparator") as executor:
+            futures: dict[Future[dict[str, Any]], ProposalDefinition | ProposalRunInstance] = {}
+
+            def submit(proposal: ProposalDefinition | ProposalRunInstance) -> None:
+                futures[executor.submit(self._execute_proposal, run, proposal)] = proposal
+
+            submit(generator)
+            for proposal in independent:
+                submit(proposal)
+
+            while futures:
+                done, _pending = wait(futures, return_when=FIRST_COMPLETED)
+                for future in done:
+                    proposal = futures.pop(future)
+                    result = self._result_from_proposal_future(run, proposal, future)
+                    instance = self._coerce_instance(proposal, run.get("config"))
+                    to_submit: list[ProposalDefinition | ProposalRunInstance] = []
+                    blocked_dependents: list[dict[str, Any]] = []
+
+                    with self._lock:
+                        self._record_proposal_result_unlocked(run, result)
+                        if instance.instance_id == generator_id and not dependency_resolved:
+                            dependency_resolved = True
+                            if result.get("status") == STATUS_COMPLETED and not run.get("cancelRequested"):
+                                to_submit = list(dependents)
+                            else:
+                                blocked_dependents = [
+                                    self._same_initial_population_blocked_result(run, dependent, result)
+                                    for dependent in dependents
+                                ]
+                                for blocked in blocked_dependents:
+                                    self._record_proposal_result_unlocked(run, blocked)
+                        if run["cancelRequested"]:
+                            for pending in futures:
+                                if not pending.done():
+                                    pending.cancel()
+                            self._mark_queued_as_cancelled_unlocked(run)
+                        self._write_summary_unlocked(run)
+
+                    if to_submit:
+                        for proposal_to_submit in to_submit:
+                            submit(proposal_to_submit)
+
+    def _result_from_proposal_future(
+        self,
+        run: dict[str, Any],
+        proposal: ProposalDefinition | ProposalRunInstance,
+        future: Future[dict[str, Any]],
+    ) -> dict[str, Any]:
+        instance = self._coerce_instance(proposal, run.get("config"))
+        if future.cancelled():
+            return self._cancelled_result(instance, Path(run["runDir"]) / instance.instance_id)
+        try:
+            return future.result()
+        except Exception as error:
+            return self._failed_result(
+                instance,
+                Path(run["runDir"]) / instance.instance_id,
+                f"Unexpected proposal error: {error}",
+            )
+
+    def _same_initial_population_enabled(self, run: dict[str, Any]) -> bool:
+        config = run.get("config") or {}
+        value = config.get("sameInitialPopulationForBmopso")
+        return isinstance(value, dict) and bool(value.get("enabled"))
+
+    def _same_initial_population_generator_id(self, run: dict[str, Any]) -> str | None:
+        if not self._same_initial_population_enabled(run):
+            return None
+        config = run.get("config") or {}
+        value = config.get("sameInitialPopulationForBmopso")
+        generator_id = str((value or {}).get("generatorInstanceId") or "").strip()
+        return generator_id or None
+
+    def _same_initial_population_execution_order(
+        self,
+        run: dict[str, Any],
+        proposals: list[ProposalDefinition | ProposalRunInstance],
+    ) -> list[ProposalDefinition | ProposalRunInstance]:
+        generator_id = self._same_initial_population_generator_id(run)
+        if not generator_id:
+            return list(proposals)
+        instances = [(proposal, self._coerce_instance(proposal, run.get("config"))) for proposal in proposals]
+        generator = next((proposal for proposal, instance in instances if instance.instance_id == generator_id), None)
+        if generator is None:
+            return list(proposals)
+
+        binary_group = [
+            proposal
+            for proposal, instance in instances
+            if instance.proposal_id == BINARY_PROPOSAL_ID and instance.instance_id != generator_id
+        ]
+        if not binary_group:
+            return list(proposals)
+
+        ordered: list[ProposalDefinition | ProposalRunInstance] = []
+        inserted_binary_group = False
+        for proposal, instance in instances:
+            if instance.proposal_id == BINARY_PROPOSAL_ID:
+                if not inserted_binary_group:
+                    ordered.append(generator)
+                    ordered.extend(binary_group)
+                    inserted_binary_group = True
+                continue
+            ordered.append(proposal)
+        return ordered
+
+    def _same_initial_population_blocked_result(
+        self,
+        run: dict[str, Any],
+        proposal: ProposalDefinition | ProposalRunInstance,
+        generator_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        instance = self._coerce_instance(proposal, run.get("config"))
+        status = generator_result.get("status")
+        reason = "fue cancelada" if status == STATUS_CANCELLED else "fallo"
+        return self._failed_result(
+            instance,
+            Path(run["runDir"]) / instance.instance_id,
+            f"Misma poblacion inicial para MOPSO no disponible porque la instancia generadora {reason}.",
+        )
+
+    def _same_initial_population_artifacts_from_output_dir(self, output_dir: Path | str | None) -> dict[str, str] | None:
+        if not output_dir:
+            return None
+        directory = Path(output_dir)
+        population_path = directory / "data_initial_population.json"
+        reference_context_path = directory / "reference_context.json"
+        if not population_path.exists() or not reference_context_path.exists():
+            return None
+        return {
+            "populationPath": str(population_path.resolve()),
+            "referenceContextPath": str(reference_context_path.resolve()),
+        }
+
+    def _same_initial_population_artifacts_from_result(self, result: dict[str, Any]) -> dict[str, Any] | None:
+        if result.get("proposalId") != BINARY_PROPOSAL_ID or result.get("status") != STATUS_COMPLETED:
+            return None
+        direct = self._same_initial_population_artifacts_from_output_dir(result.get("outputDir")) or {}
+        repetitions: dict[str, dict[str, str]] = {}
+        for index, repetition in enumerate(result.get("repetitions") or [], start=1):
+            if not isinstance(repetition, dict) or repetition.get("status") != STATUS_COMPLETED:
+                continue
+            repetition_artifacts = self._same_initial_population_artifacts_from_output_dir(repetition.get("outputDir"))
+            if not repetition_artifacts:
+                continue
+            repetition_key = str(int(repetition.get("repetitionIndex") or index))
+            repetitions[repetition_key] = repetition_artifacts
+        if repetitions and not direct:
+            first_key = sorted(repetitions, key=lambda item: int(item))[0]
+            direct = dict(repetitions[first_key])
+        if not direct:
+            return None
+        return {**direct, "repetitions": repetitions}
+
+    def _refresh_same_initial_population_artifacts_unlocked(self, run: dict[str, Any]) -> None:
+        artifacts = dict(run.get("sameInitialPopulationArtifacts") or {})
+        for result in run.get("proposals") or []:
+            if not isinstance(result, dict):
+                continue
+            instance_id = str(result.get("instanceId") or result.get("proposalId") or "").strip()
+            if not instance_id:
+                continue
+            result_artifacts = self._same_initial_population_artifacts_from_result(result)
+            if result_artifacts:
+                artifacts[instance_id] = result_artifacts
+        run["sameInitialPopulationArtifacts"] = artifacts
+        self._sync_same_initial_population_trace_unlocked(run)
+
+    def _record_same_initial_population_artifacts_unlocked(self, run: dict[str, Any], result: dict[str, Any]) -> None:
+        instance_id = str(result.get("instanceId") or result.get("proposalId") or "").strip()
+        result_artifacts = self._same_initial_population_artifacts_from_result(result)
+        if instance_id and result_artifacts:
+            artifacts = run.setdefault("sameInitialPopulationArtifacts", {})
+            artifacts[instance_id] = result_artifacts
+        self._sync_same_initial_population_trace_unlocked(run)
+
+    def _sync_same_initial_population_trace_unlocked(self, run: dict[str, Any]) -> None:
+        config = run.get("config") or {}
+        value = config.get("sameInitialPopulationForBmopso")
+        if not isinstance(value, dict):
+            value = {"enabled": False, "generatorInstanceId": None, "scope": SAME_INITIAL_POPULATION_SCOPE}
+        run["sameInitialPopulationForBmopso"] = {
+            "enabled": bool(value.get("enabled")),
+            "generatorInstanceId": value.get("generatorInstanceId") if value.get("enabled") else None,
+            "scope": str(value.get("scope") or SAME_INITIAL_POPULATION_SCOPE),
+            "artifacts": run.get("sameInitialPopulationArtifacts") or {},
+        }
+
+    def _same_initial_population_repetition_key(self, output_base: Path) -> str | None:
+        match = re.fullmatch(r"rep-(\d+)", output_base.parent.name)
+        if not match:
+            return None
+        return str(int(match.group(1)))
+
+    def _same_initial_population_paths_for_command(
+        self,
+        run: dict[str, Any],
+        instance: ProposalRunInstance,
+        output_base: Path,
+    ) -> dict[str, str] | None:
+        generator_id = self._same_initial_population_generator_id(run)
+        if (
+            not generator_id
+            or instance.proposal_id != BINARY_PROPOSAL_ID
+            or instance.instance_id == generator_id
+        ):
+            return None
+        artifacts = (run.get("sameInitialPopulationArtifacts") or {}).get(generator_id)
+        if not isinstance(artifacts, dict):
+            artifacts = None
+        repetition_key = self._same_initial_population_repetition_key(output_base)
+        if repetition_key and artifacts:
+            repetitions = artifacts.get("repetitions") if isinstance(artifacts.get("repetitions"), dict) else {}
+            repetition_artifacts = repetitions.get(repetition_key)
+            if isinstance(repetition_artifacts, dict):
+                artifacts = repetition_artifacts
+        if not artifacts:
+            raise ValueError(
+                "Misma poblacion inicial para MOPSO no disponible: "
+                "la instancia generadora aun no produjo artefactos reutilizables."
+            )
+        raw_population_path = str(artifacts.get("populationPath") or "").strip()
+        raw_reference_context_path = str(artifacts.get("referenceContextPath") or "").strip()
+        if not raw_population_path or not raw_reference_context_path:
+            raise ValueError(
+                "Misma poblacion inicial para MOPSO no disponible: "
+                "la instancia generadora no produjo data_initial_population.json y reference_context.json."
+            )
+        population_path = Path(raw_population_path)
+        reference_context_path = Path(raw_reference_context_path)
+        if not population_path.exists() or not reference_context_path.exists():
+            raise ValueError(
+                "Misma poblacion inicial para MOPSO no disponible: "
+                "la instancia generadora no produjo data_initial_population.json y reference_context.json."
+            )
+        return {
+            "populationPath": str(population_path.resolve()),
+            "referenceContextPath": str(reference_context_path.resolve()),
+        }
+
+    def _same_initial_population_input_trace(
+        self,
+        run: dict[str, Any],
+        instance: ProposalRunInstance,
+        output_base: Path,
+    ) -> dict[str, Any] | None:
+        paths = self._same_initial_population_paths_for_command(run, instance, output_base)
+        if not paths:
+            return None
+        trace: dict[str, Any] = {
+            "generatorInstanceId": self._same_initial_population_generator_id(run),
+            "scope": SAME_INITIAL_POPULATION_SCOPE,
+            **paths,
+        }
+        repetition_key = self._same_initial_population_repetition_key(output_base)
+        if repetition_key:
+            trace["repetitionIndex"] = int(repetition_key)
+        return trace
 
     def _record_proposal_result_unlocked(self, run: dict[str, Any], result: dict[str, Any]) -> None:
         repository_update = (run.get("repositoryUpdates") or {}).get(result["proposalId"])
@@ -3939,6 +4277,7 @@ class ComparatorService:
                 "configuredBranch": repository_update.get("branch"),
                 "status": repository_update.get("status"),
             }
+        self._record_same_initial_population_artifacts_unlocked(run, result)
         run["proposals"].append(result)
         state_key = result.get("instanceId") or result["proposalId"]
         state = run["proposalStates"].setdefault(
@@ -4174,7 +4513,7 @@ class ComparatorService:
                 command
                 + self._binary_managed_set_args(
                     run,
-                    base_proposal,
+                    instance,
                     output_base,
                     random_seed,
                     proposal_config_values.get("cliValues") or {},
@@ -4222,7 +4561,7 @@ class ComparatorService:
     def _binary_managed_set_args(
         self,
         run: dict[str, Any],
-        proposal: ProposalDefinition,
+        instance: ProposalRunInstance,
         output_base: Path,
         random_seed: int | None,
         cli_values: dict[str, Any] | None = None,
@@ -4246,6 +4585,12 @@ class ComparatorService:
         for path in BINARY_AUTO_PARALLELISM_PATHS:
             if path not in manual_paths:
                 overrides.append((path, int(run["config"]["n"]), "int"))
+        same_initial_paths = self._same_initial_population_paths_for_command(run, instance, output_base)
+        if same_initial_paths:
+            overrides.extend([
+                ("initialization.population_input_path", same_initial_paths["populationPath"], "path"),
+                ("initialization.reference_context_input_path", same_initial_paths["referenceContextPath"], "path"),
+            ])
         args: list[str] = []
         for path, value, value_type in overrides:
             args.extend(["--set", f"{path}={self._yaml_cli_literal(value, value_type)}"])
@@ -4411,6 +4756,7 @@ class ComparatorService:
             )
 
         try:
+            same_initial_input = self._same_initial_population_input_trace(run, instance, output_base)
             command = self._build_command(run, instance, repository_dir, output_base, reference_path, random_seed)
         except ValueError as error:
             return self._failed_result(instance, proposal_dir, str(error))
@@ -4502,7 +4848,7 @@ class ComparatorService:
             charts = self._build_chart_payload(base_proposal, rows, selected_rows, series)
             add_cost_timing(cost, "plotPreparationSeconds", time.perf_counter() - plot_started)
             embedding_front_rows = embedding_front_rows_from_rows(rows, selected_rows)
-            return {
+            result = {
                 **self._result_identity(instance),
                 "status": STATUS_COMPLETED,
                 "outputDir": str(output_dir),
@@ -4517,6 +4863,12 @@ class ComparatorService:
                 "outputFiles": self._output_files(base_proposal, output_dir),
                 "error": None,
             }
+            if same_initial_input:
+                result["sameInitialPopulationInput"] = same_initial_input
+            same_initial_artifacts = self._same_initial_population_artifacts_from_output_dir(output_dir)
+            if same_initial_artifacts:
+                result["sameInitialPopulationArtifacts"] = same_initial_artifacts
+            return result
         except Exception as error:
             cost = self._build_cost(base_proposal, process_cost, llm_payload, output_dir, False)
             return self._failed_result(instance, proposal_dir, f"Could not normalize output: {error}", cost)
