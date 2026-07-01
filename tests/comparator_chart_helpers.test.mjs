@@ -11,8 +11,11 @@ import {
   comparatorCanRecontinueRun,
   comparatorCountByProposal,
   comparatorGlobalNonDominatedFront,
+  comparatorFrontDiagnostics,
   comparatorHypervolumeArea,
+  comparatorKMeansInertia,
   comparatorChartAxisWindow,
+  comparatorEntityEntropy,
   comparatorExpandedAxisWindow,
   comparatorIsBinaryProposal,
   comparatorIsGloballyNonDominated,
@@ -32,6 +35,7 @@ import {
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
   comparatorSeriesIterationExtent,
+  comparatorUnaryEntropy,
   comparatorVisibleFrontPointCount,
   comparatorVisibleFrontChartPoints,
 } from "../LLM/comparator_chart_helpers.mjs";
@@ -546,6 +550,63 @@ test("hypervolume area returns null without valid points", () => {
   assert.equal(comparatorHypervolumeArea([{ x: "bad", y: 0.4 }]), null);
 });
 
+test("front diagnostics recalculate from active comparable points only", () => {
+  const points = [
+    { value: [0.2, 0.2], semanticEmbedding: [0, 0], entityTerms: ["alpha"], entityTokenCount: 4 },
+    { value: [0.8, 0.8], semanticEmbedding: [10, 0], entityTerms: ["beta"], entityTokenCount: 4 },
+    { value: [0.9, 0.1], semanticEmbedding: [0, 10], entityTerms: ["beta"], entityTokenCount: 4 },
+    { value: [0.1, 0.9], semanticEmbedding: [10, 10], entityTerms: ["gamma"], entityTokenCount: 4 },
+    { value: [0.5, 0.5], semanticEmbedding: [5, 5], entityTerms: ["gamma"], entityTokenCount: 4 },
+    { value: [0.6, 0.4], semanticEmbedding: [5, 6], entityTerms: ["gamma"], entityTokenCount: 4 },
+  ];
+
+  const full = comparatorFrontDiagnostics(points);
+  const withoutFirst = comparatorFrontDiagnostics(points.slice(1));
+
+  assert.equal(Number(full.hypervolume.toFixed(6)), 0.66);
+  assert.equal(Number(withoutFirst.hypervolume.toFixed(6)), 0.66);
+  assert.notEqual(full.unaryEntropy, withoutFirst.unaryEntropy);
+  assert.notEqual(full.globalInertia, withoutFirst.globalInertia);
+  assert.notEqual(full.globalEntropy, withoutFirst.globalEntropy);
+});
+
+test("front unary entropy matches the comparator grid definition", () => {
+  assert.equal(comparatorUnaryEntropy([{ value: [0.2, 0.8] }]), 0);
+  assert.equal(
+    comparatorUnaryEntropy([
+      { value: [0.1, 0.1] },
+      { value: [0.9, 0.9] },
+    ]),
+    1,
+  );
+});
+
+test("front k-means inertia uses semantic embeddings and normalizes by point count", () => {
+  const points = [
+    { semanticEmbedding: [0, 0] },
+    { semanticEmbedding: [0, 2] },
+    { semanticEmbedding: [10, 10] },
+    { semanticEmbedding: [10, 12] },
+    { semanticEmbedding: [20, 20] },
+    { semanticEmbedding: [20, 22] },
+  ];
+
+  assert.equal(comparatorKMeansInertia(points, 3), 1);
+  assert.equal(comparatorKMeansInertia([{ value: [0, 0] }]), null);
+});
+
+test("front entity entropy aggregates per-point semantic terms", () => {
+  const score = comparatorEntityEntropy([
+    { entityTerms: ["alpha"], entityTokenCount: 3 },
+    { entityTerms: ["beta"], entityTokenCount: 3 },
+    { entityTerms: ["beta"], entityTokenCount: 3 },
+  ]);
+
+  assert.equal(Number(score.toFixed(6)), Number((0.9182958340544896 / Math.log2(9)).toFixed(6)));
+  assert.equal(comparatorEntityEntropy([{ entityTerms: [], entityTokenCount: 3 }]), 0);
+  assert.equal(comparatorEntityEntropy([{ value: [0, 0] }]), null);
+});
+
 test("interactive point keys are stable for cloned chart points", () => {
   const point = {
     value: [0.72, 0.44],
@@ -584,14 +645,14 @@ test("interactive point partition excludes points without mutating source arrays
 
 test("iteration extent and limiter use finite generations without mutating source series", () => {
   const series = [
-    { name: "A", data: [[1, 0.1], [2, 0.3], [3, 0.4]] },
+    { name: "A", data: [[0, 0.05], [1, 0.1], [2, 0.3], [3, 0.4]] },
     { name: "B", data: [[1, 0.2], [4, 0.6], [Number.NaN, 0.8]] },
   ];
   const limited = comparatorLimitSeriesToIteration(series, 2);
 
-  assert.deepEqual(comparatorSeriesIterationExtent(series), { min: 1, max: 4 });
-  assert.deepEqual(limited.map((item) => item.data), [[[1, 0.1], [2, 0.3]], [[1, 0.2]]]);
-  assert.deepEqual(series[0].data, [[1, 0.1], [2, 0.3], [3, 0.4]]);
+  assert.deepEqual(comparatorSeriesIterationExtent(series), { min: 0, max: 4 });
+  assert.deepEqual(limited.map((item) => item.data), [[[0, 0.05], [1, 0.1], [2, 0.3]], [[1, 0.2]]]);
+  assert.deepEqual(series[0].data, [[0, 0.05], [1, 0.1], [2, 0.3], [3, 0.4]]);
 });
 
 test("metric extremes respect best direction", () => {

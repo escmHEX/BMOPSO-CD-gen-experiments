@@ -7,6 +7,7 @@ import {
   comparatorChartAxisWindow,
   comparatorCountByProposal,
   comparatorExpandedAxisWindow,
+  comparatorFrontDiagnostics,
   comparatorGlobalNonDominatedFront,
   comparatorHasBmopsoInternalAnalysis,
   comparatorHypervolumeArea,
@@ -414,6 +415,8 @@ let comparatorCharts = [];
 let comparatorChartStyles = new Map();
 let comparatorChartLegendState = new WeakMap();
 let comparatorChartSignature = "";
+let comparatorFrontDiagnosticLoadToken = 0;
+let comparatorFrontDiagnosticCache = new Map();
 let comparatorProjectionCharts = [];
 let comparatorProjectionSignature = "";
 let comparatorProjectionLoadToken = 0;
@@ -5006,6 +5009,7 @@ function resetComparatorUi(options = {}) {
 }
 
 function disposeComparatorCharts() {
+  comparatorFrontDiagnosticLoadToken += 1;
   comparatorCharts.forEach((chart) => chart.dispose());
   comparatorCharts = [];
   removeComparatorLocalLegends(dom.comparatorChartsTab || document);
@@ -5018,6 +5022,7 @@ function disposeComparatorProjectionCharts() {
 }
 
 function disposeComparatorInternalBmopsoCharts() {
+  comparatorFrontDiagnosticLoadToken += 1;
   comparatorInternalBmopsoCharts.forEach((chart) => chart.dispose());
   comparatorInternalBmopsoCharts = [];
   removeComparatorLocalLegends(dom.comparatorInternalBmopsoTab || document);
@@ -7697,7 +7702,7 @@ function renderComparatorCharts(run) {
   disposeComparatorCharts();
   const filteredProposals = comparatorFilteredProposals(proposals);
   const pointProposals = comparatorPointChartViewProposals(filteredProposals);
-  renderComparatorParetoCharts(pointProposals, comparatorChartStyles);
+  renderComparatorParetoCharts(pointProposals, comparatorChartStyles, run.runId || "");
   renderComparatorCombinedSelectedChart(pointProposals, comparatorChartStyles);
   renderComparatorContributionChart(pointProposals, comparatorChartStyles);
   renderComparatorMetricLine(dom.comparatorHvChart, filteredProposals, "hypervolume", "HV", comparatorChartStyles);
@@ -7866,7 +7871,7 @@ function renderComparatorInternalBmopsoAnalysis(run) {
   comparatorInternalBmopsoSignature = signature;
   disposeComparatorInternalBmopsoCharts();
   dom.comparatorInternalBmopsoCharts.replaceChildren(
-    ...analyses.map((item, index) => comparatorInternalBmopsoSection(item, index)),
+    ...analyses.map((item, index) => comparatorInternalBmopsoSection(item, index, run?.runId || "")),
   );
   installChartPanelMinimizers(dom.comparatorInternalBmopsoTab || document.querySelector("#comparatorInternalBmopsoTab"));
   window.queueMicrotask(() => syncComparatorChartLocalLegends(dom.comparatorInternalBmopsoTab || document));
@@ -7892,7 +7897,7 @@ function comparatorInternalBmopsoSignatureForRun(run, analyses) {
   });
 }
 
-function comparatorInternalBmopsoSection(item, index) {
+function comparatorInternalBmopsoSection(item, index, runId = "") {
   const style = comparatorChartStyleForProposal({
     instanceId: item.instanceId,
     proposalId: item.proposalId,
@@ -7928,15 +7933,31 @@ function comparatorInternalBmopsoSection(item, index) {
     const frontChart = window.echarts.init(frontNode);
     comparatorInternalBmopsoCharts.push(frontChart);
     const frontExcludedKeys = new Set();
+    const diagnosticsByKey = new Map();
+    const diagnosticLoadToken = comparatorFrontDiagnosticLoadToken;
     const buildFrontOption = () => internalBmopsoParetoChartOption(
       "Frente final BMOPSO",
       item.analysis,
       style.color,
-      { excludedKeys: frontExcludedKeys },
+      { excludedKeys: frontExcludedKeys, diagnosticsByKey },
     );
     const frontOption = buildFrontOption();
     setComparatorChartOption(frontChart, frontNode, frontOption);
     installComparatorPointToggle(frontChart, frontNode, buildFrontOption, frontExcludedKeys);
+    const requestPoints = comparatorFrontDiagnosticRequestPoints(
+      (((item.analysis.charts || {}).pareto) || []).map((point) => comparatorChartPointFromRaw(point)),
+      "bmopso-points",
+    );
+    loadComparatorFrontPointDiagnostics(runId, requestPoints)
+      .then((diagnostics) => {
+        if (diagnosticLoadToken !== comparatorFrontDiagnosticLoadToken) return;
+        if (window.echarts?.getInstanceByDom(frontNode) !== frontChart) return;
+        diagnosticsByKey.clear();
+        diagnostics.forEach((value, key) => diagnosticsByKey.set(key, value));
+        const selected = comparatorLegendSelection(frontChart);
+        setComparatorChartOption(frontChart, frontNode, buildFrontOption(), selected);
+      })
+      .catch(() => {});
 
     const hvChart = window.echarts.init(hvNode);
     comparatorInternalBmopsoCharts.push(hvChart);
@@ -8496,7 +8517,7 @@ function installComparatorLineClickToggle(chart) {
   });
 }
 
-function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyles) {
+function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyles, runId = "") {
   if (!proposals.length) {
     dom.comparatorParetoCharts.innerHTML = '<article class="panel"><p class="muted-text">Sin propuestas seleccionadas para mostrar frentes de Pareto.</p></article>';
     return;
@@ -8523,16 +8544,33 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
         const normalizedChart = window.echarts.init(normalizedChartNode);
         comparatorCharts.push(normalizedChart);
         const excludedKeys = new Set();
+        const diagnosticsByKey = new Map();
+        const diagnosticLoadToken = comparatorFrontDiagnosticLoadToken;
         const buildOption = () => paretoChartOption(
           "Frente comparable normalizado",
           proposal.charts || {},
           proposal.metrics || {},
           color,
-          { excludedKeys },
+          { excludedKeys, diagnosticsByKey },
         );
         const option = buildOption();
         setComparatorChartOption(normalizedChart, normalizedChartNode, option);
         installComparatorPointToggle(normalizedChart, normalizedChartNode, buildOption, excludedKeys);
+        const requestPoints = comparatorFrontDiagnosticRequestPoints(
+          comparatorVisibleFrontChartPoints(proposal.charts || {}, "pareto-points").individuals
+            .map((point) => comparatorChartPointFromRaw(point)),
+          "pareto-points",
+        );
+        loadComparatorFrontPointDiagnostics(runId, requestPoints)
+          .then((diagnostics) => {
+            if (diagnosticLoadToken !== comparatorFrontDiagnosticLoadToken) return;
+            if (window.echarts?.getInstanceByDom(normalizedChartNode) !== normalizedChart) return;
+            diagnosticsByKey.clear();
+            diagnostics.forEach((value, key) => diagnosticsByKey.set(key, value));
+            const selected = comparatorLegendSelection(normalizedChart);
+            setComparatorChartOption(normalizedChart, normalizedChartNode, buildOption(), selected);
+          })
+          .catch(() => {});
       });
       return article;
     }),
@@ -8834,11 +8872,89 @@ function comparatorHypervolumeLabel(points) {
   return area ? formatOptionalNumber(area.area, 6) : "";
 }
 
+function comparatorFrontDiagnosticRequestPoints(points, namespace) {
+  return (points || [])
+    .map((point, index) => ({
+      key: comparatorPointInteractionKey(point, index, namespace),
+      text: String(point.labelText || point.label || point.prompt || "").trim(),
+    }))
+    .filter((point) => point.key && point.text);
+}
+
+function comparatorFrontDiagnosticCacheKey(runId, requestPoints) {
+  return JSON.stringify({
+    runId: String(runId || ""),
+    points: (requestPoints || []).map((point) => [point.key, point.text]),
+  });
+}
+
+async function loadComparatorFrontPointDiagnostics(runId, requestPoints) {
+  if (!runId || !requestPoints.length) return new Map();
+  const cacheKey = comparatorFrontDiagnosticCacheKey(runId, requestPoints);
+  if (comparatorFrontDiagnosticCache.has(cacheKey)) {
+    return comparatorFrontDiagnosticCache.get(cacheKey);
+  }
+  const promise = requestComparatorJson(
+    `/runs/${encodeURIComponent(runId)}/front-point-diagnostics`,
+    {
+      method: "POST",
+      body: JSON.stringify({ points: requestPoints }),
+    },
+  ).then((payload) => new Map(
+    (payload.points || [])
+      .filter((point) => point?.key)
+      .map((point) => [point.key, {
+        embedding: point.embedding,
+        entityTerms: point.entityTerms,
+        entityTokenCount: point.entityTokenCount,
+      }]),
+  ));
+  comparatorFrontDiagnosticCache.set(cacheKey, promise);
+  try {
+    return await promise;
+  } catch (error) {
+    comparatorFrontDiagnosticCache.delete(cacheKey);
+    throw error;
+  }
+}
+
+function comparatorApplyFrontDiagnostics(points, diagnosticsByKey, namespace) {
+  if (!diagnosticsByKey || !diagnosticsByKey.size) return points;
+  return (points || []).map((point, index) => {
+    const diagnostic = diagnosticsByKey.get(comparatorPointInteractionKey(point, index, namespace));
+    if (!diagnostic) return point;
+    return {
+      ...point,
+      semanticEmbedding: diagnostic.embedding,
+      entityTerms: diagnostic.entityTerms,
+      entityTokenCount: diagnostic.entityTokenCount,
+    };
+  });
+}
+
+function comparatorFrontDiagnosticsBadge(points, color) {
+  if (!points.length) return null;
+  const diagnostics = comparatorFrontDiagnostics(points);
+  return {
+    color,
+    text: [
+      `HV: ${formatOptionalNumber(diagnostics.hypervolume, 6)}`,
+      `Unary: ${formatOptionalNumber(diagnostics.unaryEntropy, 6)}`,
+      `K-means: ${formatOptionalNumber(diagnostics.globalInertia, 6)}`,
+      `Entity: ${formatOptionalNumber(diagnostics.globalEntropy, 6)}`,
+    ].join("\n"),
+  };
+}
+
 function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa", options = {}) {
   const excludedKeys = options.excludedKeys || new Set();
   const pointNamespace = options.pointNamespace || "pareto-points";
   const visibleFront = comparatorVisibleFrontChartPoints(charts, pointNamespace);
-  const allPoints = visibleFront.individuals.map((point) => comparatorChartPointFromRaw(point));
+  const allPoints = comparatorApplyFrontDiagnostics(
+    visibleFront.individuals.map((point) => comparatorChartPointFromRaw(point)),
+    options.diagnosticsByKey,
+    pointNamespace,
+  );
   const selectedPoints = visibleFront.selected.map((point) => comparatorChartPointFromRaw(point));
   const allPartition = comparatorPartitionInteractivePoints(allPoints, excludedKeys, pointNamespace);
   const selectedPartition = comparatorPartitionInteractivePoints(selectedPoints, excludedKeys, pointNamespace);
@@ -8852,6 +8968,7 @@ function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa
   );
   const hvLabel = metrics.hypervolumeLabel === "No aplica" ? "" : comparatorHypervolumeLabel(activeAllPoints);
   const hvAreaSeries = comparatorHypervolumeAreaSeries(activeAllPoints, hvLabel, proposalColor);
+  const diagnosticsBadge = comparatorFrontDiagnosticsBadge(activeAllPoints, proposalColor);
   return baseScatterOption(title, [
     ...hvAreaSeries,
     {
@@ -8901,7 +9018,7 @@ function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa
   ], {
     description: "Ejes normalizados comparables. Area sombreada: HV dominado respecto a [0, 0].",
     axisPoints: [...activeAllPoints, ...activeSelectedPoints, ...inactiveAllPoints, ...inactiveSelectedPoints],
-    fixedBadge: hvLabel ? { text: `HV = ${hvLabel}`, color: proposalColor } : null,
+    fixedBadge: diagnosticsBadge,
   });
 }
 
@@ -8909,7 +9026,11 @@ function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C
   const charts = analysis.charts || {};
   const excludedKeys = options.excludedKeys || new Set();
   const pointNamespace = options.pointNamespace || "bmopso-points";
-  const allPoints = (charts.pareto || []).map((point) => comparatorChartPointFromRaw(point));
+  const allPoints = comparatorApplyFrontDiagnostics(
+    (charts.pareto || []).map((point) => comparatorChartPointFromRaw(point)),
+    options.diagnosticsByKey,
+    pointNamespace,
+  );
   const selectedPoints = (charts.selected || []).map((point) => comparatorChartPointFromRaw(point));
   const allPartition = comparatorPartitionInteractivePoints(allPoints, excludedKeys, pointNamespace);
   const selectedPartition = comparatorPartitionInteractivePoints(selectedPoints, excludedKeys, pointNamespace);
@@ -8923,6 +9044,7 @@ function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C
   );
   const hvLabel = analysis.metrics?.hypervolumeLabel === "No aplica" ? "" : comparatorHypervolumeLabel(activeAllPoints);
   const hvAreaSeries = comparatorHypervolumeAreaSeries(activeAllPoints, hvLabel, proposalColor);
+  const diagnosticsBadge = comparatorFrontDiagnosticsBadge(activeAllPoints, proposalColor);
   return baseScatterOption(title, [
     ...hvAreaSeries,
     {
@@ -8972,7 +9094,7 @@ function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C
   ], {
     description: "Ejes nativos normalizados de Binary MOPSO-CD. Area sombreada: HV interno reportado por BMOPSO.",
     axisPoints: [...activeAllPoints, ...activeSelectedPoints, ...inactiveAllPoints, ...inactiveSelectedPoints],
-    fixedBadge: hvLabel ? { text: `HV = ${hvLabel}`, color: proposalColor } : null,
+    fixedBadge: diagnosticsBadge,
   });
 }
 
@@ -9026,13 +9148,14 @@ function comparatorHypervolumeAreaSeries(points, hypervolumeLabel, color = "#256
 
 function comparatorFixedBadgeGraphic(badge) {
   if (!badge?.text) return [];
-  const width = Math.max(92, Math.min(156, (String(badge.text).length * 7) + 20));
-  const height = 28;
+  const lines = String(badge.text).split("\n");
+  const width = Math.max(126, Math.min(210, (Math.max(...lines.map((line) => line.length)) * 7) + 22));
+  const height = Math.max(28, (lines.length * 15) + 14);
   return [
     {
       type: "group",
       right: 34,
-      top: 122,
+      top: 108,
       silent: true,
       z: 100,
       children: [
@@ -9054,6 +9177,7 @@ function comparatorFixedBadgeGraphic(badge) {
             fill: badge.color || "#2563eb",
             fontSize: 11,
             fontWeight: 700,
+            lineHeight: 15,
           },
         },
       ],

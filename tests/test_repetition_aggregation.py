@@ -3651,6 +3651,59 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["globalInertia"], 2.0)
         self.assertIsNone(metrics["globalEntropy"])
 
+    def test_front_point_diagnostics_returns_embeddings_and_cached_entity_terms(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_id = "front-diagnostics-run"
+            run_dir = root / "runs" / "comparator" / run_id
+            run_dir.mkdir(parents=True)
+            (run_dir / "summary.json").write_text(
+                json.dumps({"runId": run_id, "status": "completed", "proposals": []}),
+                encoding="utf-8",
+            )
+            service = ComparatorService(root)
+            service._posthoc_spacy_model = FakeSpacyModel(
+                [
+                    [FakeSpacyToken("shelter", "NOUN"), FakeSpacyToken("quickly", "ADV")],
+                    [FakeSpacyToken("help", "VERB"), FakeSpacyToken("urgent", "ADJ")],
+                ]
+            )
+            calls: list[tuple[str, list[str]]] = []
+
+            class FakeSbertService:
+                def encode_texts(self, model_name, texts):
+                    calls.append((model_name, list(texts)))
+                    return [[float(index), float(index + 1)] for index, _text in enumerate(texts)], {
+                        "embeddingModel": model_name,
+                        "sourceModel": model_name,
+                        "embeddingTexts": len(texts),
+                        "embeddingWallClockSeconds": 0.01,
+                    }
+
+            payload = {
+                "points": [
+                    {"key": "p1", "text": "Need urgent shelter"},
+                    {"key": "p2", "text": "Help families"},
+                ]
+            }
+
+            with patch.object(comparator_module, "shared_sbert_service", return_value=FakeSbertService()):
+                first = service.get_run_front_point_diagnostics(run_id, payload)
+                second = service.get_run_front_point_diagnostics(run_id, payload)
+
+        self.assertEqual(calls, [(comparator_module.POSTHOC_EMBEDDING_MODEL, ["Need urgent shelter", "Help families"])])
+        self.assertEqual(first["points"], second["points"])
+        self.assertEqual(first["points"][0]["key"], "p1")
+        self.assertEqual(first["points"][0]["embedding"], [0.0, 1.0])
+        self.assertEqual(first["points"][0]["entityTerms"], ["shelter"])
+        self.assertEqual(first["points"][0]["entityTokenCount"], 2)
+        self.assertEqual(first["points"][1]["entityTerms"], ["help", "urgent"])
+
+    def test_front_point_diagnostics_returns_none_for_missing_run(self):
+        service = ComparatorService(Path("."))
+
+        self.assertIsNone(service.get_run_front_point_diagnostics("missing", {"points": []}))
+
     def test_binary_monitor_series_reads_inertia_and_entropy(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
@@ -3748,11 +3801,55 @@ class RepetitionAggregationTests(unittest.TestCase):
                 )
                 series = service._build_metric_series(proposal, output_dir, final_rows, "reference")
 
+        self.assertEqual([point["generation"] for point in series], [1, 2])
+        self.assertEqual(series[0]["source"], "native")
+
+    def test_binary_metric_series_adds_generation_zero_from_initial_population(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "data_initial_population.json").write_text(
+                json.dumps(
+                    [
+                        {"generated_text": "Initial A", "prompt": "Prompt A", "objectives": {"f1": 0.9, "f2": 0.1}},
+                        {"generated_text": "Initial B", "prompt": "Prompt B", "objectives": {"f1": 0.2, "f2": 0.8}},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "\n".join(
+                    [
+                        "generation,hypervolume,archive_size",
+                        "1,0.11,2",
+                        "2,0.22,3",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(Path("."))
+            proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+
+            with patch.object(
+                comparator_module,
+                "calculate_posthoc_semantic_scores",
+                return_value=[
+                    {"semanticFidelity": 0.0, "semanticDiversity": 1.0},
+                    {"semanticFidelity": 0.4, "semanticDiversity": 0.6},
+                ],
+            ), patch.object(
+                service,
+                "_posthoc_population_diagnostics",
+                return_value={"globalInertia": 0.2, "globalEntropy": 0.3},
+            ):
+                series = service._build_metric_series(proposal, output_dir, [], "reference")
+
         self.assertEqual([point["generation"] for point in series], [0, 1, 2])
-        self.assertEqual(series[0]["source"], "final_only")
+        self.assertEqual(series[0]["source"], "initial_population")
         self.assertIsNotNone(series[0]["hypervolume"])
         self.assertIsNotNone(series[0]["extent"])
         self.assertIsNotNone(series[0]["unaryEntropy"])
+        self.assertAlmostEqual(series[0]["globalInertia"], 0.2)
+        self.assertAlmostEqual(series[0]["globalEntropy"], 0.3)
         self.assertEqual(series[0]["frontPoints"], [[0.5, 0.5], [0.7, 0.3]])
         self.assertEqual(series[1]["source"], "native")
 
@@ -3791,12 +3888,10 @@ class RepetitionAggregationTests(unittest.TestCase):
                 )
                 series = service._build_metric_series(proposal, output_dir, final_rows, "reference")
 
-        self.assertEqual([point["generation"] for point in series], [0, 1, 2])
-        self.assertEqual(series[0]["source"], "final_only")
-        self.assertIsNotNone(series[0]["hypervolume"])
-        self.assertIsNotNone(series[0]["extent"])
-        self.assertIsNotNone(series[0]["unaryEntropy"])
-        self.assertEqual(series[0]["frontPoints"], [[0.5, 0.5], [0.7, 0.3]])
+        self.assertEqual([point["generation"] for point in series], [1, 2])
+        self.assertEqual(series[0]["source"], "legacy_csv_without_front")
+        self.assertIsNone(series[0]["globalInertia"])
+        self.assertIsNone(series[0]["globalEntropy"])
         self.assertEqual(series[1]["source"], "legacy_csv_without_front")
         self.assertIsNone(series[1]["globalInertia"])
         self.assertIsNone(series[1]["globalEntropy"])

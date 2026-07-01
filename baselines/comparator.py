@@ -2153,6 +2153,7 @@ class ComparatorService:
         self._lock = threading.RLock()
         self._posthoc_spacy_model: Any | None = None
         self._comparable_proxy = ComparableObjectiveProxy()
+        self._front_point_diagnostic_cache: dict[tuple[str, str], dict[str, Any]] = {}
 
     def list_proposals(self) -> list[dict[str, Any]]:
         proposals = []
@@ -2411,6 +2412,82 @@ class ComparatorService:
             "proposals": proposals,
             "warnings": warnings,
         }
+
+    def get_run_front_point_diagnostics(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if not self.get_run(run_id):
+            return None
+        raw_points = payload.get("points") if isinstance(payload, dict) else None
+        points = [
+            {
+                "key": str(point.get("key") or "").strip(),
+                "text": str(point.get("text") or "").strip(),
+            }
+            for point in (raw_points or [])
+            if isinstance(point, dict) and str(point.get("key") or "").strip()
+        ]
+        if not points:
+            return {
+                "runId": run_id,
+                "embeddingModel": POSTHOC_EMBEDDING_MODEL,
+                "points": [],
+            }
+
+        missing_texts: list[str] = []
+        seen_missing: set[str] = set()
+        for point in points:
+            text = point["text"] or "[texto vacio]"
+            cache_key = (POSTHOC_EMBEDDING_MODEL, text)
+            if cache_key not in self._front_point_diagnostic_cache and text not in seen_missing:
+                missing_texts.append(text)
+                seen_missing.add(text)
+
+        if missing_texts:
+            embeddings, _cost = shared_sbert_service().encode_texts(POSTHOC_EMBEDDING_MODEL, missing_texts)
+            entity_diagnostics = self._posthoc_entity_term_diagnostics(missing_texts)
+            for text, embedding, entity in zip(missing_texts, embeddings, entity_diagnostics):
+                self._front_point_diagnostic_cache[(POSTHOC_EMBEDDING_MODEL, text)] = {
+                    "embedding": [float(value) for value in embedding],
+                    "entityTerms": entity.get("entityTerms"),
+                    "entityTokenCount": entity.get("entityTokenCount"),
+                }
+
+        diagnostics = []
+        for point in points:
+            text = point["text"] or "[texto vacio]"
+            cached = self._front_point_diagnostic_cache.get((POSTHOC_EMBEDDING_MODEL, text)) or {}
+            diagnostics.append(
+                {
+                    "key": point["key"],
+                    "embedding": cached.get("embedding"),
+                    "entityTerms": cached.get("entityTerms"),
+                    "entityTokenCount": cached.get("entityTokenCount"),
+                }
+            )
+
+        return {
+            "runId": run_id,
+            "embeddingModel": POSTHOC_EMBEDDING_MODEL,
+            "points": diagnostics,
+        }
+
+    def _posthoc_entity_term_diagnostics(self, generated_texts: list[str]) -> list[dict[str, Any]]:
+        try:
+            if self._posthoc_spacy_model is None:
+                import spacy
+
+                self._posthoc_spacy_model = spacy.load("en_core_web_sm")
+            diagnostics = []
+            for doc in self._posthoc_spacy_model.pipe(generated_texts):
+                terms = []
+                for token in doc:
+                    if token.pos_ in POSTHOC_ENTITY_ENTROPY_POS:
+                        lemma = str(token.lemma_ or "").lower().strip()
+                        if lemma:
+                            terms.append(lemma)
+                diagnostics.append({"entityTerms": terms, "entityTokenCount": len(doc)})
+            return diagnostics
+        except Exception:
+            return [{"entityTerms": None, "entityTokenCount": None} for _text in generated_texts]
 
     def get_run_logs(self, run_id: str, offset: int = 0, limit: int | None = None) -> dict[str, Any] | None:
         run = self.get_run(run_id)
@@ -5086,25 +5163,36 @@ class ComparatorService:
     ) -> list[dict[str, Any]]:
         history = self._read_population_history(output_dir)
         diagnostic_series = self._read_diagnostic_metric_series(proposal, output_dir, history)
+        initial_population_point = (
+            self._initial_population_series_point(proposal, output_dir, reference_text)
+            if proposal.kind == "binary-mopso-cd"
+            else None
+        )
         base_series: list[dict[str, Any]] = []
         if proposal.kind == "binary-mopso-cd":
             archive_series = self._read_binary_archive_metric_series(proposal, output_dir, reference_text)
             if archive_series:
-                archive_series = self._ensure_final_front_series_point(proposal, archive_series, final_rows)
+                archive_series = self._with_initial_population_series_point(archive_series, initial_population_point)
                 return self._merge_series_diagnostics(archive_series, diagnostic_series)
             series = self._read_binary_metric_series(output_dir)
             if series:
-                series = self._ensure_final_front_series_point(proposal, series, final_rows)
+                series = self._with_initial_population_series_point(series, initial_population_point)
                 return self._merge_series_diagnostics(series, diagnostic_series)
         csv_series = self._read_legacy_metric_series(proposal, output_dir)
         if history:
-            history_series = [self._history_entry_metrics(proposal, entry, reference_text) for entry in history]
-            history_series = self._ensure_final_front_series_point(proposal, history_series, final_rows)
+            history_series = [
+                point
+                for entry in history
+                for point in [self._history_entry_metrics(proposal, entry, reference_text)]
+                if point is not None
+            ]
+            history_series = self._with_initial_population_series_point(history_series, initial_population_point)
             return self._merge_series_diagnostics(history_series, diagnostic_series or csv_series)
         if csv_series:
-            base_series = self._ensure_final_front_series_point(proposal, csv_series, final_rows)
-        else:
-            base_series = [self._final_series_point(proposal, final_rows)]
+            base_series = csv_series
+        elif initial_population_point:
+            base_series = [initial_population_point]
+        base_series = self._with_initial_population_series_point(base_series, initial_population_point)
         return self._merge_series_diagnostics(base_series, diagnostic_series)
 
     def _read_diagnostic_metric_series(
@@ -5144,9 +5232,12 @@ class ComparatorService:
             generation = item.get("generation") or item.get("Generacion")
             if generation is None:
                 continue
+            generation_value = finite_float(generation, None)
+            if generation_value is None:
+                continue
             series.append(
                 {
-                    "generation": int(finite_float(generation)),
+                    "generation": int(generation_value),
                     "hypervolume": None,
                     "nonDominatedRows": None,
                     "extent": None,
@@ -5157,7 +5248,7 @@ class ComparatorService:
                     "source": "binary_monitor",
                 }
             )
-        return [item for item in series if item["generation"] > 0]
+        return [item for item in series if item["generation"] >= 0]
 
     def _build_posthoc_diagnostic_series(
         self,
@@ -5175,9 +5266,12 @@ class ComparatorService:
             diagnostic = self._posthoc_population_diagnostics(texts)
             if not diagnostic:
                 continue
+            generation = finite_float(entry.get("generation"), None)
+            if generation is None:
+                continue
             series.append(
                 {
-                    "generation": int(finite_float(entry.get("generation"))),
+                    "generation": int(generation),
                     "hypervolume": None,
                     "nonDominatedRows": None,
                     "extent": None,
@@ -5187,7 +5281,7 @@ class ComparatorService:
                     "source": "posthoc_diagnostic_history",
                 }
             )
-        return [item for item in series if item["generation"] > 0]
+        return [item for item in series if item["generation"] >= 0]
 
     def _history_population_texts(self, proposal: ProposalDefinition, population: list[dict[str, Any]]) -> list[str]:
         texts: list[str] = []
@@ -5276,9 +5370,12 @@ class ComparatorService:
                 continue
             rows = self._normalize_rows(proposal, archive, top_k=len(archive), reference_text=reference_text)
             metrics = self._summarize_rows(proposal, rows, Path("."), include_artifact_metrics=False)
+            generation = finite_float(payload.get("generation"), None)
+            if generation is None:
+                continue
             series.append(
                 {
-                    "generation": int(finite_float(payload.get("generation"))),
+                    "generation": int(generation),
                     "hypervolume": metrics.get("hypervolume"),
                     "nonDominatedRows": metrics.get("nonDominatedRows"),
                     "extent": metrics.get("extent"),
@@ -5288,15 +5385,18 @@ class ComparatorService:
                     "source": "archive_history",
                 }
             )
-        return [item for item in series if item["generation"] > 0]
+        return [item for item in series if item["generation"] >= 0]
 
     def _read_binary_metric_series(self, output_dir: Path) -> list[dict[str, Any]]:
         rows = self._read_csv_dicts(output_dir / "evolucion_metricas.csv")
         series = []
         for item in rows:
+            generation = finite_float(item.get("generation"), None)
+            if generation is None:
+                continue
             series.append(
                 {
-                    "generation": int(finite_float(item.get("generation"))),
+                    "generation": int(generation),
                     "hypervolume": finite_float(item.get("hypervolume"), None),
                     "nonDominatedRows": finite_float(item.get("archive_size"), None),
                     "extent": None,
@@ -5305,7 +5405,7 @@ class ComparatorService:
                     "source": "native",
                 }
             )
-        return [item for item in series if item["generation"] > 0]
+        return [item for item in series if item["generation"] >= 0]
 
     def _read_binary_archive_summary_metrics(self, output_dir: Path) -> dict[str, Any]:
         counts = self._read_binary_archive_counts_from_metrics_csv(output_dir)
@@ -5355,9 +5455,12 @@ class ComparatorService:
             generation = item.get("generation") or item.get("Generacion")
             if generation is None:
                 continue
+            generation_value = finite_float(generation, None)
+            if generation_value is None:
+                continue
             series.append(
                 {
-                    "generation": int(finite_float(generation)),
+                    "generation": int(generation_value),
                     "hypervolume": None,
                     "nonDominatedRows": None,
                     "extent": None,
@@ -5369,6 +5472,56 @@ class ComparatorService:
                 }
             )
         return series
+
+    def _initial_population_series_point(
+        self,
+        proposal: ProposalDefinition,
+        output_dir: Path,
+        reference_text: str,
+    ) -> dict[str, Any] | None:
+        path = output_dir / "data_initial_population.json"
+        if not path.exists():
+            return None
+        payload = read_json_or_default(path, None)
+        if not isinstance(payload, list) or not payload:
+            return None
+        rows = self._normalize_rows(proposal, payload, top_k=len(payload), reference_text=reference_text)
+        metrics = self._summarize_rows(proposal, rows, Path("."), include_artifact_metrics=False)
+        texts = [
+            str(row.get("generatedText") or "").strip()
+            for row in rows
+            if row.get("status") == "ok" and str(row.get("generatedText") or "").strip()
+        ]
+        diagnostics = self._posthoc_population_diagnostics(texts) or {}
+        return {
+            "generation": 0,
+            "hypervolume": metrics.get("hypervolume"),
+            "nonDominatedRows": metrics.get("postHocNonDominatedRows") if metrics.get("postHocDiagnostic") else metrics.get("nonDominatedRows"),
+            "extent": metrics.get("extent"),
+            "unaryEntropy": metrics.get("unaryEntropy"),
+            "contribution": metrics.get("contribution"),
+            "globalInertia": diagnostics.get("globalInertia"),
+            "globalEntropy": diagnostics.get("globalEntropy"),
+            "frontPoints": self._front_points_from_rows(rows),
+            "source": "initial_population",
+        }
+
+    def _with_initial_population_series_point(
+        self,
+        series: list[dict[str, Any]],
+        initial_population_point: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        if not initial_population_point:
+            return series
+        without_zero = [
+            point
+            for point in series
+            if int(finite_float(point.get("generation"), -1)) != 0
+        ]
+        return sorted(
+            [initial_population_point, *without_zero],
+            key=lambda item: int(finite_float(item.get("generation"), -1)),
+        )
 
     def _merge_series_diagnostics(
         self,
@@ -5451,12 +5604,15 @@ class ComparatorService:
                 entries.append(payload)
         return entries
 
-    def _history_entry_metrics(self, proposal: ProposalDefinition, entry: dict[str, Any], reference_text: str) -> dict[str, Any]:
+    def _history_entry_metrics(self, proposal: ProposalDefinition, entry: dict[str, Any], reference_text: str) -> dict[str, Any] | None:
+        generation = finite_float(entry.get("generation"), None)
+        if generation is None:
+            return None
         population = entry.get("population") if isinstance(entry.get("population"), list) else []
         rows = self._normalize_rows(proposal, population, top_k=len(population) or 1, reference_text=reference_text)
         metrics = self._summarize_rows(proposal, rows, Path("."), include_artifact_metrics=False)
         return {
-            "generation": int(finite_float(entry.get("generation"))),
+            "generation": int(generation),
             "hypervolume": metrics.get("hypervolume"),
             "nonDominatedRows": metrics.get("postHocNonDominatedRows") if metrics.get("postHocDiagnostic") else metrics.get("nonDominatedRows"),
             "extent": metrics.get("extent"),

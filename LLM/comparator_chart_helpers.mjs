@@ -13,6 +13,10 @@ function finiteAxisValue(point, axis) {
   return Number.isFinite(value) ? value : null;
 }
 
+function clampNumber(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
 function cleanAxisNumber(value) {
   return Number(Number(value).toPrecision(12));
 }
@@ -534,6 +538,181 @@ export function comparatorHypervolumeArea(points) {
       ];
 
   return { lineData, labelPosition, area };
+}
+
+export function comparatorUnaryEntropy(points = [], mu = 5) {
+  const coordinates = (points || [])
+    .map(comparatorPointCoordinates)
+    .filter(Boolean)
+    .map((point) => [point.x, point.y]);
+  if (coordinates.length <= 1) return 0;
+
+  const gridSize = Math.trunc(Number(mu) || 0);
+  const width = 2;
+  if (gridSize <= 1) return 0;
+
+  const cells = new Map();
+  coordinates.forEach((point) => {
+    const cell = point.map((value) =>
+      Math.min(gridSize, Math.floor(gridSize * clampNumber(Number(value) || 0, 0, 1)) + 1),
+    ).join("|");
+    cells.set(cell, (cells.get(cell) || 0) + 1);
+  });
+
+  const denominatorBase = Math.min(coordinates.length, gridSize ** width);
+  if (denominatorBase <= 1) return 0;
+
+  let entropy = 0;
+  cells.forEach((count) => {
+    const probability = count / coordinates.length;
+    if (probability > 0) entropy -= probability * Math.log(probability);
+  });
+  return clampNumber(entropy / Math.log(denominatorBase), 0, 1);
+}
+
+function semanticEmbedding(point) {
+  const raw = Array.isArray(point?.semanticEmbedding)
+    ? point.semanticEmbedding
+    : point?.frontDiagnostics?.embedding;
+  const values = Array.isArray(raw)
+    ? raw.map(Number).filter(Number.isFinite)
+    : [];
+  return values.length ? values : null;
+}
+
+function squaredDistance(left, right, width) {
+  let total = 0;
+  for (let index = 0; index < width; index += 1) {
+    total += (left[index] - right[index]) ** 2;
+  }
+  return total;
+}
+
+function lexicographicEmbeddingCompare(left, right) {
+  const width = Math.min(left.length, right.length);
+  for (let index = 0; index < width; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return left.length - right.length;
+}
+
+function initialKMeansCenters(embeddings, clusters, width) {
+  const ordered = [...embeddings].sort(lexicographicEmbeddingCompare);
+  const centers = [ordered[0].slice(0, width)];
+  while (centers.length < clusters) {
+    let best = null;
+    ordered.forEach((embedding) => {
+      const candidate = embedding.slice(0, width);
+      const distance = Math.min(...centers.map((center) => squaredDistance(candidate, center, width)));
+      if (
+        !best
+        || distance > best.distance
+        || (distance === best.distance && lexicographicEmbeddingCompare(candidate, best.embedding) < 0)
+      ) {
+        best = { embedding: candidate, distance };
+      }
+    });
+    centers.push(best.embedding);
+  }
+  return centers;
+}
+
+export function comparatorKMeansInertia(points = [], clusterCount = 5) {
+  const embeddings = (points || []).map(semanticEmbedding).filter(Boolean);
+  if (!embeddings.length) return null;
+  if (embeddings.length <= 1) return 0;
+
+  const width = Math.min(...embeddings.map((embedding) => embedding.length));
+  if (width <= 0) return null;
+
+  const clusters = Math.min(
+    embeddings.length,
+    Math.max(1, Math.trunc(Number(clusterCount) || 5)),
+  );
+  if (clusters >= embeddings.length) return 0;
+
+  let centers = initialKMeansCenters(embeddings, clusters, width);
+  let assignments = new Array(embeddings.length).fill(-1);
+  for (let iteration = 0; iteration < 100; iteration += 1) {
+    let changed = false;
+    const nextAssignments = embeddings.map((embedding) => {
+      const vector = embedding.slice(0, width);
+      let bestCluster = 0;
+      let bestDistance = squaredDistance(vector, centers[0], width);
+      for (let cluster = 1; cluster < centers.length; cluster += 1) {
+        const distance = squaredDistance(vector, centers[cluster], width);
+        if (distance < bestDistance) {
+          bestCluster = cluster;
+          bestDistance = distance;
+        }
+      }
+      return bestCluster;
+    });
+
+    nextAssignments.forEach((assignment, index) => {
+      if (assignment !== assignments[index]) changed = true;
+    });
+    assignments = nextAssignments;
+
+    const sums = Array.from({ length: clusters }, () => new Array(width).fill(0));
+    const counts = new Array(clusters).fill(0);
+    embeddings.forEach((embedding, index) => {
+      const cluster = assignments[index];
+      counts[cluster] += 1;
+      for (let dimension = 0; dimension < width; dimension += 1) {
+        sums[cluster][dimension] += embedding[dimension];
+      }
+    });
+
+    centers = centers.map((center, cluster) => {
+      if (!counts[cluster]) return center;
+      return sums[cluster].map((sum) => sum / counts[cluster]);
+    });
+    if (!changed) break;
+  }
+
+  const total = embeddings.reduce((sum, embedding, index) =>
+    sum + squaredDistance(embedding, centers[assignments[index]], width), 0);
+  return cleanAxisNumber(total / embeddings.length);
+}
+
+export function comparatorEntityEntropy(points = []) {
+  let hasDiagnostic = false;
+  let totalTokens = 0;
+  const counts = new Map();
+
+  (points || []).forEach((point) => {
+    const terms = Array.isArray(point?.entityTerms)
+      ? point.entityTerms
+      : point?.frontDiagnostics?.entityTerms;
+    const tokenCount = Number(point?.entityTokenCount ?? point?.frontDiagnostics?.entityTokenCount);
+    if (Array.isArray(terms) || Number.isFinite(tokenCount)) hasDiagnostic = true;
+    if (Number.isFinite(tokenCount) && tokenCount > 0) totalTokens += tokenCount;
+    (Array.isArray(terms) ? terms : []).forEach((term) => {
+      const key = String(term || "").trim().toLowerCase();
+      if (key) counts.set(key, (counts.get(key) || 0) + 1);
+    });
+  });
+
+  if (!hasDiagnostic) return null;
+  if (!counts.size || totalTokens <= 1) return 0;
+
+  const totalTerms = [...counts.values()].reduce((sum, count) => sum + count, 0);
+  let entropy = 0;
+  counts.forEach((count) => {
+    const probability = count / totalTerms;
+    if (probability > 0) entropy -= probability * Math.log2(probability);
+  });
+  return cleanAxisNumber(entropy / Math.log2(totalTokens));
+}
+
+export function comparatorFrontDiagnostics(points = [], options = {}) {
+  return {
+    hypervolume: comparatorHypervolumeArea(points)?.area ?? null,
+    unaryEntropy: comparatorUnaryEntropy(points, options.unaryEntropyGridSize ?? 5),
+    globalInertia: comparatorKMeansInertia(points, options.kMeansClusters ?? 5),
+    globalEntropy: comparatorEntityEntropy(points),
+  };
 }
 
 export function comparatorMetricMetadata(metricKey) {

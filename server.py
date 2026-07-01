@@ -915,6 +915,14 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, run)
                 return
 
+            if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "front-point-diagnostics":
+                payload = self.comparator_service.get_run_front_point_diagnostics(path_parts[1], self.read_json_body())
+                if not payload:
+                    self.send_json(404, {"error": "Run not found."})
+                    return
+                self.send_json(200, payload)
+                return
+
             if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "recontinue":
                 self.read_request_body()
                 run = self.comparator_service.recontinue_run(path_parts[1])
