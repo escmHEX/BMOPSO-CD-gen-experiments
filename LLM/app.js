@@ -1,5 +1,6 @@
 import {
   comparatorBmopsoInternalAnalyses,
+  comparatorApplyColumnOrder,
   comparatorBenchmarkProposals,
   comparatorBestMetricProposalIds,
   comparatorCanRecontinueRun,
@@ -14,6 +15,7 @@ import {
   comparatorMetricCellClassName,
   comparatorMetricDeltaLabel,
   comparatorMetricDeltaPercent,
+  comparatorMoveColumnId,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
   comparatorMetricReferenceLinePatch,
@@ -422,6 +424,8 @@ let comparatorChoiceInstances = [];
 let comparatorChartFilterIds = new Set();
 let comparatorChartFilterSignature = "";
 let comparatorPointChartRepetitionIndex = null;
+let comparatorMetricColumnOrderByRun = new Map();
+let comparatorMetricColumnDragState = { draggedId: null, targetId: null, placement: "before" };
 let comparatorLogRunId = null;
 let comparatorLogOffset = 0;
 let comparatorLogLines = [];
@@ -851,6 +855,7 @@ const COMPARATOR_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"
 const COMPARATOR_MAX_TRANSIENT_POLL_FAILURES = 5;
 const COMPARATOR_LOG_CHUNK_LIMIT = 5000;
 const COMPARATOR_LAST_RUN_ID_STORAGE_KEY = "comparator:lastRunId";
+const COMPARATOR_METRIC_COLUMN_ORDER_STORAGE_PREFIX = "comparator.metricColumnOrder.";
 const COMPARATOR_CHART_ZOOM_FACTOR = 100;
 const COMPARATOR_CHART_PADDING_RATIO = 0.08;
 const COMPARATOR_INACTIVE_POINT_OPACITY = 0.22;
@@ -7418,21 +7423,172 @@ function comparatorCostHasTokenReport(cost = {}) {
     || Number(cost.evalCount) > 0;
 }
 
+function comparatorMetricColumnRunId() {
+  return String(latestComparatorRun?.runId || currentComparatorRunId || "").trim();
+}
+
+function comparatorMetricColumnOrderKey() {
+  return comparatorMetricColumnRunId() || "__active_comparator_run__";
+}
+
+function comparatorMetricColumnStorageKey(runId) {
+  return `${COMPARATOR_METRIC_COLUMN_ORDER_STORAGE_PREFIX}${runId}`;
+}
+
+function readComparatorMetricColumnOrder() {
+  const key = comparatorMetricColumnOrderKey();
+  if (comparatorMetricColumnOrderByRun.has(key)) {
+    return [...comparatorMetricColumnOrderByRun.get(key)];
+  }
+  const runId = comparatorMetricColumnRunId();
+  if (runId) {
+    try {
+      const raw = window.localStorage?.getItem(comparatorMetricColumnStorageKey(runId));
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) {
+        const order = parsed.map((item) => String(item || "").trim()).filter(Boolean);
+        comparatorMetricColumnOrderByRun.set(key, order);
+        return [...order];
+      }
+    } catch (_error) {
+      comparatorMetricColumnOrderByRun.set(key, []);
+      return [];
+    }
+  }
+  comparatorMetricColumnOrderByRun.set(key, []);
+  return [];
+}
+
+function writeComparatorMetricColumnOrder(order) {
+  const cleanOrder = Array.from(new Set((Array.isArray(order) ? order : []).map((item) => String(item || "").trim()).filter(Boolean)));
+  const key = comparatorMetricColumnOrderKey();
+  comparatorMetricColumnOrderByRun.set(key, cleanOrder);
+  const runId = comparatorMetricColumnRunId();
+  if (!runId) return;
+  try {
+    window.localStorage?.setItem(comparatorMetricColumnStorageKey(runId), JSON.stringify(cleanOrder));
+  } catch (_error) {
+    // localStorage can be unavailable in restricted browser contexts; in-memory order still works for this session.
+  }
+}
+
+function comparatorOrderedMetricProposals(proposals) {
+  const baseOrder = comparatorBenchmarkProposals(proposals);
+  return comparatorApplyColumnOrder(baseOrder, readComparatorMetricColumnOrder());
+}
+
+function comparatorMetricColumnIdsFromTable() {
+  if (!dom.comparatorCostTableHead) return [];
+  return Array.from(dom.comparatorCostTableHead.querySelectorAll("[data-comparator-metric-column-id]"))
+    .map((cell) => String(cell.dataset.comparatorMetricColumnId || "").trim())
+    .filter(Boolean);
+}
+
+function syncComparatorMetricColumnDragClasses() {
+  const draggedId = comparatorMetricColumnDragState.draggedId;
+  const targetId = comparatorMetricColumnDragState.targetId;
+  const placement = comparatorMetricColumnDragState.placement;
+  [dom.comparatorCostTableHead, dom.comparatorCostTableBody].forEach((container) => {
+    container?.querySelectorAll("[data-comparator-metric-column-id]").forEach((cell) => {
+      const columnId = String(cell.dataset.comparatorMetricColumnId || "");
+      cell.classList.toggle("is-column-dragging", Boolean(draggedId && columnId === draggedId));
+      cell.classList.toggle("is-column-drop-target", Boolean(targetId && columnId === targetId && targetId !== draggedId));
+      cell.classList.toggle("is-column-drop-after", Boolean(targetId && columnId === targetId && placement === "after"));
+    });
+  });
+}
+
+function comparatorMetricColumnCellFromEvent(event) {
+  if (!(event.target instanceof Element)) return null;
+  return event.target.closest("[data-comparator-metric-column-id]");
+}
+
+function comparatorMetricColumnDropPlacement(event, cell) {
+  const rect = cell?.getBoundingClientRect?.();
+  if (!rect || !Number.isFinite(rect.left) || !Number.isFinite(rect.width) || rect.width <= 0) return "before";
+  return event.clientX > rect.left + rect.width / 2 ? "after" : "before";
+}
+
+function handleComparatorMetricColumnDragStart(event) {
+  const cell = comparatorMetricColumnCellFromEvent(event);
+  const columnId = String(cell?.dataset?.comparatorMetricColumnId || "").trim();
+  if (!columnId) return;
+  comparatorMetricColumnDragState = { draggedId: columnId, targetId: null, placement: "before" };
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", columnId);
+  }
+  syncComparatorMetricColumnDragClasses();
+}
+
+function handleComparatorMetricColumnDragOver(event) {
+  const draggedId = comparatorMetricColumnDragState.draggedId;
+  if (!draggedId) return;
+  const cell = comparatorMetricColumnCellFromEvent(event);
+  const targetId = String(cell?.dataset?.comparatorMetricColumnId || "").trim();
+  if (!targetId || targetId === draggedId) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  const placement = comparatorMetricColumnDropPlacement(event, cell);
+  if (
+    comparatorMetricColumnDragState.targetId !== targetId
+    || comparatorMetricColumnDragState.placement !== placement
+  ) {
+    comparatorMetricColumnDragState = { draggedId, targetId, placement };
+    syncComparatorMetricColumnDragClasses();
+  }
+}
+
+function handleComparatorMetricColumnDrop(event) {
+  const cell = comparatorMetricColumnCellFromEvent(event);
+  const targetId = String(cell?.dataset?.comparatorMetricColumnId || "").trim();
+  const draggedId = String(
+    comparatorMetricColumnDragState.draggedId || event.dataTransfer?.getData("text/plain") || "",
+  ).trim();
+  const placement = comparatorMetricColumnDropPlacement(event, cell);
+  comparatorMetricColumnDragState = { draggedId: null, targetId: null, placement: "before" };
+  if (!draggedId || !targetId || draggedId === targetId) {
+    syncComparatorMetricColumnDragClasses();
+    return;
+  }
+  event.preventDefault();
+  const nextOrder = comparatorMoveColumnId(comparatorMetricColumnIdsFromTable(), draggedId, targetId, placement);
+  writeComparatorMetricColumnOrder(nextOrder);
+  if (latestComparatorRun) {
+    renderComparatorCostDetails(latestComparatorRun);
+  } else {
+    syncComparatorMetricColumnDragClasses();
+  }
+}
+
+function handleComparatorMetricColumnDragEnd() {
+  comparatorMetricColumnDragState = { draggedId: null, targetId: null, placement: "before" };
+  syncComparatorMetricColumnDragClasses();
+}
+
 function renderComparatorCostTable(proposals, policy) {
   if (!dom.comparatorCostTableHead || !dom.comparatorCostTableBody) return;
-  const orderedProposals = comparatorBenchmarkProposals(proposals);
-  const primaryProposal = orderedProposals.find((proposal) => comparatorIsBinaryProposal(proposal));
+  const orderedProposals = comparatorOrderedMetricProposals(proposals);
+  const primaryProposal = orderedProposals[0] || null;
   const primaryProposalId = primaryProposal ? comparatorEntityId(primaryProposal) : "";
   dom.comparatorCostTableHead.innerHTML = `
     <tr>
       <th>Metrica</th>
       <th>Detalle</th>
-      ${orderedProposals.map((proposal) => `
-        <th class="${primaryProposalId && comparatorEntityId(proposal) === primaryProposalId ? "is-primary-proposal" : ""}">
+      ${orderedProposals.map((proposal) => {
+        const columnId = comparatorEntityId(proposal);
+        return `
+        <th
+          class="${primaryProposalId && columnId === primaryProposalId ? "is-primary-proposal" : ""}"
+          data-comparator-metric-column-id="${escapeHtml(columnId)}"
+          draggable="true"
+          title="Arrastra para reordenar columnas"
+        >
           <span>${escapeHtml(proposal.displayName || proposal.proposalId)}</span>
           <small class="${comparatorStatusClass(proposal.status)}">${escapeHtml(comparatorStatusLabel(proposal.status))}</small>
         </th>
-      `).join("")}
+      `;
+      }).join("")}
     </tr>
   `;
   if (!orderedProposals.length) {
@@ -7451,13 +7607,15 @@ function renderComparatorCostTable(proposals, policy) {
         <th scope="row">${escapeHtml(metric.label)}</th>
         <td>${escapeHtml(metric.detail)}</td>
         ${orderedProposals.map((proposal) => {
-          const primaryColumn = Boolean(primaryProposalId && comparatorEntityId(proposal) === primaryProposalId);
-          return comparatorCostMetricCell(proposal, metric, winners, { primaryColumn, primaryValue });
+          const columnId = comparatorEntityId(proposal);
+          const primaryColumn = Boolean(primaryProposalId && columnId === primaryProposalId);
+          return comparatorCostMetricCell(proposal, metric, winners, { columnId, primaryColumn, primaryValue });
         }).join("")}
       `;
       return tr;
     }),
   );
+  syncComparatorMetricColumnDragClasses();
   decorateAbbreviationTooltips(document.getElementById("comparatorCostsTab") || dom.comparatorCostTableBody);
 }
 
@@ -7475,13 +7633,14 @@ function comparatorCostMetricCell(proposal, metric, winners, options = {}) {
   const best = proposal.status === "completed" && reported && winners.has(comparatorEntityId(proposal));
   const label = reported ? metric.format(proposal, cost) : "No reportado";
   const className = comparatorMetricCellClassName({ primaryColumn, best });
+  const columnId = String(options.columnId || comparatorEntityId(proposal));
   const deltaHtml = primaryColumn || !reported
     ? ""
     : comparatorMetricDeltaHtml(options.primaryValue, value, metric.direction);
   const valueHtml = best
     ? `<strong>${escapeHtml(label)}</strong>`
     : escapeHtml(label);
-  return `<td class="${className}"><span class="comparator-metric-value">${valueHtml}</span>${deltaHtml}</td>`;
+  return `<td class="${className}" data-comparator-metric-column-id="${escapeHtml(columnId)}" draggable="true"><span class="comparator-metric-value">${valueHtml}</span>${deltaHtml}</td>`;
 }
 
 function comparatorMetricDeltaHtml(primaryValue, comparisonValue, direction) {
@@ -9994,6 +10153,15 @@ dom.comparatorProposalConfigPanels?.addEventListener("click", (event) => {
   if (deleteButton) {
     deleteComparatorInstance(deleteButton.dataset.deleteComparatorInstance);
   }
+});
+[
+  dom.comparatorCostTableHead,
+  dom.comparatorCostTableBody,
+].forEach((container) => {
+  container?.addEventListener("dragstart", handleComparatorMetricColumnDragStart);
+  container?.addEventListener("dragover", handleComparatorMetricColumnDragOver);
+  container?.addEventListener("drop", handleComparatorMetricColumnDrop);
+  container?.addEventListener("dragend", handleComparatorMetricColumnDragEnd);
 });
 dom.saveComparatorInstanceModalButton?.addEventListener("click", saveComparatorInstanceModal);
 dom.cancelComparatorInstanceModalButton?.addEventListener("click", closeComparatorInstanceModal);

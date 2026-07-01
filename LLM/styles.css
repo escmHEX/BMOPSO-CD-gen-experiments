@@ -2023,6 +2023,67 @@ table.wide-table {
   text-align: center;
 }
 
+.comparator-cost-table [data-comparator-metric-column-id] {
+  cursor: grab;
+  user-select: none;
+  transition:
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.comparator-cost-table [data-comparator-metric-column-id]:active {
+  cursor: grabbing;
+}
+
+.comparator-cost-table .is-column-dragging {
+  position: relative;
+  z-index: 2;
+  background: #ecfdf7 !important;
+  box-shadow:
+    inset 1px 0 0 rgba(15, 118, 110, 0.42),
+    inset -1px 0 0 rgba(15, 118, 110, 0.42),
+    inset 0 1px 0 rgba(15, 118, 110, 0.18),
+    inset 0 -1px 0 rgba(15, 118, 110, 0.14),
+    0 0 0 1px rgba(15, 118, 110, 0.10),
+    0 10px 24px rgba(15, 118, 110, 0.10);
+  opacity: 0.86;
+}
+
+.comparator-cost-table .is-column-drop-target {
+  position: relative;
+  z-index: 3;
+  background: #f0fdfa !important;
+  box-shadow:
+    inset 4px 0 0 #0f766e,
+    inset 0 1px 0 rgba(15, 118, 110, 0.24),
+    inset 0 -1px 0 rgba(15, 118, 110, 0.18),
+    0 0 0 1px rgba(15, 118, 110, 0.14),
+    0 12px 28px rgba(15, 118, 110, 0.12);
+}
+
+.comparator-cost-table .is-column-drop-target.is-column-drop-after {
+  box-shadow:
+    inset -4px 0 0 #0f766e,
+    inset 0 1px 0 rgba(15, 118, 110, 0.24),
+    inset 0 -1px 0 rgba(15, 118, 110, 0.18),
+    0 0 0 1px rgba(15, 118, 110, 0.14),
+    0 12px 28px rgba(15, 118, 110, 0.12);
+}
+
+.comparator-cost-table thead .is-column-dragging,
+.comparator-cost-table thead .is-column-drop-target {
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+
+.comparator-cost-table tbody tr:last-child .is-column-dragging,
+.comparator-cost-table tbody tr:last-child .is-column-drop-target {
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
 .comparator-cost-table .is-primary-proposal {
   background: #f7ded4;
   border-left: 1px solid #ef7d5d;

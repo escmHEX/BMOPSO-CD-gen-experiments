@@ -395,6 +395,47 @@ export function comparatorBenchmarkProposals(proposals = []) {
   });
 }
 
+export function comparatorApplyColumnOrder(proposals = [], orderedIds = []) {
+  const base = Array.isArray(proposals) ? proposals : [];
+  const byId = new Map(
+    base
+      .map((proposal) => [stableIdentityValue(proposal?.instanceId || proposal?.proposalId), proposal])
+      .filter(([id]) => id),
+  );
+  const ordered = [];
+  const used = new Set();
+  for (const rawId of Array.isArray(orderedIds) ? orderedIds : []) {
+    const id = stableIdentityValue(rawId);
+    const proposal = byId.get(id);
+    if (!proposal || used.has(id)) continue;
+    ordered.push(proposal);
+    used.add(id);
+  }
+  for (const proposal of base) {
+    const id = stableIdentityValue(proposal?.instanceId || proposal?.proposalId);
+    if (!id || used.has(id)) continue;
+    ordered.push(proposal);
+  }
+  return ordered;
+}
+
+export function comparatorMoveColumnId(orderedIds = [], draggedId = "", targetId = "", placement = "before") {
+  const dragged = stableIdentityValue(draggedId);
+  const target = stableIdentityValue(targetId);
+  if (!dragged || !target || dragged === target) return [...orderedIds];
+  const next = (Array.isArray(orderedIds) ? orderedIds : [])
+    .map(stableIdentityValue)
+    .filter(Boolean);
+  const fromIndex = next.indexOf(dragged);
+  const targetIndex = next.indexOf(target);
+  if (fromIndex === -1 || targetIndex === -1) return next;
+  next.splice(fromIndex, 1);
+  const adjustedTargetIndex = next.indexOf(target);
+  const insertIndex = placement === "after" ? adjustedTargetIndex + 1 : adjustedTargetIndex;
+  next.splice(insertIndex, 0, dragged);
+  return next;
+}
+
 export function comparatorBmopsoInternalAnalyses(proposals = []) {
   const list = Array.isArray(proposals) ? proposals : [];
   return list.flatMap((proposal) => {

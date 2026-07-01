@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   comparatorBmopsoInternalAnalyses,
   comparatorBenchmarkProposals,
+  comparatorApplyColumnOrder,
   comparatorBestCostProposalIds,
   comparatorBestMetricProposalIds,
   comparatorHasBmopsoInternalAnalysis,
@@ -18,6 +19,7 @@ import {
   comparatorMetricCellClassName,
   comparatorMetricDeltaLabel,
   comparatorMetricDeltaPercent,
+  comparatorMoveColumnId,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
   comparatorMetricReferenceLinePatch,
@@ -181,6 +183,39 @@ test("benchmark table orders Binary MOPSO-CD first", () => {
 
   assert.equal(ordered[0].proposalId, "binary-mopso-cd");
   assert.deepEqual(ordered.slice(1).map((proposal) => proposal.displayName), ["EVOLMD", "EVOLMD-MO", "MESAP"]);
+});
+
+test("benchmark column order applies saved ids and appends new proposals in base order", () => {
+  const proposals = comparatorBenchmarkProposals([
+    { proposalId: "mesap", displayName: "MESAP" },
+    { proposalId: "binary-mopso-cd", instanceId: "binary-a", displayName: "Binary A" },
+    { proposalId: "binary-mopso-cd", instanceId: "binary-b", displayName: "Binary B" },
+    { proposalId: "evolmd", displayName: "EVOLMD" },
+  ]);
+
+  const ordered = comparatorApplyColumnOrder(proposals, ["binary-b", "missing", "mesap"]);
+
+  assert.deepEqual(ordered.map((proposal) => proposal.instanceId || proposal.proposalId), [
+    "binary-b",
+    "mesap",
+    "binary-a",
+    "evolmd",
+  ]);
+});
+
+test("benchmark column move reorders dragged id before target id", () => {
+  assert.deepEqual(
+    comparatorMoveColumnId(["binary-a", "binary-b", "mesap"], "mesap", "binary-a"),
+    ["mesap", "binary-a", "binary-b"],
+  );
+  assert.deepEqual(
+    comparatorMoveColumnId(["binary-a", "binary-b", "mesap"], "binary-a", "mesap"),
+    ["binary-b", "binary-a", "mesap"],
+  );
+  assert.deepEqual(
+    comparatorMoveColumnId(["binary-a", "binary-b", "mesap"], "binary-a", "mesap", "after"),
+    ["binary-b", "mesap", "binary-a"],
+  );
 });
 
 test("benchmark metric winner cell uses strong visual classes", () => {
