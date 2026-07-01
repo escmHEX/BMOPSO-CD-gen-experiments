@@ -45,6 +45,7 @@ HASHTAG_HEAVY_RATIO = 0.5
 OUTPUT_FIELDS = ("tweetId", "texto")
 NOT_HYDRATED_FIELDS = ("tweetId", "reason")
 DISCARDED_FIELDS = ("tweetId", "reason", "cleanedLength")
+CSV_ESCAPE_CHAR = "\\"
 KNOWN_ID_COLUMNS = ("tweet_id", "tweetid", "tweet id", "id", "status_id", "statusid", "status id")
 TWEET_ID_PATTERN = re.compile(r"^\d{5,25}$")
 WHITESPACE_PATTERN = re.compile(r"\s+")
@@ -134,9 +135,6 @@ def normalize_tweet_text(text: str) -> str:
 
 def filter_tweet_text(text: str) -> FilterResult:
     repaired = normalize_tweet_text(_fix_text(text))
-    if MENTION_PATTERN.search(repaired):
-        return FilterResult(text="", reason="mention", cleaned_length=len(repaired))
-
     without_urls = URL_PATTERN.sub("", repaired)
     compact_without_urls = normalize_tweet_text(without_urls)
     if _contains_emoji(compact_without_urls):
@@ -146,7 +144,11 @@ def filter_tweet_text(text: str) -> FilterResult:
         return FilterResult(text="", reason="hashtag_heavy", cleaned_length=len(compact_without_urls))
 
     without_hashtags = HASHTAG_PATTERN.sub("", without_urls)
-    cleaned = normalize_tweet_text(without_hashtags)
+    cleaned = _remove_csv_unsafe_text_chars(_strip_wrapping_double_quotes(normalize_tweet_text(without_hashtags)))
+    if "@" in cleaned or MENTION_PATTERN.search(cleaned):
+        return FilterResult(text="", reason="mention", cleaned_length=len(cleaned))
+    if cleaned.count(":") > 1:
+        return FilterResult(text="", reason="too_many_colons", cleaned_length=len(cleaned))
     if len(cleaned) < MIN_FILTERED_TEXT_CHARS:
         return FilterResult(text="", reason="too_short", cleaned_length=len(cleaned))
     return FilterResult(text=cleaned, reason=None, cleaned_length=len(cleaned))
@@ -172,6 +174,17 @@ def _contains_emoji(text: str) -> bool:
             "'.\\.venv\\Scripts\\python.exe -m pip install -r requirements.dataset.txt'."
         ) from error
     return replace_emoji(text, replace="") != text
+
+
+def _strip_wrapping_double_quotes(text: str) -> str:
+    stripped = text.strip()
+    while len(stripped) >= 2 and stripped[0] == '"' and stripped[-1] == '"':
+        stripped = stripped[1:-1].strip()
+    return normalize_tweet_text(stripped)
+
+
+def _remove_csv_unsafe_text_chars(text: str) -> str:
+    return normalize_tweet_text(text.translate(str.maketrans({"\"": " ", ",": " "})))
 
 
 def _is_hashtag_heavy(text: str) -> bool:
@@ -228,8 +241,8 @@ async def build_corpus(
     with output_path.open("a", encoding="utf-8", newline="") as output_handle, not_hydrated_path.open(
         "a", encoding="utf-8", newline=""
     ) as miss_handle:
-        output_writer = csv.DictWriter(output_handle, fieldnames=OUTPUT_FIELDS)
-        miss_writer = csv.DictWriter(miss_handle, fieldnames=NOT_HYDRATED_FIELDS)
+        output_writer = _make_csv_writer(output_handle, OUTPUT_FIELDS)
+        miss_writer = _make_csv_writer(miss_handle, NOT_HYDRATED_FIELDS)
         _write_header_if_empty(output_path, output_handle, output_writer)
         _write_header_if_empty(not_hydrated_path, miss_handle, miss_writer)
 
@@ -258,7 +271,7 @@ async def build_corpus(
                     break
                 continue
 
-            text = normalize_tweet_text(text or "")
+            text = _remove_csv_unsafe_text_chars(normalize_tweet_text(text or ""))
             if not text:
                 miss_writer.writerow({"tweetId": tweet_id, "reason": "not_found"})
                 miss_handle.flush()
@@ -341,9 +354,9 @@ async def build_filtered_corpus(
     with output_path.open("a", encoding="utf-8", newline="") as output_handle, not_hydrated_path.open(
         "a", encoding="utf-8", newline=""
     ) as miss_handle, discarded_path.open("a", encoding="utf-8", newline="") as discard_handle:
-        output_writer = csv.DictWriter(output_handle, fieldnames=OUTPUT_FIELDS)
-        miss_writer = csv.DictWriter(miss_handle, fieldnames=NOT_HYDRATED_FIELDS)
-        discard_writer = csv.DictWriter(discard_handle, fieldnames=DISCARDED_FIELDS)
+        output_writer = _make_csv_writer(output_handle, OUTPUT_FIELDS)
+        miss_writer = _make_csv_writer(miss_handle, NOT_HYDRATED_FIELDS)
+        discard_writer = _make_csv_writer(discard_handle, DISCARDED_FIELDS)
         _write_header_if_empty(output_path, output_handle, output_writer)
         _write_header_if_empty(not_hydrated_path, miss_handle, miss_writer)
         _write_header_if_empty(discarded_path, discard_handle, discard_writer)
@@ -573,6 +586,17 @@ def _write_header_if_empty(path: Path, handle: TextIO, writer: csv.DictWriter) -
         handle.write("\ufeff")
         writer.writeheader()
         handle.flush()
+
+
+def _make_csv_writer(handle: TextIO, fieldnames: Iterable[str]) -> csv.DictWriter:
+    return csv.DictWriter(
+        handle,
+        fieldnames=fieldnames,
+        escapechar=CSV_ESCAPE_CHAR,
+        lineterminator="\n",
+        quotechar=None,
+        quoting=csv.QUOTE_NONE,
+    )
 
 
 def _remove_existing_artifacts(*paths: Path) -> None:

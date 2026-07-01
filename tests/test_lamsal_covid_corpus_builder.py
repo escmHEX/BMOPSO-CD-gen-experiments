@@ -143,6 +143,34 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
 
         self.assertEqual(result.reason, "mention")
 
+    def test_filter_discards_at_sign_remaining_after_cleanup(self):
+        result = filter_tweet_text("Public update #COVID19 for contact@agency today")
+
+        self.assertEqual(result.reason, "mention")
+
+    def test_filter_strips_wrapping_double_quotes_from_text(self):
+        result = filter_tweet_text('"Public health update remains readable today"')
+
+        self.assertIsNone(result.reason)
+        self.assertEqual(result.text, "Public health update remains readable today")
+
+    def test_filter_removes_internal_double_quotes_from_text(self):
+        result = filter_tweet_text('New study finds troubling signs of "brain complications" in severe COVID-19 cases')
+
+        self.assertIsNone(result.reason)
+        self.assertEqual(result.text, "New study finds troubling signs of brain complications in severe COVID-19 cases")
+
+    def test_filter_removes_commas_from_text(self):
+        result = filter_tweet_text("Texas, Florida, and Arizona have fewer COVID restrictions")
+
+        self.assertIsNone(result.reason)
+        self.assertEqual(result.text, "Texas Florida and Arizona have fewer COVID restrictions")
+
+    def test_filter_discards_text_with_more_than_one_colon_after_cleanup(self):
+        result = filter_tweet_text("Breaking: COVID update: cases rising today")
+
+        self.assertEqual(result.reason, "too_many_colons")
+
     def test_filter_discards_text_shorter_than_15_characters_after_cleaning(self):
         result = filter_tweet_text("Ok https://t.co/x")
 
@@ -230,6 +258,33 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
 
         self.assertTrue(data.startswith(b"\xef\xbb\xbf"))
         self.assertEqual(data.count(b"\xef\xbb\xbf"), 1)
+
+    def test_build_corpus_does_not_wrap_or_escape_internal_double_quotes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            input_dir.mkdir()
+            (input_dir / "ids.csv").write_text("tweet_id\n4747474747474747474\n", encoding="utf-8")
+            output_path = root / "hydrated" / "corpus.csv"
+
+            asyncio.run(
+                build_corpus(
+                    input_path=input_dir,
+                    output_path=output_path,
+                    hydrator=FakeHydrator({"4747474747474747474": 'first part, "quoted" second part'}),
+                    not_hydrated_path=root / "hydrated" / "corpus.not_hydrated.csv",
+                    report_path=root / "hydrated" / "corpus.report.json",
+                    limit=1,
+                )
+            )
+
+            raw_lines = output_path.read_text(encoding="utf-8-sig").splitlines()
+
+        self.assertEqual(raw_lines[0], "tweetId,texto")
+        self.assertEqual(raw_lines[1], '4747474747474747474,first part quoted second part')
+        self.assertNotIn(',"', raw_lines[1])
+        self.assertNotIn('\\"', raw_lines[1])
+        self.assertNotIn("\\,", raw_lines[1])
 
     def test_build_corpus_resumes_by_skipping_existing_output_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
