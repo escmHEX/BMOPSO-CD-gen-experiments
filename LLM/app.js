@@ -33,6 +33,7 @@ import {
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
   comparatorSelectedFrontPointsForIndividuals,
+  comparatorSeriesWithFinalMetricReplacement,
   comparatorSeriesIterationExtent,
   comparatorVisibleFrontChartPoints,
   comparatorVisibleFrontPointCount,
@@ -5386,6 +5387,22 @@ function disposeComparatorCharts() {
   removeComparatorLocalLegends(dom.comparatorChartsTab || document);
 }
 
+function disposeComparatorChartNode(container) {
+  if (!container || !window.echarts) return;
+  const chart = window.echarts.getInstanceByDom(container);
+  if (!chart) return;
+  chart.dispose();
+  comparatorCharts = comparatorCharts.filter((item) => item !== chart);
+  removeComparatorLocalLegends(container.closest(".panel") || container.parentElement || container);
+}
+
+function initComparatorChart(container) {
+  disposeComparatorChartNode(container);
+  const chart = window.echarts.init(container);
+  comparatorCharts.push(chart);
+  return chart;
+}
+
 function disposeComparatorProjectionCharts() {
   comparatorProjectionCharts.forEach((chart) => chart.dispose());
   comparatorProjectionCharts = [];
@@ -5509,6 +5526,33 @@ function comparatorVisibleFrontContext(proposal, runId = comparatorFrontRunId(),
     inactiveCount: partition.inactive.length,
     hasActiveExclusions: partition.inactive.length > 0,
   };
+}
+
+function comparatorActiveSelectedFrontPoints(proposal, context = null) {
+  const frontContext = context || comparatorVisibleFrontContext(proposal);
+  const visibleFront = comparatorVisibleFrontChartPoints(proposal?.charts || {}, COMPARATOR_FRONT_POINT_NAMESPACE);
+  const selectedPoints = comparatorSelectedFrontPointsForIndividuals(
+    visibleFront.individuals,
+    visibleFront.selected,
+    COMPARATOR_FRONT_POINT_NAMESPACE,
+  ).map((point) => comparatorChartPointFromRaw(point));
+  return comparatorPartitionInteractivePoints(
+    selectedPoints,
+    frontContext.excludedKeys,
+    COMPARATOR_FRONT_POINT_NAMESPACE,
+  ).active.map((entry) => entry.point);
+}
+
+function comparatorActiveFrontStates(proposals, runId = comparatorFrontRunId()) {
+  return (proposals || []).map((proposal) => {
+    const context = comparatorVisibleFrontContext(proposal, runId);
+    return {
+      proposal,
+      entityId: comparatorEntityId(proposal),
+      activePoints: context.activePoints,
+      activeSelectedPoints: comparatorActiveSelectedFrontPoints(proposal, context),
+    };
+  });
 }
 
 function comparatorMetricValueFromMetrics(metrics = {}, metricKey = "") {
@@ -5654,14 +5698,16 @@ function comparatorAdjustedQualityMetricMap(proposals) {
   return adjustments;
 }
 
-function comparatorProposalsWithAdjustedQualityMetrics(proposals) {
-  const adjustments = comparatorAdjustedQualityMetricMap(proposals);
+function comparatorProposalsWithAdjustedQualityMetrics(proposals, options = {}) {
+  const adjustments = options.adjustments || comparatorAdjustedQualityMetricMap(proposals);
+  const includeSeries = Boolean(options.includeSeries);
   if (!adjustments.size) return proposals;
   return proposals.map((proposal) => {
     const entityId = comparatorEntityId(proposal);
     const proposalAdjustments = adjustments.get(entityId);
     if (!proposalAdjustments) return proposal;
     const metrics = { ...(proposal.metrics || {}) };
+    let series = proposal.series;
     Object.entries(proposalAdjustments).forEach(([metricKey, adjustment]) => {
       metrics[metricKey] = adjustment.value;
       if (metricKey !== "nonDominatedRows") {
@@ -5670,12 +5716,19 @@ function comparatorProposalsWithAdjustedQualityMetrics(proposals) {
       if (metricKey === "nonDominatedRows" && "postHocNonDominatedRows" in metrics) {
         metrics.postHocNonDominatedRows = adjustment.value;
       }
+      if (includeSeries && Array.isArray(series)) {
+        series = comparatorSeriesWithFinalMetricReplacement(series, metricKey, adjustment.value);
+      }
     });
-    return {
+    const nextProposal = {
       ...proposal,
       metrics,
       comparatorAdjustedMetrics: proposalAdjustments,
     };
+    if (includeSeries && series !== proposal.series) {
+      nextProposal.series = series;
+    }
+    return nextProposal;
   });
 }
 
@@ -8357,16 +8410,24 @@ function renderComparatorCharts(run) {
   const filteredProposals = comparatorFilteredProposals(proposals);
   const pointProposals = comparatorPointChartViewProposals(filteredProposals);
   renderComparatorParetoCharts(pointProposals, comparatorChartStyles, run.runId || "");
-  renderComparatorCombinedSelectedChart(pointProposals, comparatorChartStyles);
-  renderComparatorContributionChart(pointProposals, comparatorChartStyles);
-  renderComparatorMetricLine(dom.comparatorHvChart, filteredProposals, "hypervolume", "HV", comparatorChartStyles);
-  renderComparatorMetricLine(dom.comparatorContributionLineChart, filteredProposals, "contribution", "Contribution", comparatorChartStyles);
-  renderComparatorMetricLine(dom.comparatorExtentChart, filteredProposals, "extent", "Extent", comparatorChartStyles);
-  renderComparatorMetricLine(dom.comparatorUnaryEntropyChart, filteredProposals, "unaryEntropy", "Unary Entropy", comparatorChartStyles);
-  renderComparatorMetricLine(dom.comparatorGlobalInertiaChart, filteredProposals, "globalInertia", "K-means inertia", comparatorChartStyles);
-  renderComparatorMetricLine(dom.comparatorGlobalEntropyChart, filteredProposals, "globalEntropy", "Entity entropy", comparatorChartStyles);
+  renderComparatorDerivedCharts(filteredProposals, comparatorChartStyles, run.runId || "");
   installChartPanelMinimizers(dom.comparatorChartsTab || document.querySelector("#comparatorChartsTab"));
   window.queueMicrotask(() => syncComparatorChartLocalLegends(dom.comparatorChartsTab || document));
+}
+
+function renderComparatorDerivedChartsForRun(run) {
+  if (!window.echarts || !run) return;
+  const proposals = (run.proposals || []).filter((proposal) => proposal.status === "completed");
+  const filteredProposals = comparatorFilteredProposals(proposals);
+  renderComparatorDerivedCharts(filteredProposals, comparatorChartStyles, run.runId || "");
+  installChartPanelMinimizers(dom.comparatorChartsTab || document.querySelector("#comparatorChartsTab"));
+  window.queueMicrotask(() => syncComparatorChartLocalLegends(dom.comparatorChartsTab || document));
+}
+
+function refreshComparatorAdjustedComparatorOutputs() {
+  if (!latestComparatorRun) return;
+  renderComparatorCostDetails(latestComparatorRun);
+  renderComparatorDerivedChartsForRun(latestComparatorRun);
 }
 
 async function renderComparatorEmbeddingProjection(run) {
@@ -9219,7 +9280,7 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
         const option = buildOption();
         setComparatorChartOption(normalizedChart, normalizedChartNode, option);
         installComparatorPointToggle(normalizedChart, normalizedChartNode, buildOption, excludedKeys, () => {
-          if (latestComparatorRun) renderComparatorCostDetails(latestComparatorRun);
+          refreshComparatorAdjustedComparatorOutputs();
         });
         const requestPoints = comparatorFrontDiagnosticRequestPoints(
           comparatorVisibleFrontChartPoints(proposal.charts || {}, COMPARATOR_FRONT_POINT_NAMESPACE).individuals
@@ -9234,7 +9295,7 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
             diagnostics.forEach((value, key) => diagnosticsByKey.set(key, value));
             const selected = comparatorLegendSelection(normalizedChart);
             setComparatorChartOption(normalizedChart, normalizedChartNode, buildOption(), selected);
-            if (latestComparatorRun) renderComparatorCostDetails(latestComparatorRun);
+            refreshComparatorAdjustedComparatorOutputs();
           })
           .catch(() => {});
       });
@@ -9243,9 +9304,24 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
   );
 }
 
-function renderComparatorCombinedSelectedChart(proposals, styleMap = comparatorChartStyles) {
-  const comparisonPool = comparatorAllNonDominatedPoints(proposals);
-  const selectedSeries = proposals.map((proposal, index) => {
+function renderComparatorDerivedCharts(proposals, styleMap = comparatorChartStyles, runId = comparatorFrontRunId()) {
+  const adjustedProposals = comparatorProposalsWithAdjustedQualityMetrics(proposals, { includeSeries: true });
+  const pointProposals = comparatorPointChartViewProposals(adjustedProposals);
+  renderComparatorCombinedSelectedChart(pointProposals, styleMap, runId);
+  renderComparatorContributionChart(pointProposals, styleMap, adjustedProposals, runId);
+  renderComparatorMetricLine(dom.comparatorHvChart, adjustedProposals, "hypervolume", "HV", styleMap);
+  renderComparatorMetricLine(dom.comparatorContributionLineChart, adjustedProposals, "contribution", "Contribution", styleMap);
+  renderComparatorMetricLine(dom.comparatorExtentChart, adjustedProposals, "extent", "Extent", styleMap);
+  renderComparatorMetricLine(dom.comparatorUnaryEntropyChart, adjustedProposals, "unaryEntropy", "Unary Entropy", styleMap);
+  renderComparatorMetricLine(dom.comparatorGlobalInertiaChart, adjustedProposals, "globalInertia", "K-means inertia", styleMap);
+  renderComparatorMetricLine(dom.comparatorGlobalEntropyChart, adjustedProposals, "globalEntropy", "Entity entropy", styleMap);
+}
+
+function renderComparatorCombinedSelectedChart(proposals, styleMap = comparatorChartStyles, runId = comparatorFrontRunId()) {
+  const frontStates = comparatorActiveFrontStates(proposals, runId);
+  const comparisonPool = comparatorGlobalNonDominatedFront(frontStates.flatMap((state) => state.activePoints));
+  const selectedSeries = frontStates.map((state, index) => {
+    const proposal = state.proposal;
     const style = comparatorChartStyleForProposal(proposal, index, styleMap);
     const color = style.color;
     return {
@@ -9253,7 +9329,7 @@ function renderComparatorCombinedSelectedChart(proposals, styleMap = comparatorC
       type: "scatter",
       symbolSize: 14,
       label: { show: false },
-      data: comparatorProposalChartPoints(proposal, "selected").map((point) =>
+      data: state.activeSelectedPoints.map((point) =>
         comparatorChartPointData(point, color, {
           globallyNonDominated: comparatorIsGloballyNonDominated(point, comparisonPool),
         }),
@@ -9261,8 +9337,7 @@ function renderComparatorCombinedSelectedChart(proposals, styleMap = comparatorC
       itemStyle: { color },
     };
   });
-  const chart = window.echarts.init(dom.comparatorCombinedParetoChart);
-  comparatorCharts.push(chart);
+  const chart = initComparatorChart(dom.comparatorCombinedParetoChart);
   const option = baseScatterOption("Top 5 combinado", selectedSeries, {
     description: "Ejes normalizados comparables. Mayor fidelidad y diversidad es mejor. Borde rojo: no dominada frente a la union de propuestas.",
   });
@@ -9270,15 +9345,18 @@ function renderComparatorCombinedSelectedChart(proposals, styleMap = comparatorC
   installComparatorLocalLegend(chart, dom.comparatorCombinedParetoChart, option.series || []);
 }
 
-function renderComparatorContributionChart(proposals, styleMap = comparatorChartStyles) {
-  const globalFront = comparatorGlobalNonDominatedPoints(proposals);
+function renderComparatorContributionChart(proposals, styleMap = comparatorChartStyles, metricProposals = proposals, runId = comparatorFrontRunId()) {
+  const frontStates = comparatorActiveFrontStates(proposals, runId);
+  const globalFront = comparatorGlobalNonDominatedFront(frontStates.flatMap((state) => state.activePoints));
   const countsByProposal = comparatorCountByProposal(globalFront);
-  const series = proposals.map((proposal, index) => {
+  const metricsByEntity = new Map((metricProposals || []).map((proposal) => [comparatorEntityId(proposal), proposal.metrics || {}]));
+  const series = frontStates.map((state, index) => {
+    const proposal = state.proposal;
     const style = comparatorChartStyleForProposal(proposal, index, styleMap);
     const color = style.color;
     const entityId = comparatorEntityId(proposal);
     const points = globalFront.filter((point) => (point.instanceId || point.proposalId) === entityId);
-    const contribution = Number(proposal.metrics?.contribution);
+    const contribution = Number(metricsByEntity.get(entityId)?.contribution);
     const contributionLabel = Number.isFinite(contribution)
       ? `${formatOptionalNumber(contribution * 100, 2)}%`
       : "s/d";
@@ -9291,8 +9369,7 @@ function renderComparatorContributionChart(proposals, styleMap = comparatorChart
       itemStyle: { color },
     };
   });
-  const chart = window.echarts.init(dom.comparatorContributionChart);
-  comparatorCharts.push(chart);
+  const chart = initComparatorChart(dom.comparatorContributionChart);
   const option = baseScatterOption("Contribution", series, {
     description: `${globalFront.length} puntos en el frente combinado P*. Puntos compartidos reparten credito 1/K.`,
   });
@@ -9463,8 +9540,7 @@ function renderComparatorMetricLine(container, proposals, metricKey, title, styl
       lineStyle: { color: style.color, width: style.lineWidth },
     };
   });
-  const chart = window.echarts.init(container);
-  comparatorCharts.push(chart);
+  const chart = initComparatorChart(container);
   const extent = comparatorSeriesIterationExtent(rawSeries);
   let iterationLimit = extent?.max ?? null;
   const buildOption = () => comparatorInteractiveLineOption({
@@ -9963,11 +10039,12 @@ function comparatorGlobalNonDominatedPoints(proposals) {
 }
 
 function comparatorChartPointData(point, color, options = {}) {
+  const coordinates = comparatorPointCoordinates(point);
   const borderColor = options.globallyNonDominated ? "#dc2626" : color;
   const borderWidth = options.globallyNonDominated ? 3 : 0;
   return {
-    value: [point.x, point.y],
-    labelText: point.label,
+    value: coordinates ? [coordinates.x, coordinates.y] : [point.x, point.y],
+    labelText: point.labelText ?? point.label,
     prompt: point.prompt,
     rank: point.rank,
     instanceId: point.instanceId,

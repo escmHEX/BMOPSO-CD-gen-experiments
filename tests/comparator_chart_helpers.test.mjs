@@ -40,6 +40,7 @@ import {
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
   comparatorSelectedFrontPointsForIndividuals,
+  comparatorSeriesWithFinalMetricReplacement,
   comparatorSeriesIterationExtent,
   comparatorUnaryEntropy,
   comparatorVisibleFrontPointCount,
@@ -763,6 +764,35 @@ test("iteration extent and limiter use finite generations without mutating sourc
   assert.deepEqual(comparatorSeriesIterationExtent(series), { min: 0, max: 4 });
   assert.deepEqual(limited.map((item) => item.data), [[[0, 0.05], [1, 0.1], [2, 0.3]], [[1, 0.2]]]);
   assert.deepEqual(series[0].data, [[0, 0.05], [1, 0.1], [2, 0.3], [3, 0.4]]);
+});
+
+test("final metric replacement updates only the last finite series point", () => {
+  const series = [
+    { generation: 0, hypervolume: 0.1, contribution: 0.2 },
+    { generation: 1, hypervolume: 0.3, contribution: 0.4 },
+    { generation: 2, hypervolume: null, contribution: 0.6 },
+    { generation: 3, contribution: 0.8 },
+  ];
+
+  const adjusted = comparatorSeriesWithFinalMetricReplacement(series, "hypervolume", 0.9);
+
+  assert.deepEqual(adjusted.map((point) => point.hypervolume), [0.1, 0.9, null, undefined]);
+  assert.deepEqual(adjusted.map((point) => point.contribution), [0.2, 0.4, 0.6, 0.8]);
+  assert.notEqual(adjusted, series);
+  assert.notEqual(adjusted[1], series[1]);
+  assert.equal(adjusted[0], series[0]);
+  assert.deepEqual(series.map((point) => point.hypervolume), [0.1, 0.3, null, undefined]);
+});
+
+test("final metric replacement keeps series unchanged without a finite adjustment", () => {
+  const series = [
+    { generation: 0, extent: 0.1 },
+    { generation: 1, extent: 0.2 },
+  ];
+
+  assert.equal(comparatorSeriesWithFinalMetricReplacement(series, "extent", null), series);
+  assert.equal(comparatorSeriesWithFinalMetricReplacement(series, "extent", Number.NaN), series);
+  assert.equal(comparatorSeriesWithFinalMetricReplacement(series, "missingMetric", 0.7), series);
 });
 
 test("metric extremes respect best direction", () => {

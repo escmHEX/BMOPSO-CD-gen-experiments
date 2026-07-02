@@ -273,6 +273,32 @@ export function comparatorLimitSeriesToIteration(series = [], iterationLimit = n
   }));
 }
 
+export function comparatorSeriesWithFinalMetricReplacement(series = [], metricKey = "", replacementValue = null) {
+  if (replacementValue === null || replacementValue === undefined || replacementValue === "") return series;
+  const adjustedValue = Number(replacementValue);
+  if (!metricKey || !Number.isFinite(adjustedValue)) return series;
+
+  let replacementIndex = -1;
+  let replacementGeneration = -Infinity;
+  (series || []).forEach((point, index) => {
+    const generation = finiteIterationValue(point);
+    const rawMetricValue = point?.[metricKey];
+    const metricValue = rawMetricValue === null || rawMetricValue === undefined || rawMetricValue === ""
+      ? NaN
+      : Number(rawMetricValue);
+    if (generation === null || !Number.isFinite(metricValue)) return;
+    if (generation >= replacementGeneration) {
+      replacementGeneration = generation;
+      replacementIndex = index;
+    }
+  });
+  if (replacementIndex === -1) return series;
+
+  return series.map((point, index) => (
+    index === replacementIndex ? { ...point, [metricKey]: adjustedValue } : point
+  ));
+}
+
 const COMPARATOR_BINARY_COLOR = "#2A8C00";
 const COMPARATOR_NON_BINARY_PALETTE = Object.freeze([
   "#1F77B4",
