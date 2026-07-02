@@ -31,6 +31,7 @@ import {
   comparatorMetricMeanStdDevLabel,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
+  comparatorMetricReferenceLines,
   comparatorMetricReferenceLinePatch,
   comparatorActivePointCount,
   comparatorLimitSeriesToIteration,
@@ -138,6 +139,17 @@ test("metric reference line patch hides and restores the target series markLine"
     id: "hv:evolmd",
     markLine: referenceLines,
   }]);
+});
+
+test("metric reference line labels stay inside the chart grid", () => {
+  const referenceLines = comparatorMetricReferenceLines([0.2, 0.8, 0.5], true);
+
+  assert.equal(referenceLines.data[0].name, "Mejor");
+  assert.equal(referenceLines.data[0].label.position, "insideEndTop");
+  assert.equal(referenceLines.data[0].label.distance, 4);
+  assert.equal(referenceLines.data[1].name, "Peor");
+  assert.equal(referenceLines.data[1].label.position, "insideEndBottom");
+  assert.equal(referenceLines.data[1].label.distance, 4);
 });
 
 test("global non-dominated front is computed from all proposal points", () => {

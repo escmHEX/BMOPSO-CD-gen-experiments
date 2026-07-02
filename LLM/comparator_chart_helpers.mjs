@@ -405,6 +405,39 @@ export function comparatorMetricReferenceLinePatch(seriesId, referenceLines, hid
   }];
 }
 
+export function comparatorMetricReferenceLines(values, higherIsBetter) {
+  const extremes = comparatorMetricExtremes(values, higherIsBetter);
+  if (!extremes) return null;
+  return {
+    symbol: "none",
+    silent: true,
+    data: [
+      {
+        name: "Mejor",
+        yAxis: extremes.bestValue,
+        lineStyle: { color: "#16a34a", type: "dashed", width: 2 },
+        label: {
+          color: "#166534",
+          formatter: "Mejor: {c}",
+          position: "insideEndTop",
+          distance: 4,
+        },
+      },
+      {
+        name: "Peor",
+        yAxis: extremes.worstValue,
+        lineStyle: { color: "#dc2626", type: "dashed", width: 2 },
+        label: {
+          color: "#991b1b",
+          formatter: "Peor: {c}",
+          position: "insideEndBottom",
+          distance: 4,
+        },
+      },
+    ],
+  };
+}
+
 export function comparatorProposalEntityId(proposal) {
   return proposal?.instanceId || proposal?.proposalId || "";
 }
