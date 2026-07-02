@@ -11,7 +11,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-from sbert_service import shared_sbert_service
+from sbert_service import normalize_projection_method, project_embeddings_2d, shared_sbert_service
 
 
 STATUS_QUEUED = "queued"
@@ -31,6 +31,8 @@ DEFAULT_REFERENCE_TEXT_SELECTION_CONFIG = {
 }
 
 RANKED_CANDIDATE_LIMIT = 25
+SAMPLED_CANDIDATES_FILE = "sampled_candidates.json"
+SAMPLE_EMBEDDINGS_FILE = "sample_embeddings.npy"
 
 
 def utc_now() -> str:
@@ -252,6 +254,31 @@ def select_reference_text(
         )
     )
     selected = ranked[0]
+    ranked_by_original_index = {
+        candidate["originalIndex"]: {**candidate, "rank": rank}
+        for rank, candidate in enumerate(ranked, start=1)
+    }
+    sampled_candidates = []
+    for sample_index, candidate in enumerate(sample):
+        candidate_cluster_index = int(labels[sample_index])
+        ranked_candidate = ranked_by_original_index.get(candidate["originalIndex"])
+        sampled_candidates.append(
+            {
+                "tweetId": candidate["tweetId"],
+                "text": candidate["text"],
+                "originalIndex": candidate["originalIndex"],
+                "wordCount": candidate["wordCount"],
+                "sampleIndex": sample_index,
+                "clusterIndex": candidate_cluster_index,
+                "clusterDisplayIndex": candidate_cluster_index + 1,
+                "isMajorityCluster": candidate_cluster_index == int(cluster_index),
+                "isSelected": candidate["originalIndex"] == selected["originalIndex"],
+                "rank": ranked_candidate["rank"] if ranked_candidate else None,
+                "score": ranked_candidate["score"] if ranked_candidate else None,
+                "semanticDistance": ranked_candidate["semanticDistance"] if ranked_candidate else None,
+                "lengthDistance": ranked_candidate["lengthDistance"] if ranked_candidate else None,
+            }
+        )
     cluster_sizes = {
         str(index + 1): int(np.sum(labels == index))
         for index in range(config["clusterCount"])
@@ -275,6 +302,8 @@ def select_reference_text(
         "embeddingCost": cost,
         "clusterSizes": cluster_sizes,
         "rankedCandidates": ranked[:RANKED_CANDIDATE_LIMIT],
+        "_sampledCandidates": sampled_candidates,
+        "_sampleEmbeddings": embeddings,
     }
 
 
@@ -345,6 +374,8 @@ class ReferenceTextSelectionService:
                 embedding_service=self.embedding_service,
             )
             run_dir = Path(run["runDir"])
+            sampled_candidates = result.pop("_sampledCandidates")
+            sample_embeddings = result.pop("_sampleEmbeddings")
             write_json(run_dir / "selected_reference_text.json", {key: result[key] for key in (
                 "selectedText",
                 "selectedTweetId",
@@ -356,6 +387,10 @@ class ReferenceTextSelectionService:
                 "clusterDisplayIndex",
             )})
             write_json(run_dir / "ranked_candidates.json", result["rankedCandidates"])
+            write_json(run_dir / SAMPLED_CANDIDATES_FILE, sampled_candidates)
+            import numpy as np
+
+            np.save(run_dir / SAMPLE_EMBEDDINGS_FILE, sample_embeddings)
             with self._lock:
                 run.update(result)
                 run["status"] = STATUS_COMPLETED
@@ -373,6 +408,69 @@ class ReferenceTextSelectionService:
                 run["updatedAt"] = utc_now()
                 self._refresh_progress_unlocked(run, str(error), 100)
                 self._write_summary_unlocked(run)
+
+    def get_run_embedding_projection(self, run_id: str, method: str = "pca") -> dict[str, Any] | None:
+        requested_method = normalize_projection_method(method)
+        run = self.get_run(run_id)
+        if not run:
+            return None
+
+        run_dir = Path(str(run.get("runDir") or self.runs_root / str(run_id)))
+        cache_path = run_dir / f"embedding_projection_{requested_method}.json"
+        if cache_path.exists():
+            return read_json(cache_path)
+
+        sampled_candidates_path = run_dir / SAMPLED_CANDIDATES_FILE
+        sample_embeddings_path = run_dir / SAMPLE_EMBEDDINGS_FILE
+        if not sampled_candidates_path.exists() or not sample_embeddings_path.exists():
+            raise ValueError("La corrida no tiene artefactos de proyeccion; vuelve a ejecutarla.")
+
+        import numpy as np
+
+        sampled_candidates = read_json(sampled_candidates_path)
+        embeddings = np.load(sample_embeddings_path)
+        if embeddings.ndim != 2 or embeddings.shape[0] != len(sampled_candidates):
+            raise ValueError("Los artefactos de proyeccion no coinciden con la muestra persistida.")
+
+        projection = project_embeddings_2d(embeddings, requested_method)
+        coordinates = projection["coordinates"]
+        points = []
+        for candidate, coordinate in zip(sampled_candidates, coordinates):
+            points.append(
+                {
+                    "x": coordinate[0],
+                    "y": coordinate[1],
+                    "tweetId": candidate.get("tweetId") or "",
+                    "text": candidate.get("text") or "",
+                    "originalIndex": candidate.get("originalIndex"),
+                    "wordCount": candidate.get("wordCount"),
+                    "clusterIndex": candidate.get("clusterIndex"),
+                    "clusterDisplayIndex": candidate.get("clusterDisplayIndex"),
+                    "isMajorityCluster": bool(candidate.get("isMajorityCluster")),
+                    "isSelected": bool(candidate.get("isSelected")),
+                    "rank": candidate.get("rank"),
+                    "score": candidate.get("score"),
+                    "semanticDistance": candidate.get("semanticDistance"),
+                    "lengthDistance": candidate.get("lengthDistance"),
+                }
+            )
+
+        cost = run.get("embeddingCost") or {}
+        config = run.get("config") or {}
+        payload = {
+            "runId": run_id,
+            "method": projection["method"],
+            "effectiveMethod": projection["effectiveMethod"],
+            "embeddingModel": cost.get("embeddingModel") or config.get("embeddingModel") or "",
+            "embeddingTexts": int(embeddings.shape[0]),
+            "sampleCount": len(sampled_candidates),
+            "selectedTweetId": run.get("selectedTweetId"),
+            "clusterSizes": run.get("clusterSizes") or {},
+            "warnings": projection.get("warnings") or [],
+            "points": points,
+        }
+        write_json(cache_path, payload)
+        return payload
 
     def _refresh_progress_unlocked(self, run: dict[str, Any], detail: str, percent: int) -> None:
         started_at = run.get("startedAtEpoch")

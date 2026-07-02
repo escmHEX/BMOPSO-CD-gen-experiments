@@ -1952,6 +1952,24 @@ table.wide-table {
   min-width: 1320px;
 }
 
+.table-sort-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.table-sort-button span {
+  margin-left: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 .cost-explanation {
   display: grid;
   gap: 8px;

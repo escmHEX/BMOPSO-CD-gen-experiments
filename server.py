@@ -1092,6 +1092,18 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, {"defaults": self.reference_text_selection_service.default_config()})
                 return
 
+            if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "embedding-projection":
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                run = self.reference_text_selection_service.get_run_embedding_projection(
+                    path_parts[1],
+                    method=first_query_value(query, "method") or "pca",
+                )
+                if not run:
+                    self.send_json(404, {"error": "Run not found."})
+                    return
+                self.send_json(200, run)
+                return
+
             if len(path_parts) == 2 and path_parts[0] == "runs":
                 run = self.reference_text_selection_service.get_run(path_parts[1])
                 if not run:

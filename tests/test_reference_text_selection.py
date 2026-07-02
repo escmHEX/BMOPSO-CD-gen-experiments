@@ -12,7 +12,9 @@ import server
 from reference_text_selection.service import (
     DEFAULT_REFERENCE_TEXT_SELECTION_CONFIG,
     ReferenceTextSelectionService,
+    read_json,
     select_reference_text,
+    write_json,
 )
 
 
@@ -263,6 +265,91 @@ class ReferenceTextSelectionServiceTests(unittest.TestCase):
             self.assertTrue((run_dir / "summary.json").exists())
             self.assertTrue((run_dir / "selected_reference_text.json").exists())
             self.assertTrue((run_dir / "ranked_candidates.json").exists())
+            self.assertTrue((run_dir / "sampled_candidates.json").exists())
+            self.assertTrue((run_dir / "sample_embeddings.npy").exists())
+            sampled_candidates = read_json(run_dir / "sampled_candidates.json")
+            sample_embeddings = np.load(run_dir / "sample_embeddings.npy")
+            self.assertEqual(len(sampled_candidates), run["sampleCount"])
+            self.assertEqual(sample_embeddings.shape[0], run["sampleCount"])
+            self.assertEqual([item["originalIndex"] for item in sampled_candidates], [1, 2])
+            self.assertEqual(sum(1 for item in sampled_candidates if item["isSelected"]), 1)
+
+    def test_service_projects_persisted_sample_embeddings(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.tsv"
+            first = "alpha beta gamma"
+            second = "alpha beta delta"
+            third = "omega psi chi"
+            write_tsv(dataset, [("first", first), ("second", second), ("third", third)])
+            service = ReferenceTextSelectionService(
+                root,
+                embedding_service=FakeEmbeddingService(
+                    {
+                        first: [1.0, 0.0, 0.0],
+                        second: [0.98, 0.2, 0.0],
+                        third: [-1.0, 0.0, 0.0],
+                    }
+                ),
+            )
+
+            run = service.start_run(
+                {
+                    "datasetPath": str(dataset),
+                    "sampleSize": 3,
+                    "clusterCount": 2,
+                    "minWords": 1,
+                    "maxWords": 10,
+                    "seed": 42,
+                    "semanticWeight": 0.7,
+                    "embeddingModel": "all-MiniLM-L6-v2",
+                }
+            )
+            deadline = time.monotonic() + 5
+            while run["status"] in {"queued", "running"} and time.monotonic() < deadline:
+                time.sleep(0.05)
+                run = service.get_run(run["runId"])
+
+            payload = service.get_run_embedding_projection(run["runId"], method="pca")
+
+            self.assertEqual(payload["runId"], run["runId"])
+            self.assertEqual(payload["method"], "pca")
+            self.assertEqual(payload["effectiveMethod"], "pca")
+            self.assertEqual(payload["embeddingModel"], "all-MiniLM-L6-v2")
+            self.assertEqual(payload["sampleCount"], 3)
+            self.assertEqual(len(payload["points"]), 3)
+            selected_points = [point for point in payload["points"] if point["isSelected"]]
+            self.assertEqual(len(selected_points), 1)
+            self.assertEqual(selected_points[0]["tweetId"], run["selectedTweetId"])
+            self.assertIn("clusterSizes", payload)
+            self.assertTrue(
+                (root / "runs" / "reference-text-selection" / run["runId"] / "embedding_projection_pca.json").exists()
+            )
+
+    def test_projection_returns_none_for_missing_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = ReferenceTextSelectionService(Path(temp_dir), embedding_service=FakeEmbeddingService({}))
+
+            self.assertIsNone(service.get_run_embedding_projection("missing-run", method="pca"))
+
+    def test_projection_requires_persisted_sample_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_dir = root / "runs" / "reference-text-selection" / "old-run"
+            run_dir.mkdir(parents=True)
+            write_json(
+                run_dir / "summary.json",
+                {
+                    "runId": "old-run",
+                    "runDir": str(run_dir),
+                    "status": "completed",
+                    "config": {"embeddingModel": "all-MiniLM-L6-v2"},
+                },
+            )
+            service = ReferenceTextSelectionService(root, embedding_service=FakeEmbeddingService({}))
+
+            with self.assertRaisesRegex(ValueError, "artefactos de proyeccion"):
+                service.get_run_embedding_projection("old-run", method="pca")
 
 
 class ReferenceTextSelectionServerRouteTests(unittest.TestCase):
@@ -303,6 +390,53 @@ class ReferenceTextSelectionServerRouteTests(unittest.TestCase):
 
         self.assertEqual(sent, [(200, {"runId": "run-1"})])
 
+    def test_embedding_projection_route_returns_projection_payload(self):
+        sent: list[tuple[int, dict]] = []
+        fake_handler = SimpleNamespace(
+            path="/api/reference-text-selection/runs/run-1/embedding-projection?method=pca",
+            reference_text_selection_path_parts=lambda: ["runs", "run-1", "embedding-projection"],
+            reference_text_selection_service=SimpleNamespace(
+                get_run_embedding_projection=lambda run_id, method: {"runId": run_id, "method": method}
+            ),
+            send_json=lambda status, payload: sent.append((status, payload)),
+        )
+
+        server.ToolPortalHandler.handle_reference_text_selection_get(fake_handler)
+
+        self.assertEqual(sent, [(200, {"runId": "run-1", "method": "pca"})])
+
+    def test_embedding_projection_route_returns_400_for_invalid_method(self):
+        sent: list[tuple[int, dict]] = []
+        fake_handler = SimpleNamespace(
+            path="/api/reference-text-selection/runs/run-1/embedding-projection?method=mds",
+            reference_text_selection_path_parts=lambda: ["runs", "run-1", "embedding-projection"],
+            reference_text_selection_service=SimpleNamespace(
+                get_run_embedding_projection=lambda run_id, method: (_ for _ in ()).throw(
+                    ValueError("method debe ser pca, tsne o umap.")
+                )
+            ),
+            send_json=lambda status, payload: sent.append((status, payload)),
+        )
+
+        server.ToolPortalHandler.handle_reference_text_selection_get(fake_handler)
+
+        self.assertEqual(sent, [(400, {"error": "method debe ser pca, tsne o umap."})])
+
+    def test_embedding_projection_route_returns_500_for_unexpected_errors(self):
+        sent: list[tuple[int, dict]] = []
+        fake_handler = SimpleNamespace(
+            path="/api/reference-text-selection/runs/run-1/embedding-projection?method=pca",
+            reference_text_selection_path_parts=lambda: ["runs", "run-1", "embedding-projection"],
+            reference_text_selection_service=SimpleNamespace(
+                get_run_embedding_projection=lambda run_id, method: (_ for _ in ()).throw(RuntimeError("boom"))
+            ),
+            send_json=lambda status, payload: sent.append((status, payload)),
+        )
+
+        server.ToolPortalHandler.handle_reference_text_selection_get(fake_handler)
+
+        self.assertEqual(sent, [(500, {"error": "boom"})])
+
 
 class ReferenceTextSelectionFrontendSmokeTests(unittest.TestCase):
     def test_reference_text_selection_nav_is_after_proposal_comparator(self):
@@ -330,12 +464,19 @@ class ReferenceTextSelectionFrontendSmokeTests(unittest.TestCase):
             "saveSelectedReferenceButton",
             "referenceSelectionResultText",
             "referenceSelectionCandidatesBody",
+            "referenceSelectionRunId",
+            "referenceSelectionResumeRunId",
+            "resumeReferenceSelectionButton",
+            "referenceSelectionProjectionMethod",
+            "referenceSelectionProjectionStatus",
+            "referenceSelectionProjectionChart",
         ):
             self.assertIn(f'id="{element_id}"', html)
 
         app = Path("LLM/app.js").read_text(encoding="utf-8")
         self.assertIn('const REFERENCE_TEXT_SELECTION_API = "/api/reference-text-selection";', app)
         self.assertIn("runReferenceTextSelection", app)
+        self.assertIn("renderReferenceTextSelectionProjection", app)
 
 
 if __name__ == "__main__":

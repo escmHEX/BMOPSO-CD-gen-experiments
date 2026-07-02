@@ -44,6 +44,11 @@ import {
   comparatorHistoricalInstancesFromRun,
   comparatorSameInitialPopulationForBmopsoPayload,
 } from "./comparator_instance_helpers.mjs";
+import {
+  DEFAULT_REFERENCE_TEXT_SELECTION_SORT,
+  nextReferenceTextSelectionSort,
+  sortReferenceTextSelectionCandidates,
+} from "./reference_text_selection_helpers.mjs";
 
 const EMBEDDING_MODELS = {
   "all-MiniLM-L6-v2": {
@@ -454,6 +459,11 @@ let currentTurbulenceComparisonRunId = null;
 let referenceTextSelectionPollTimer = null;
 let currentReferenceTextSelectionRunId = null;
 let latestReferenceTextSelectionRun = null;
+let referenceTextSelectionProjectionChart = null;
+let referenceTextSelectionProjectionSignature = "";
+let referenceTextSelectionProjectionLoadToken = 0;
+let referenceTextSelectionCandidates = [];
+let referenceTextSelectionCandidateSort = { ...DEFAULT_REFERENCE_TEXT_SELECTION_SORT };
 let turbulenceMetricPopover = null;
 let referenceTextLibrary = [];
 let lmStudioModelOptions = [];
@@ -842,8 +852,11 @@ const dom = {
   runReferenceSelectionButton: document.querySelector("#runReferenceSelectionButton"),
   clearReferenceSelectionButton: document.querySelector("#clearReferenceSelectionButton"),
   saveSelectedReferenceButton: document.querySelector("#saveSelectedReferenceButton"),
+  referenceSelectionResumeRunId: document.querySelector("#referenceSelectionResumeRunId"),
+  resumeReferenceSelectionButton: document.querySelector("#resumeReferenceSelectionButton"),
   referenceSelectionConnectionDot: document.querySelector("#referenceSelectionConnectionDot"),
   referenceSelectionConnectionText: document.querySelector("#referenceSelectionConnectionText"),
+  referenceSelectionRunId: document.querySelector("#referenceSelectionRunId"),
   referenceSelectionRunStatus: document.querySelector("#referenceSelectionRunStatus"),
   referenceSelectionProgressPercent: document.querySelector("#referenceSelectionProgressPercent"),
   referenceSelectionProgressSummary: document.querySelector("#referenceSelectionProgressSummary"),
@@ -859,6 +872,10 @@ const dom = {
   referenceSelectionSelectedId: document.querySelector("#referenceSelectionSelectedId"),
   referenceSelectionResultText: document.querySelector("#referenceSelectionResultText"),
   referenceSelectionMetadata: document.querySelector("#referenceSelectionMetadata"),
+  referenceSelectionProjectionMethod: document.querySelector("#referenceSelectionProjectionMethod"),
+  referenceSelectionProjectionStatus: document.querySelector("#referenceSelectionProjectionStatus"),
+  referenceSelectionProjectionChart: document.querySelector("#referenceSelectionProjectionChart"),
+  referenceSelectionCandidatesHead: document.querySelector("#referenceSelectionCandidatesHead"),
   referenceSelectionCandidatesBody: document.querySelector("#referenceSelectionCandidatesBody"),
   embeddingModelLabel: document.querySelector("#embeddingModelLabel"),
   embeddingModelSelect: document.querySelector("#embeddingModelSelect"),
@@ -899,6 +916,7 @@ const COMPARATOR_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"
 const COMPARATOR_MAX_TRANSIENT_POLL_FAILURES = 5;
 const COMPARATOR_LOG_CHUNK_LIMIT = 5000;
 const COMPARATOR_LAST_RUN_ID_STORAGE_KEY = "comparator:lastRunId";
+const REFERENCE_TEXT_SELECTION_LAST_RUN_ID_STORAGE_KEY = "referenceTextSelection:lastRunId";
 const COMPARATOR_METRIC_COLUMN_ORDER_STORAGE_PREFIX = "comparator.metricColumnOrder.";
 const COMPARATOR_CHART_ZOOM_FACTOR = 100;
 const COMPARATOR_CHART_PADDING_RATIO = 0.08;
@@ -2250,6 +2268,12 @@ function setReferenceTextSelectionRunning(isRunning) {
   dom.runReferenceSelectionButton.disabled = isRunning;
   dom.clearReferenceSelectionButton.disabled = isRunning;
   dom.saveSelectedReferenceButton.disabled = isRunning || latestReferenceTextSelectionRun?.status !== "completed";
+  if (dom.resumeReferenceSelectionButton) {
+    dom.resumeReferenceSelectionButton.disabled = isRunning;
+  }
+  if (dom.referenceSelectionResumeRunId) {
+    dom.referenceSelectionResumeRunId.disabled = isRunning;
+  }
   [
     dom.referenceSelectionDatasetPath,
     dom.referenceSelectionSampleSize,
@@ -2271,10 +2295,53 @@ function stopReferenceTextSelectionPolling() {
   }
 }
 
+function disposeReferenceTextSelectionProjectionChart() {
+  if (referenceTextSelectionProjectionChart) {
+    referenceTextSelectionProjectionChart.dispose();
+    referenceTextSelectionProjectionChart = null;
+  }
+}
+
+function storeReferenceTextSelectionRunId(runId) {
+  if (!runId) return;
+  if (dom.referenceSelectionResumeRunId) {
+    dom.referenceSelectionResumeRunId.value = runId;
+  }
+  try {
+    window.localStorage.setItem(REFERENCE_TEXT_SELECTION_LAST_RUN_ID_STORAGE_KEY, runId);
+  } catch (_error) {
+    // localStorage can be unavailable in restricted browser modes.
+  }
+}
+
+function loadStoredReferenceTextSelectionRunId() {
+  try {
+    return window.localStorage.getItem(REFERENCE_TEXT_SELECTION_LAST_RUN_ID_STORAGE_KEY) || "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function resetReferenceTextSelectionProjection() {
+  referenceTextSelectionProjectionSignature = "";
+  referenceTextSelectionProjectionLoadToken += 1;
+  disposeReferenceTextSelectionProjectionChart();
+  if (dom.referenceSelectionProjectionStatus) {
+    dom.referenceSelectionProjectionStatus.textContent = "Ejecuta o carga una corrida completada para proyectar la muestra.";
+  }
+  if (dom.referenceSelectionProjectionChart) {
+    dom.referenceSelectionProjectionChart.innerHTML = "";
+  }
+}
+
 function resetReferenceTextSelectionUi() {
   stopReferenceTextSelectionPolling();
   currentReferenceTextSelectionRunId = null;
   latestReferenceTextSelectionRun = null;
+  referenceTextSelectionCandidates = [];
+  referenceTextSelectionCandidateSort = { ...DEFAULT_REFERENCE_TEXT_SELECTION_SORT };
+  resetReferenceTextSelectionProjection();
+  dom.referenceSelectionRunId.textContent = "--";
   dom.referenceSelectionRunStatus.textContent = "--";
   dom.referenceSelectionProgressPercent.textContent = "--";
   dom.referenceSelectionProgressSummary.textContent = "Sin corrida activa.";
@@ -2288,7 +2355,7 @@ function resetReferenceTextSelectionUi() {
   dom.referenceSelectionProgressBar.style.width = "0%";
   dom.referenceSelectionSelectedId.textContent = "--";
   dom.referenceSelectionResultText.textContent = "Ejecuta el modulo para ver el texto seleccionado.";
-  dom.referenceSelectionCandidatesBody.innerHTML = '<tr><td colspan="7">Sin candidatos todavia.</td></tr>';
+  renderReferenceTextSelectionCandidates([]);
   renderDefinitionList(dom.referenceSelectionMetadata, []);
   setStatus(
     dom.referenceSelectionStatusTone,
@@ -2356,6 +2423,7 @@ async function runReferenceTextSelection() {
       body: JSON.stringify(config),
     });
     currentReferenceTextSelectionRunId = run.runId;
+    storeReferenceTextSelectionRunId(run.runId);
     renderReferenceTextSelectionRun(run);
     referenceTextSelectionPollTimer = window.setInterval(
       () => refreshReferenceTextSelectionRun(currentReferenceTextSelectionRunId),
@@ -2400,11 +2468,53 @@ async function refreshReferenceTextSelectionRun(runId) {
   }
 }
 
+async function resumeReferenceTextSelectionRun() {
+  const runId = (dom.referenceSelectionResumeRunId?.value || loadStoredReferenceTextSelectionRunId()).trim();
+  if (!runId) {
+    setStatus(
+      dom.referenceSelectionStatusTone,
+      dom.referenceSelectionStatusTitle,
+      dom.referenceSelectionStatusDetail,
+      "Run ID requerido",
+      "Ingresa un Run ID de obtencion de texto de referencia.",
+      "error",
+    );
+    return;
+  }
+  stopReferenceTextSelectionPolling();
+  resetReferenceTextSelectionProjection();
+  currentReferenceTextSelectionRunId = runId;
+  storeReferenceTextSelectionRunId(runId);
+  setReferenceTextSelectionRunning(true);
+  setStatus(
+    dom.referenceSelectionStatusTone,
+    dom.referenceSelectionStatusTitle,
+    dom.referenceSelectionStatusDetail,
+    "Cargando corrida",
+    `Consultando ${runId}.`,
+    "busy",
+  );
+  const run = await refreshReferenceTextSelectionRun(runId);
+  setReferenceTextSelectionRunning(false);
+  if (run && (run.status === "queued" || run.status === "running")) {
+    setReferenceTextSelectionRunning(true);
+    referenceTextSelectionPollTimer = window.setInterval(
+      () => refreshReferenceTextSelectionRun(currentReferenceTextSelectionRunId),
+      1500,
+    );
+  }
+}
+
 function renderReferenceTextSelectionRun(run) {
   latestReferenceTextSelectionRun = run;
+  if (run.runId) {
+    currentReferenceTextSelectionRunId = run.runId;
+    storeReferenceTextSelectionRunId(run.runId);
+  }
   const progress = run.progress || {};
   const status = referenceSelectionStatusLabel(run.status);
   const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  dom.referenceSelectionRunId.textContent = run.runId || "--";
   dom.referenceSelectionRunStatus.textContent = status;
   dom.referenceSelectionProgressPercent.textContent = `${percent}%`;
   dom.referenceSelectionProgressSummary.textContent = progress.detail || "Sin detalle.";
@@ -2422,6 +2532,11 @@ function renderReferenceTextSelectionRun(run) {
   renderReferenceTextSelectionMetadata(run);
   renderReferenceTextSelectionCandidates(run.rankedCandidates || []);
   dom.saveSelectedReferenceButton.disabled = run.status !== "completed";
+  if (run.status === "completed") {
+    renderReferenceTextSelectionProjection(run);
+  } else {
+    resetReferenceTextSelectionProjection();
+  }
   setStatus(
     dom.referenceSelectionStatusTone,
     dom.referenceSelectionStatusTitle,
@@ -2431,6 +2546,150 @@ function renderReferenceTextSelectionRun(run) {
     run.status === "queued" || run.status === "running" ? "busy" : run.status === "failed" ? "error" : "ready",
   );
   decorateAbbreviationTooltips(document.getElementById("referenceTextSelection") || document);
+}
+
+async function renderReferenceTextSelectionProjection(run) {
+  if (!dom.referenceSelectionProjectionChart || !dom.referenceSelectionProjectionMethod) return;
+  if (!window.echarts) {
+    dom.referenceSelectionProjectionChart.innerHTML = '<p class="invalid">ECharts no esta disponible.</p>';
+    return;
+  }
+  if (!run?.runId || run.status !== "completed") {
+    resetReferenceTextSelectionProjection();
+    return;
+  }
+  const method = dom.referenceSelectionProjectionMethod.value || "pca";
+  const signature = JSON.stringify({
+    runId: run.runId,
+    method,
+    sampleCount: run.sampleCount,
+    selectedTweetId: run.selectedTweetId,
+  });
+  if (signature === referenceTextSelectionProjectionSignature) return;
+  referenceTextSelectionProjectionSignature = signature;
+  const token = ++referenceTextSelectionProjectionLoadToken;
+  disposeReferenceTextSelectionProjectionChart();
+  dom.referenceSelectionProjectionChart.innerHTML = "";
+  dom.referenceSelectionProjectionStatus.textContent = `Calculando ${projectionMethodLabel(method)} sobre la muestra de la corrida.`;
+  try {
+    const payload = await requestReferenceTextSelectionJson(
+      `/runs/${encodeURIComponent(run.runId)}/embedding-projection?method=${encodeURIComponent(method)}`,
+    );
+    if (token !== referenceTextSelectionProjectionLoadToken) return;
+    renderReferenceTextSelectionProjectionPayload(payload);
+  } catch (error) {
+    if (token !== referenceTextSelectionProjectionLoadToken) return;
+    referenceTextSelectionProjectionSignature = "";
+    disposeReferenceTextSelectionProjectionChart();
+    dom.referenceSelectionProjectionChart.innerHTML = `<p class="invalid">No se pudo calcular la proyeccion: ${escapeHtml(error.message)}</p>`;
+    dom.referenceSelectionProjectionStatus.textContent = "No se pudo calcular la proyeccion seleccionada.";
+  }
+}
+
+function renderReferenceTextSelectionProjectionPayload(payload) {
+  const points = payload.points || [];
+  const warnings = (payload.warnings || []).filter(Boolean);
+  const effective = payload.effectiveMethod && payload.effectiveMethod !== payload.method
+    ? ` (${projectionMethodLabel(payload.effectiveMethod)} efectivo)`
+    : "";
+  dom.referenceSelectionProjectionStatus.textContent = [
+    `${projectionMethodLabel(payload.method)}${effective}; ${payload.embeddingTexts || 0} texto(s) de la muestra con ${payload.embeddingModel || "--"}.`,
+    warnings.join(" "),
+  ].filter(Boolean).join(" ");
+  if (!points.length) {
+    disposeReferenceTextSelectionProjectionChart();
+    dom.referenceSelectionProjectionChart.innerHTML = '<p class="muted-text">Sin puntos disponibles para proyectar.</p>';
+    return;
+  }
+  const chart = window.echarts.init(dom.referenceSelectionProjectionChart);
+  referenceTextSelectionProjectionChart = chart;
+  const option = referenceTextSelectionProjectionChartOption(payload);
+  chart.setOption(option);
+  installComparatorLocalLegend(chart, dom.referenceSelectionProjectionChart, option.series || []);
+}
+
+function referenceTextSelectionProjectionPointData(point) {
+  return {
+    value: [point.x, point.y],
+    labelText: point.text,
+    tweetId: point.tweetId,
+    originalIndex: point.originalIndex,
+    wordCount: point.wordCount,
+    clusterDisplayIndex: point.clusterDisplayIndex,
+    isMajorityCluster: Boolean(point.isMajorityCluster),
+    isSelected: Boolean(point.isSelected),
+    rank: point.rank,
+    score: point.score,
+    semanticDistance: point.semanticDistance,
+    lengthDistance: point.lengthDistance,
+  };
+}
+
+function referenceTextSelectionProjectionChartOption(payload) {
+  const axisName = projectionMethodLabel(payload.effectiveMethod || payload.method);
+  const clusters = new Map();
+  (payload.points || []).forEach((point) => {
+    const cluster = Number(point.clusterDisplayIndex || 0);
+    if (!clusters.has(cluster)) {
+      clusters.set(cluster, []);
+    }
+    clusters.get(cluster).push(point);
+  });
+  const clusterSeries = [...clusters.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([cluster, points], index) => {
+      const color = comparatorProposalColor({ proposalId: `reference-cluster-${cluster}` }, index);
+      return {
+        name: `Cluster ${cluster || "--"}`,
+        type: "scatter",
+        symbolSize: 9,
+        data: points.map(referenceTextSelectionProjectionPointData),
+        itemStyle: {
+          color,
+          opacity: 0.78,
+          shadowBlur: 0,
+        },
+        z: 2,
+      };
+    });
+  const selectedPoints = (payload.points || [])
+    .filter((point) => point.isSelected)
+    .map(referenceTextSelectionProjectionPointData);
+  return baseScatterOption("Muestra proyectada", [
+    ...clusterSeries,
+    {
+      name: "Texto seleccionado",
+      type: "scatter",
+      symbol: "star",
+      symbolSize: 24,
+      data: selectedPoints,
+      itemStyle: { color: "#facc15", borderColor: "#92400e", borderWidth: 1.5 },
+      z: 6,
+    },
+  ], {
+    description: "Embeddings SBERT de la muestra aleatoria usada por K-means.",
+    xAxisName: `${axisName} 1`,
+    yAxisName: `${axisName} 2`,
+    tooltipFormatter: referenceTextSelectionProjectionTooltipFormatter,
+    includeIdeal: false,
+  });
+}
+
+function referenceTextSelectionProjectionTooltipFormatter(params) {
+  const data = params.data || {};
+  const value = params.value || [];
+  const selected = data.isSelected ? "<br>Texto seleccionado" : "";
+  const majority = data.isMajorityCluster ? "<br>Cluster mayoritario" : "";
+  return `
+    <strong>${escapeHtml(params.seriesName)}</strong><br>
+    X: ${formatOptionalNumber(value[0], 6)}<br>
+    Y: ${formatOptionalNumber(value[1], 6)}<br>
+    tweetId: ${escapeHtml(String(data.tweetId || "--"))}<br>
+    Palabras: ${escapeHtml(String(data.wordCount ?? "--"))}<br>
+    Rank: ${escapeHtml(String(data.rank ?? "--"))}<br>
+    Score: ${formatOptionalNumber(data.score, 6)}${selected}${majority}<br>
+    ${escapeHtml(String(data.labelText || "")).slice(0, 300)}
+  `;
 }
 
 function renderReferenceTextSelectionMetadata(run) {
@@ -2451,12 +2710,18 @@ function renderReferenceTextSelectionMetadata(run) {
 }
 
 function renderReferenceTextSelectionCandidates(candidates) {
-  if (!candidates.length) {
+  referenceTextSelectionCandidates = Array.isArray(candidates) ? candidates : referenceTextSelectionCandidates;
+  const sortedCandidates = sortReferenceTextSelectionCandidates(
+    referenceTextSelectionCandidates,
+    referenceTextSelectionCandidateSort,
+  );
+  renderReferenceTextSelectionSortIndicators();
+  if (!sortedCandidates.length) {
     dom.referenceSelectionCandidatesBody.innerHTML = '<tr><td colspan="7">Sin candidatos todavia.</td></tr>';
     return;
   }
   dom.referenceSelectionCandidatesBody.replaceChildren(
-    ...candidates.map((candidate, index) => {
+    ...sortedCandidates.map((candidate, index) => {
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${index + 1}</td>
@@ -2470,6 +2735,29 @@ function renderReferenceTextSelectionCandidates(candidates) {
       return tr;
     }),
   );
+}
+
+function renderReferenceTextSelectionSortIndicators() {
+  dom.referenceSelectionCandidatesHead?.querySelectorAll("[data-reference-sort]").forEach((button) => {
+    const key = button.dataset.referenceSort;
+    const active = key === referenceTextSelectionCandidateSort.key;
+    button.setAttribute("aria-sort", active ? referenceTextSelectionCandidateSort.direction : "none");
+    const indicator = button.querySelector("[data-reference-sort-indicator]");
+    if (indicator) {
+      indicator.textContent = active ? referenceTextSelectionCandidateSort.direction : "";
+    }
+  });
+}
+
+function handleReferenceTextSelectionCandidateSort(event) {
+  if (!(event.target instanceof Element)) return;
+  const button = event.target.closest("[data-reference-sort]");
+  if (!button) return;
+  referenceTextSelectionCandidateSort = nextReferenceTextSelectionSort(
+    referenceTextSelectionCandidateSort,
+    button.dataset.referenceSort,
+  );
+  renderReferenceTextSelectionCandidates(referenceTextSelectionCandidates);
 }
 
 async function saveSelectedReferenceText() {
@@ -10970,6 +11258,14 @@ dom.resumeComparatorButton?.addEventListener("click", resumeComparatorRun);
 dom.runReferenceSelectionButton?.addEventListener("click", runReferenceTextSelection);
 dom.clearReferenceSelectionButton?.addEventListener("click", resetReferenceTextSelectionUi);
 dom.saveSelectedReferenceButton?.addEventListener("click", saveSelectedReferenceText);
+dom.resumeReferenceSelectionButton?.addEventListener("click", resumeReferenceTextSelectionRun);
+dom.referenceSelectionCandidatesHead?.addEventListener("click", handleReferenceTextSelectionCandidateSort);
+dom.referenceSelectionProjectionMethod?.addEventListener("change", () => {
+  referenceTextSelectionProjectionSignature = "";
+  if (latestReferenceTextSelectionRun?.status === "completed") {
+    renderReferenceTextSelectionProjection(latestReferenceTextSelectionRun);
+  }
+});
 dom.comparatorResumeRunId?.addEventListener("input", () => {
   syncComparatorDownloadButton();
   syncComparatorRecontinueButton(latestComparatorRun);
@@ -11072,6 +11368,7 @@ window.addEventListener("resize", () => {
   comparatorCharts.forEach((chart) => chart.resize());
   comparatorProjectionCharts.forEach((chart) => chart.resize());
   comparatorInternalBmopsoCharts.forEach((chart) => chart.resize());
+  referenceTextSelectionProjectionChart?.resize();
   syncComparatorConfigGroupLayouts();
 });
 dom.solutionLlmModelSelect.addEventListener("change", () => {
@@ -11157,6 +11454,9 @@ refreshTurbulencePpdbStatus();
 resetComparatorUi({ clearStoredRunId: false });
 resetReferenceTextSelectionUi();
 loadReferenceTextSelectionDefaults();
+if (dom.referenceSelectionResumeRunId) {
+  dom.referenceSelectionResumeRunId.value = loadStoredReferenceTextSelectionRunId();
+}
 if (dom.comparatorResumeRunId) {
   dom.comparatorResumeRunId.value = loadStoredComparatorRunId();
 }
