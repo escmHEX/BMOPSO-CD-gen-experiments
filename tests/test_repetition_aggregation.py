@@ -2613,6 +2613,9 @@ class RepetitionAggregationTests(unittest.TestCase):
                     "llmCalls": 2,
                     "llmEmptyContentCalls": 1,
                     "llmClientWallClockSeconds": 1.0,
+                    "processWallClockSeconds": 4.0,
+                    "promptEvalCount": 10,
+                    "evalCount": 6,
                     "totalTokens": 20,
                 },
             },
@@ -2643,6 +2646,9 @@ class RepetitionAggregationTests(unittest.TestCase):
                     "llmCalls": 3,
                     "llmEmptyContentCalls": 1,
                     "llmClientWallClockSeconds": 2.0,
+                    "processWallClockSeconds": 8.0,
+                    "promptEvalCount": 14,
+                    "evalCount": 10,
                     "totalTokens": 30,
                 },
             },
@@ -2653,17 +2659,33 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(aggregated["metrics"]["bestObjectiveLabel"], "[0.700000]")
         self.assertEqual(aggregated["metrics"]["nonDominatedRows"], 3.0)
         self.assertEqual(aggregated["metrics"]["postHocNonDominatedRows"], 3.0)
+        self.assertAlmostEqual(aggregated["metrics"]["nonDominatedRowsStdDev"], 2 ** 0.5)
+        self.assertEqual(aggregated["metrics"]["nonDominatedRowsStdDevLabel"], "1.414214")
+        self.assertAlmostEqual(aggregated["metrics"]["hypervolumeStdDev"], 0.1414213562373095)
+        self.assertEqual(aggregated["metrics"]["hypervolumeStdDevLabel"], "0.141421")
+        self.assertAlmostEqual(aggregated["metrics"]["extentStdDev"], 0.1414213562373095)
+        self.assertAlmostEqual(aggregated["metrics"]["unaryEntropyStdDev"], 0.282842712474619)
+        self.assertAlmostEqual(aggregated["metrics"]["contributionStdDev"], 0.3535533905932738)
         self.assertAlmostEqual(aggregated["metrics"]["externalArchiveUpdateCount"], 6.0)
         self.assertAlmostEqual(aggregated["metrics"]["externalArchivePruneCount"], 2.0)
         self.assertEqual(aggregated["metrics"]["externalArchiveUpdateCountTotal"], 12)
         self.assertEqual(aggregated["metrics"]["externalArchivePruneCountTotal"], 4)
         self.assertAlmostEqual(aggregated["cost"]["llmCalls"], 2.5)
+        self.assertAlmostEqual(aggregated["cost"]["llmCallsStdDev"], 0.7071067811865476)
+        self.assertEqual(aggregated["cost"]["llmCallsStdDevLabel"], "0.71")
         self.assertEqual(aggregated["cost"]["llmCallsTotal"], 5)
         self.assertAlmostEqual(aggregated["cost"]["llmEmptyContentCalls"], 1.0)
         self.assertEqual(aggregated["cost"]["llmEmptyContentCallsTotal"], 2)
+        self.assertAlmostEqual(aggregated["cost"]["processWallClockSeconds"], 6.0)
+        self.assertAlmostEqual(aggregated["cost"]["processWallClockSecondsStdDev"], 2.8284271247461903)
+        self.assertEqual(aggregated["cost"]["processWallClockSecondsStdDevLabel"], "3s")
         self.assertAlmostEqual(aggregated["cost"]["llmClientWallClockSeconds"], 1.5)
         self.assertAlmostEqual(aggregated["cost"]["llmClientWallClockSecondsTotal"], 3.0)
         self.assertAlmostEqual(aggregated["cost"]["llmAverageCallSeconds"], 0.6)
+        self.assertAlmostEqual(aggregated["cost"]["promptEvalCountStdDev"], 2.8284271247461903)
+        self.assertEqual(aggregated["cost"]["promptEvalCountStdDevLabel"], "2.83")
+        self.assertAlmostEqual(aggregated["cost"]["evalCountStdDev"], 2.8284271247461903)
+        self.assertEqual(aggregated["cost"]["evalCountStdDevLabel"], "2.83")
         self.assertAlmostEqual(aggregated["cost"]["totalTokens"], 25.0)
         self.assertEqual(aggregated["cost"]["totalTokensTotal"], 50)
         self.assertEqual(aggregated["rows"][0]["repetitionSeed"], 10)
@@ -3479,6 +3501,57 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertAlmostEqual(contributions["evolmd-mo"], 0.25)
         self.assertAlmostEqual(contributions["evolmd"], 0.0)
         self.assertAlmostEqual(sum(contributions.values()), 1.0)
+
+    def test_contribution_keeps_global_value_and_adds_repetition_std_dev(self):
+        service = ComparatorService(Path("."))
+        run = {
+            "proposals": [
+                {
+                    "instanceId": "binary",
+                    "proposalId": "binary-mopso-cd",
+                    "status": "completed",
+                    "metrics": {},
+                    "charts": {"nonDominated": [{"x": 0.9, "y": 0.9}]},
+                    "pointChartRepetitions": [
+                        {
+                            "repetitionIndex": 1,
+                            "charts": {"nonDominated": [{"x": 0.9, "y": 0.9}]},
+                        },
+                        {
+                            "repetitionIndex": 2,
+                            "charts": {"nonDominated": [{"x": 0.2, "y": 0.2}]},
+                        },
+                    ],
+                },
+                {
+                    "instanceId": "evolmd",
+                    "proposalId": "evolmd",
+                    "status": "completed",
+                    "metrics": {},
+                    "charts": {"nonDominated": [{"x": 0.8, "y": 0.8}]},
+                    "pointChartRepetitions": [
+                        {
+                            "repetitionIndex": 1,
+                            "charts": {"nonDominated": [{"x": 0.8, "y": 0.8}]},
+                        },
+                        {
+                            "repetitionIndex": 2,
+                            "charts": {"nonDominated": [{"x": 0.8, "y": 0.8}]},
+                        },
+                    ],
+                },
+            ],
+        }
+
+        service._apply_contribution_metrics_unlocked(run)
+
+        binary_metrics = run["proposals"][0]["metrics"]
+        evolmd_metrics = run["proposals"][1]["metrics"]
+        self.assertAlmostEqual(binary_metrics["contribution"], 1.0)
+        self.assertAlmostEqual(evolmd_metrics["contribution"], 0.0)
+        self.assertAlmostEqual(binary_metrics["contributionStdDev"], 2 ** -0.5)
+        self.assertEqual(binary_metrics["contributionStdDevLabel"], "0.707107")
+        self.assertAlmostEqual(evolmd_metrics["contributionStdDev"], 2 ** -0.5)
 
     def test_evolmd_mo_legacy_series_reads_global_inertia_and_entropy(self):
         with tempfile.TemporaryDirectory() as temp_dir:

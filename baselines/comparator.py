@@ -11,6 +11,7 @@ import ast
 import shlex
 import shutil
 import signal
+import statistics
 import subprocess
 import sys
 import threading
@@ -1194,6 +1195,41 @@ def average_present(values: list[Any]) -> float | None:
     return sum(numbers) / len(numbers) if numbers else None
 
 
+def finite_present_numbers(values: list[Any]) -> list[float]:
+    numbers: list[float] = []
+    for value in values:
+        if value is None:
+            continue
+        number = finite_float(value, None)
+        if number is not None:
+            numbers.append(number)
+    return numbers
+
+
+def sample_std_dev_present(values: list[Any]) -> float | None:
+    numbers = finite_present_numbers(values)
+    return statistics.stdev(numbers) if len(numbers) >= 2 else None
+
+
+def apply_std_dev_field(
+    target: dict[str, Any],
+    key: str,
+    values: list[Any],
+    *,
+    digits: int = 6,
+    label_formatter: Callable[[float], str] | None = None,
+) -> None:
+    std_dev = sample_std_dev_present(values)
+    value_key = f"{key}StdDev"
+    label_key = f"{key}StdDevLabel"
+    if std_dev is None:
+        target.pop(value_key, None)
+        target.pop(label_key, None)
+        return
+    target[value_key] = std_dev
+    target[label_key] = label_formatter(std_dev) if label_formatter else f"{std_dev:.{digits}f}"
+
+
 def average_vector(vectors: list[Any]) -> list[float]:
     normalized = [
         [finite_float(value) for value in vector]
@@ -1282,7 +1318,7 @@ def aggregate_comparator_costs(results: list[dict[str, Any]]) -> dict[str, Any]:
     has_ollama_duration_report = any(bool(cost.get("hasOllamaDurationReport")) for cost in costs)
     average_call_seconds = llm_client_seconds_total / llm_calls_total if llm_calls_total > 0 else None
     runtime_breakdown_total = aggregate_runtime_breakdowns(costs)
-    return {
+    aggregated = {
         "costAggregation": "per_repetition_average",
         "costAggregationRepetitions": count,
         "processWallClockSeconds": process_seconds_total / count,
@@ -1342,6 +1378,16 @@ def aggregate_comparator_costs(results: list[dict[str, Any]]) -> dict[str, Any]:
         "runtimeBreakdownTotal": runtime_breakdown_total,
         "metricsPaths": [cost.get("metricsPath") for cost in costs if cost.get("metricsPath")],
     }
+    apply_std_dev_field(
+        aggregated,
+        "processWallClockSeconds",
+        [cost.get("processWallClockSeconds") for cost in costs],
+        label_formatter=label_from_seconds,
+    )
+    apply_std_dev_field(aggregated, "llmCalls", [cost.get("llmCalls") for cost in costs], digits=2)
+    apply_std_dev_field(aggregated, "promptEvalCount", [cost.get("promptEvalCount") for cost in costs], digits=2)
+    apply_std_dev_field(aggregated, "evalCount", [cost.get("evalCount") for cost in costs], digits=2)
+    return aggregated
 
 
 def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Path) -> dict[str, Any]:
@@ -1426,6 +1472,11 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
         "moConvention": first_metrics.get("moConvention"),
         "repetitionAggregation": "Promedio sobre repeticiones K con semillas distintas.",
     }
+    apply_std_dev_field(metrics, "nonDominatedRows", [metrics.get("nonDominatedRows") for metrics in metrics_list])
+    apply_std_dev_field(metrics, "hypervolume", [metrics.get("hypervolume") for metrics in metrics_list])
+    apply_std_dev_field(metrics, "extent", [metrics.get("extent") for metrics in metrics_list])
+    apply_std_dev_field(metrics, "unaryEntropy", [metrics.get("unaryEntropy") for metrics in metrics_list])
+    apply_std_dev_field(metrics, "contribution", [metrics.get("contribution") for metrics in metrics_list])
     if archive_update_average is not None and archive_prune_average is not None:
         metrics.update(
             {
@@ -1436,6 +1487,10 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
             }
         )
     if first_metrics.get("postHocDiagnostic"):
+        posthoc_values = [
+            item.get("postHocNonDominatedRows")
+            for item in metrics_list
+        ]
         posthoc_non_dominated = average_present([
             item.get("postHocNonDominatedRows")
             for item in metrics_list
@@ -1450,16 +1505,32 @@ def aggregate_comparator_metrics(results: list[dict[str, Any]], proposal_dir: Pa
                 "nonDominatedRows": posthoc_non_dominated,
             }
         )
+        apply_std_dev_field(metrics, "nonDominatedRows", posthoc_values)
+        apply_std_dev_field(metrics, "postHocNonDominatedRows", posthoc_values)
     if first_metrics.get("proxyDiagnostic"):
         metrics["proxyDiagnostic"] = True
     return metrics
 
 
-def attach_terminal_series_diagnostics(metrics: dict[str, Any], series: list[dict[str, Any]]) -> dict[str, Any]:
+def attach_terminal_series_diagnostics(
+    metrics: dict[str, Any],
+    series: list[dict[str, Any]],
+    repetition_results: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    repetition_results = repetition_results or []
     for key, label_key in (("globalInertia", "globalInertiaLabel"), ("globalEntropy", "globalEntropyLabel")):
         value = latest_finite_series_value(series, key)
         metrics[key] = value
         metrics[label_key] = f"{value:.6f}" if value is not None else "No aplica"
+        apply_std_dev_field(
+            metrics,
+            key,
+            [
+                latest_finite_series_value(result.get("series") or [], key)
+                for result in repetition_results
+                if isinstance(result, dict)
+            ],
+        )
     return metrics
 
 
@@ -1792,7 +1863,7 @@ def aggregate_proposal_repetitions(
                 })
 
     series = aggregate_series(completed)
-    metrics = attach_terminal_series_diagnostics(aggregate_comparator_metrics(completed, proposal_dir), series)
+    metrics = attach_terminal_series_diagnostics(aggregate_comparator_metrics(completed, proposal_dir), series, completed)
     if not embedding_front_rows:
         embedding_front_rows = embedding_front_rows_from_rows(rows, selected_rows)
     point_chart_repetitions = [
@@ -4416,14 +4487,20 @@ class ComparatorService:
             metrics = proposal.setdefault("metrics", {})
             metrics["contribution"] = contribution
             metrics["contributionLabel"] = f"{contribution:.6f}"
+        self._apply_repetition_contribution_std_devs(completed)
         self._apply_series_contribution_metrics(completed)
 
     def _proposal_entity_id(self, proposal: dict[str, Any]) -> str:
         return str(proposal.get("instanceId") or proposal.get("proposalId") or "")
 
     def _proposal_non_dominated_points(self, proposal: dict[str, Any]) -> list[tuple[float, float]]:
+        return self._non_dominated_points_from_charts(proposal.get("charts") or {})
+
+    def _non_dominated_points_from_charts(self, charts: dict[str, Any]) -> list[tuple[float, float]]:
         points: list[tuple[float, float]] = []
-        for point in ((proposal.get("charts") or {}).get("nonDominated") or []):
+        if not isinstance(charts, dict):
+            return points
+        for point in (charts.get("nonDominated") or []):
             if not isinstance(point, dict):
                 continue
             x_value = finite_float(point.get("x"), None)
@@ -4432,6 +4509,34 @@ class ComparatorService:
                 continue
             points.append((x_value, y_value))
         return points
+
+    def _apply_repetition_contribution_std_devs(self, proposals: list[dict[str, Any]]) -> None:
+        points_by_repetition: dict[int, dict[str, list[tuple[float, float]]]] = {}
+        for proposal in proposals:
+            entity_id = self._proposal_entity_id(proposal)
+            if not entity_id:
+                continue
+            for payload in proposal_point_chart_repetitions(proposal):
+                repetition_index = finite_int_or_none(payload.get("repetitionIndex"))
+                if repetition_index is None:
+                    continue
+                charts = payload.get("charts") if isinstance(payload.get("charts"), dict) else {}
+                points_by_repetition.setdefault(repetition_index, {})[entity_id] = self._non_dominated_points_from_charts(charts)
+
+        values_by_entity: dict[str, list[float]] = {
+            self._proposal_entity_id(proposal): []
+            for proposal in proposals
+            if self._proposal_entity_id(proposal)
+        }
+        for points_by_proposal in points_by_repetition.values():
+            contributions = calculate_contribution(points_by_proposal)
+            for entity_id, contribution in contributions.items():
+                values_by_entity.setdefault(entity_id, []).append(contribution)
+
+        for proposal in proposals:
+            entity_id = self._proposal_entity_id(proposal)
+            metrics = proposal.setdefault("metrics", {})
+            apply_std_dev_field(metrics, "contribution", values_by_entity.get(entity_id, []))
 
     def _apply_series_contribution_metrics(self, proposals: list[dict[str, Any]]) -> None:
         generations = sorted(

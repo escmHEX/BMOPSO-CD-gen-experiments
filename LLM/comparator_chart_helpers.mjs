@@ -801,3 +801,10 @@ export function comparatorMetricDeltaLabel(deltaPercent) {
   if (rounded === 0) return "0%";
   return `${value > 0 ? "+" : "-"}${rounded}%`;
 }
+
+export function comparatorMetricMeanStdDevLabel(meanLabel, stdDevLabel) {
+  const mean = String(meanLabel ?? "").trim();
+  const stdDev = String(stdDevLabel ?? "").trim();
+  if (!mean || !stdDev || stdDev === "--" || stdDev === "No aplica") return mean;
+  return `${mean} ± ${stdDev}`;
+}

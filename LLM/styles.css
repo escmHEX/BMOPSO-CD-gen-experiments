@@ -2130,7 +2130,9 @@ table.wide-table {
 }
 
 .comparator-metric-value {
-  display: inline;
+  display: inline-block;
+  max-width: 100%;
+  line-height: 1.2;
 }
 
 .comparator-metric-delta {

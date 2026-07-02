@@ -16,6 +16,7 @@ import {
   comparatorMetricCellClassName,
   comparatorMetricDeltaLabel,
   comparatorMetricDeltaPercent,
+  comparatorMetricMeanStdDevLabel,
   comparatorMoveColumnId,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
@@ -7341,6 +7342,7 @@ function renderComparatorCostExplanation(run) {
     <p><strong>${escapeHtml(comparable ? "Costos comparables" : "Costos no comparables")}</strong>: ${escapeHtml(comparisonDetail)}</p>
     <p>Modo: ${escapeHtml(policy.label || run.config?.executionMode || "--")}; paralelismo efectivo ${escapeHtml(String(effective))} de ${escapeHtml(String(requested))} solicitado(s); wall-clock total de corrida ${escapeHtml(runCost.runWallClockLabel || "--")}.</p>
     <p>La tabla consolida calidad y costo por propuesta. Las metricas de calidad siempre resaltan el mejor valor; costos, llamadas y tokens solo resaltan ganador cuando la ejecucion fue comparable.</p>
+    <p>Cuando hay al menos dos repeticiones completadas, ± indica desviacion estandar muestral entre repeticiones.</p>
     <p>Tokens de entrada y salida se muestran separados. totalTokens queda solo como trazabilidad tecnica en el JSON.</p>
   `;
 }
@@ -7351,6 +7353,8 @@ function comparatorBenchmarkMetricDefinitions() {
     direction: "min",
     value: (_proposal, cost) => cost[key],
     format: (_proposal, cost) => cost[labelKey] || "--",
+    stdDevValue: (_proposal, cost) => cost[`${key}StdDev`],
+    stdDevFormat: (_proposal, cost) => cost[`${key}StdDevLabel`] || formatComparatorCostQuantity(cost[`${key}StdDev`], 2),
     isReported: (_proposal, cost) => cost[key] !== null && cost[key] !== undefined && Number.isFinite(Number(cost[key])),
   });
   const qualityMetric = (key, labelKey, label, detail) => ({
@@ -7361,6 +7365,8 @@ function comparatorBenchmarkMetricDefinitions() {
     detail,
     value: (proposal) => proposal.metrics?.[key],
     format: (proposal) => proposal.metrics?.[labelKey] || formatComparatorCostQuantity(proposal.metrics?.[key], 6),
+    stdDevValue: (proposal) => proposal.metrics?.[`${key}StdDev`],
+    stdDevFormat: (proposal) => proposal.metrics?.[`${key}StdDevLabel`] || formatComparatorCostQuantity(proposal.metrics?.[`${key}StdDev`], 6),
     isReported: (proposal) => Number.isFinite(Number(proposal.metrics?.[key])),
   });
   return [
@@ -7372,6 +7378,10 @@ function comparatorBenchmarkMetricDefinitions() {
       detail: "Cantidad de soluciones del frente Pareto comparable final.",
       value: (proposal) => proposal.metrics?.nonDominatedRows ?? proposal.metrics?.postHocNonDominatedRows,
       format: (proposal) => formatComparatorCostQuantity(proposal.metrics?.nonDominatedRows ?? proposal.metrics?.postHocNonDominatedRows ?? 0),
+      stdDevValue: (proposal) => proposal.metrics?.nonDominatedRowsStdDev ?? proposal.metrics?.postHocNonDominatedRowsStdDev,
+      stdDevFormat: (proposal) => proposal.metrics?.nonDominatedRowsStdDevLabel
+        || proposal.metrics?.postHocNonDominatedRowsStdDevLabel
+        || formatComparatorCostQuantity(proposal.metrics?.nonDominatedRowsStdDev ?? proposal.metrics?.postHocNonDominatedRowsStdDev, 2),
       isReported: (proposal) => Number.isFinite(Number(proposal.metrics?.nonDominatedRows ?? proposal.metrics?.postHocNonDominatedRows)),
     },
     qualityMetric("hypervolume", "hypervolumeLabel", "HV", "Area dominada respecto a [0,0] en el espacio proxy comparable."),
@@ -7394,6 +7404,8 @@ function comparatorBenchmarkMetricDefinitions() {
       detail: "Promedio de llamadas reales registradas hacia el LLM por repeticion completada.",
       value: (_proposal, cost) => cost.llmCalls,
       format: (_proposal, cost) => formatComparatorCostQuantity(cost.llmCalls ?? 0),
+      stdDevValue: (_proposal, cost) => cost.llmCallsStdDev,
+      stdDevFormat: (_proposal, cost) => cost.llmCallsStdDevLabel || formatComparatorCostQuantity(cost.llmCallsStdDev, 2),
       isReported: (_proposal, cost) => Number.isFinite(Number(cost.llmCalls)),
     },
     {
@@ -7404,6 +7416,8 @@ function comparatorBenchmarkMetricDefinitions() {
       detail: "Promedio de tokens de prompt reportados por repeticion completada.",
       value: (_proposal, cost) => cost.promptEvalCount,
       format: (_proposal, cost) => formatComparatorCostQuantity(cost.promptEvalCount ?? 0),
+      stdDevValue: (_proposal, cost) => cost.promptEvalCountStdDev,
+      stdDevFormat: (_proposal, cost) => cost.promptEvalCountStdDevLabel || formatComparatorCostQuantity(cost.promptEvalCountStdDev, 2),
       isReported: (_proposal, cost) => comparatorCostHasTokenReport(cost),
       requireAllReported: true,
     },
@@ -7415,6 +7429,8 @@ function comparatorBenchmarkMetricDefinitions() {
       detail: "Promedio de tokens de salida reportados por repeticion completada.",
       value: (_proposal, cost) => cost.evalCount,
       format: (_proposal, cost) => formatComparatorCostQuantity(cost.evalCount ?? 0),
+      stdDevValue: (_proposal, cost) => cost.evalCountStdDev,
+      stdDevFormat: (_proposal, cost) => cost.evalCountStdDevLabel || formatComparatorCostQuantity(cost.evalCountStdDev, 2),
       isReported: (_proposal, cost) => comparatorCostHasTokenReport(cost),
       requireAllReported: true,
     },
@@ -7636,7 +7652,8 @@ function comparatorCostMetricCell(proposal, metric, winners, options = {}) {
   const { cost, value, reported } = comparatorMetricValue(proposal, metric);
   const primaryColumn = Boolean(options.primaryColumn);
   const best = proposal.status === "completed" && reported && winners.has(comparatorEntityId(proposal));
-  const label = reported ? metric.format(proposal, cost) : "No reportado";
+  const meanLabel = reported ? metric.format(proposal, cost) : "No reportado";
+  const label = comparatorMetricMeanStdDevLabel(meanLabel, reported ? comparatorMetricStdDevLabel(proposal, metric, cost) : "");
   const className = comparatorMetricCellClassName({ primaryColumn, best });
   const columnId = String(options.columnId || comparatorEntityId(proposal));
   const deltaHtml = primaryColumn || !reported
@@ -7646,6 +7663,14 @@ function comparatorCostMetricCell(proposal, metric, winners, options = {}) {
     ? `<strong>${escapeHtml(label)}</strong>`
     : escapeHtml(label);
   return `<td class="${className}" data-comparator-metric-column-id="${escapeHtml(columnId)}" draggable="true"><span class="comparator-metric-value">${valueHtml}</span>${deltaHtml}</td>`;
+}
+
+function comparatorMetricStdDevLabel(proposal, metric, cost) {
+  if (!metric.stdDevValue) return "";
+  const rawValue = metric.stdDevValue(proposal, cost);
+  const value = rawValue === null || rawValue === undefined || rawValue === "" ? NaN : Number(rawValue);
+  if (!Number.isFinite(value)) return "";
+  return metric.stdDevFormat ? metric.stdDevFormat(proposal, cost) : formatComparatorCostQuantity(value, metric.kind === "quality" ? 6 : 2);
 }
 
 function comparatorMetricDeltaHtml(primaryValue, comparisonValue, direction) {

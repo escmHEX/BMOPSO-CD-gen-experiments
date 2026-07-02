@@ -23,6 +23,7 @@ import {
   comparatorMetricDeltaLabel,
   comparatorMetricDeltaPercent,
   comparatorMoveColumnId,
+  comparatorMetricMeanStdDevLabel,
   comparatorMetricExtremes,
   comparatorMetricMetadata,
   comparatorMetricReferenceLinePatch,
@@ -251,6 +252,12 @@ test("metric delta label keeps explicit improvement signs", () => {
   assert.equal(comparatorMetricDeltaLabel(20), "+20%");
   assert.equal(comparatorMetricDeltaLabel(-8.4), "-8%");
   assert.equal(comparatorMetricDeltaLabel(0), "0%");
+});
+
+test("metric mean standard deviation label appends explicit SD when available", () => {
+  assert.equal(comparatorMetricMeanStdDevLabel("0.300000", "0.141421"), "0.300000 ± 0.141421");
+  assert.equal(comparatorMetricMeanStdDevLabel("0.300000", "No aplica"), "0.300000");
+  assert.equal(comparatorMetricMeanStdDevLabel("0.300000", ""), "0.300000");
 });
 
 test("hypervolume area uses stepped front from reference origin", () => {
