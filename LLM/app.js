@@ -5,6 +5,7 @@ import {
   comparatorBenchmarkProposals,
   comparatorBestMetricProposalIds,
   comparatorCanRecontinueRun,
+  comparatorClearPointExclusions,
   comparatorChartAxisWindow,
   comparatorCountByProposal,
   comparatorExpandedAxisWindow,
@@ -919,6 +920,9 @@ const COMPARATOR_METRIC_REFERENCE_ICON = "path://M4,7H20M4,12H20M4,17H20M5,20L19
 const COMPARATOR_HIDE_SERIES_TOOL_KEY = "myComparatorHideSeries";
 const COMPARATOR_HIDE_SERIES_TITLE = "Ocultar series";
 const COMPARATOR_HIDE_SERIES_ICON = "path://M4,6H20V8H4ZM4,11H20V13H4ZM4,16H20V18H4Z";
+const COMPARATOR_RESET_FRONT_POINTS_TOOL_KEY = "myComparatorResetFrontPoints";
+const COMPARATOR_RESET_FRONT_POINTS_TITLE = "Restaurar puntos";
+const COMPARATOR_RESET_FRONT_POINTS_ICON = "path://M12,5V2L7,6L12,10V7C15.31,7 18,9.69 18,13C18,16.31 15.31,19 12,19C9.61,19 7.55,17.61 6.57,15.6L4.75,16.45C6.05,19.14 8.8,21 12,21C16.42,21 20,17.42 20,13C20,8.58 16.42,5 12,5Z";
 const BINARY_ROUTER_HEURISTIC_KEYS = [
   "router.heuristics.semantic_anchor_extraction",
   "router.heuristics.central_anchor_selection",
@@ -9168,7 +9172,45 @@ function syncComparatorChartLocalLegends(root = document) {
   });
 }
 
+function resetComparatorFrontPointSelection(chart, chartNode, buildOption, excludedKeys, onReset = null) {
+  if (!comparatorClearPointExclusions(excludedKeys)) return;
+  const selected = comparatorLegendSelection(chart);
+  setComparatorChartOption(chart, chartNode, buildOption(), selected);
+  installComparatorFrontPointResetTool(chart, chartNode, buildOption, excludedKeys, onReset);
+  if (typeof onReset === "function") {
+    onReset();
+  }
+}
+
+function comparatorFrontPointResetToolboxFeature(chart, chartNode, buildOption, excludedKeys, onReset = null) {
+  return {
+    show: true,
+    title: COMPARATOR_RESET_FRONT_POINTS_TITLE,
+    icon: COMPARATOR_RESET_FRONT_POINTS_ICON,
+    onclick: () => resetComparatorFrontPointSelection(chart, chartNode, buildOption, excludedKeys, onReset),
+  };
+}
+
+function installComparatorFrontPointResetTool(chart, chartNode, buildOption, excludedKeys, onReset = null) {
+  chart.setOption({
+    toolbox: {
+      feature: {
+        [COMPARATOR_RESET_FRONT_POINTS_TOOL_KEY]: comparatorFrontPointResetToolboxFeature(
+          chart,
+          chartNode,
+          buildOption,
+          excludedKeys,
+          onReset,
+        ),
+      },
+    },
+  });
+}
+
 function installComparatorPointToggle(chart, chartNode, buildOption, excludedKeys, onToggle = null) {
+  const installResetTool = typeof onToggle === "function"
+    ? () => installComparatorFrontPointResetTool(chart, chartNode, buildOption, excludedKeys, onToggle)
+    : () => {};
   chart.on("click", (params) => {
     const key = params?.data?.pointInteractionKey;
     if (!key) return;
@@ -9179,10 +9221,13 @@ function installComparatorPointToggle(chart, chartNode, buildOption, excludedKey
     }
     const selected = comparatorLegendSelection(chart);
     setComparatorChartOption(chart, chartNode, buildOption(), selected);
+    installResetTool();
     if (typeof onToggle === "function") {
       onToggle();
     }
   });
+  installResetTool();
+  return installResetTool;
 }
 
 function installComparatorCurveVisibilityToggle(chart) {
@@ -9279,7 +9324,7 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
         );
         const option = buildOption();
         setComparatorChartOption(normalizedChart, normalizedChartNode, option);
-        installComparatorPointToggle(normalizedChart, normalizedChartNode, buildOption, excludedKeys, () => {
+        const installPointResetTool = installComparatorPointToggle(normalizedChart, normalizedChartNode, buildOption, excludedKeys, () => {
           refreshComparatorAdjustedComparatorOutputs();
         });
         const requestPoints = comparatorFrontDiagnosticRequestPoints(
@@ -9295,6 +9340,7 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
             diagnostics.forEach((value, key) => diagnosticsByKey.set(key, value));
             const selected = comparatorLegendSelection(normalizedChart);
             setComparatorChartOption(normalizedChart, normalizedChartNode, buildOption(), selected);
+            installPointResetTool();
             refreshComparatorAdjustedComparatorOutputs();
           })
           .catch(() => {});

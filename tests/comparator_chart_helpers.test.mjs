@@ -39,6 +39,7 @@ import {
   comparatorPointInteractionKey,
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
+  comparatorClearPointExclusions,
   comparatorSelectedFrontPointsForIndividuals,
   comparatorSeriesWithFinalMetricReplacement,
   comparatorSeriesIterationExtent,
@@ -752,6 +753,15 @@ test("interactive point partition excludes points without mutating source arrays
   assert.deepEqual(partition.inactive.map((entry) => entry.point.labelText), ["excluded"]);
   assert.equal(comparatorActivePointCount(points, new Set([excludedKey]), "Individuos"), 2);
   assert.deepEqual(points.map((point) => point.labelText), ["active", "excluded", "active-b"]);
+});
+
+test("clearing point exclusions reports whether the active front changed", () => {
+  const excludedKeys = new Set(["point-a", "point-b"]);
+
+  assert.equal(comparatorClearPointExclusions(excludedKeys), true);
+  assert.equal(excludedKeys.size, 0);
+  assert.equal(comparatorClearPointExclusions(excludedKeys), false);
+  assert.equal(comparatorClearPointExclusions(["point-a"]), false);
 });
 
 test("iteration extent and limiter use finite generations without mutating source series", () => {

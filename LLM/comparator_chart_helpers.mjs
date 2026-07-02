@@ -239,6 +239,12 @@ export function comparatorPartitionPointsByExclusion(points = [], excludedKeys =
   }, { active: [], inactive: [] });
 }
 
+export function comparatorClearPointExclusions(excludedKeys) {
+  if (!(excludedKeys instanceof Set) || excludedKeys.size === 0) return false;
+  excludedKeys.clear();
+  return true;
+}
+
 export function comparatorActivePointCount(points = [], excludedKeys = new Set(), namespace = "") {
   return comparatorPartitionPointsByExclusion(points, excludedKeys, namespace).active.length;
 }
