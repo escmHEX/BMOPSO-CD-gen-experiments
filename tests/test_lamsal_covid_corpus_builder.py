@@ -7,12 +7,20 @@ import zipfile
 from pathlib import Path
 
 from scripts.build_lamsal_covid_corpus import (
+    CachedTweetTextHydrator,
     DEFAULT_COOKIES_FILE,
     DEFAULT_FILTERED_OUTPUT,
+    audit_quality_tsv,
     build_filtered_corpus,
     build_corpus,
+    build_quality_corpus,
     discover_tweet_ids,
+    filter_quality_tweet_text,
     filter_tweet_text,
+    iter_hydration_skip_cache_paths,
+    iter_hydrated_text_cache_paths,
+    load_hydration_skip_ids,
+    load_hydrated_text_cache,
     normalize_tweet_text,
     _parse_args,
     _resolve_output_path,
@@ -51,6 +59,95 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
         args = _parse_args(["--filtered", "--overwrite"])
 
         self.assertTrue(args.overwrite)
+
+    def test_cli_accepts_quality_tsv_flags(self):
+        args = _parse_args(["--filtered", "--quality", "--format", "tsv", "--target-valid", "50"])
+
+        self.assertTrue(args.quality)
+        self.assertEqual(args.output_format, "tsv")
+        self.assertEqual(args.target_valid, 50)
+
+    def test_cached_hydrator_uses_local_text_before_fallback(self):
+        fallback = FakeHydrator({"2222222222222222222": "remote text"})
+        hydrator = CachedTweetTextHydrator(
+            cache={"1111111111111111111": "cached text"},
+            fallback=fallback,
+        )
+
+        cached = asyncio.run(hydrator.fetch_text("1111111111111111111"))
+        remote = asyncio.run(hydrator.fetch_text("2222222222222222222"))
+
+        self.assertEqual(cached, "cached text")
+        self.assertEqual(remote, "remote text")
+        self.assertEqual(fallback.requested, ["2222222222222222222"])
+
+    def test_load_hydrated_text_cache_ignores_auxiliary_files_and_exclusions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            (cache_dir / "sample.csv").write_text(
+                "tweetId,texto\n"
+                "1111111111111111111,CSV text\n",
+                encoding="utf-8",
+            )
+            (cache_dir / "sample.tsv").write_text(
+                "tweetId\ttexto\n"
+                "2222222222222222222\tTSV text, with comma\n",
+                encoding="utf-8",
+            )
+            (cache_dir / "sample.discarded.tsv").write_text(
+                "tweetId\treason\tcleanedLength\n"
+                "3333333333333333333\tmention\t20\n",
+                encoding="utf-8",
+            )
+            excluded_output = cache_dir / "output.tsv"
+            excluded_output.write_text(
+                "tweetId\ttexto\n"
+                "4444444444444444444\tExcluded text\n",
+                encoding="utf-8",
+            )
+
+            paths = list(iter_hydrated_text_cache_paths(cache_dir, exclude_paths=(excluded_output,)))
+            cache = load_hydrated_text_cache(paths)
+
+        self.assertEqual(paths, [cache_dir / "sample.csv", cache_dir / "sample.tsv"])
+        self.assertEqual(
+            cache,
+            {
+                "1111111111111111111": "CSV text",
+                "2222222222222222222": "TSV text, with comma",
+            },
+        )
+
+    def test_load_hydration_skip_ids_uses_auxiliary_files_except_exclusions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            (cache_dir / "old.not_hydrated.csv").write_text(
+                "tweetId,reason\n"
+                "1111111111111111111,not_found\n",
+                encoding="utf-8",
+            )
+            (cache_dir / "old.discarded.tsv").write_text(
+                "tweetId\treason\tcleanedLength\n"
+                "2222222222222222222\tmention\t30\n",
+                encoding="utf-8",
+            )
+            (cache_dir / "sample.tsv").write_text(
+                "tweetId\ttexto\n"
+                "3333333333333333333\tValid cached text\n",
+                encoding="utf-8",
+            )
+            excluded_auxiliary = cache_dir / "current.not_hydrated.tsv"
+            excluded_auxiliary.write_text(
+                "tweetId\treason\n"
+                "4444444444444444444\ttimeout\n",
+                encoding="utf-8",
+            )
+
+            paths = list(iter_hydration_skip_cache_paths(cache_dir, exclude_paths=(excluded_auxiliary,)))
+            skip_ids = load_hydration_skip_ids(paths)
+
+        self.assertEqual(paths, [cache_dir / "old.discarded.tsv", cache_dir / "old.not_hydrated.csv"])
+        self.assertEqual(skip_ids, {"1111111111111111111", "2222222222222222222"})
 
     def test_discovers_default_id_columns_and_deduplicates_in_stable_order(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -175,6 +272,49 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
         result = filter_tweet_text("Ok https://t.co/x")
 
         self.assertEqual(result.reason, "too_short")
+
+    def test_quality_filter_preserves_commas_for_tsv(self):
+        result = filter_quality_tweet_text("Texas, Florida, and Arizona have fewer COVID restrictions")
+
+        self.assertIsNone(result.reason)
+        self.assertEqual(result.text, "Texas, Florida, and Arizona have fewer COVID restrictions")
+
+    def test_quality_filter_discards_thread_markers(self):
+        samples = [
+            "Useful public health information for everyone 1/2",
+            "Useful public health information for everyone 3 / 4",
+            "Useful public health information for everyone 1 of 2",
+            "Useful public health information part 2 for everyone",
+            "Useful public health thread for everyone",
+            "Useful public health information continued tomorrow",
+            "Useful public health information contd tomorrow",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertEqual(filter_quality_tweet_text(sample).reason, "thread_marker")
+
+    def test_quality_filter_discards_truncated_text(self):
+        self.assertEqual(filter_quality_tweet_text("Useful public health update...").reason, "truncated")
+        self.assertEqual(filter_quality_tweet_text("Useful public health update…").reason, "truncated")
+
+    def test_quality_filter_discards_bad_control_and_delimiter_chars(self):
+        samples = [
+            "Useful public health\tupdate for everyone",
+            "Useful public health\nupdate for everyone",
+            "Useful public health \\ update for everyone",
+            "Useful public health \x07 update for everyone",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=repr(sample)):
+                self.assertIsNotNone(filter_quality_tweet_text(sample).reason)
+
+    def test_quality_filter_normalizes_spaces_without_leading_or_trailing_space(self):
+        result = filter_quality_tweet_text("  Useful   public health update for everyone  ")
+
+        self.assertIsNone(result.reason)
+        self.assertEqual(result.text, "Useful public health update for everyone")
 
     def test_build_corpus_hydrates_with_fake_provider_and_records_misses(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -589,6 +729,78 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
         self.assertEqual(report["output_rows"], 2)
         self.assertEqual(report["not_hydrated_rows"], 1)
         self.assertEqual(report["discarded_rows"], 1)
+
+    def test_build_quality_corpus_writes_tsv_without_escapes_and_deduplicates_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            input_dir.mkdir()
+            (input_dir / "ids.csv").write_text(
+                "tweet_id\n"
+                "2222222222222222222\n"
+                "2323232323232323232\n"
+                "2424242424242424242\n",
+                encoding="utf-8",
+            )
+            output_path = root / "hydrated" / "quality.tsv"
+            not_hydrated_path = root / "hydrated" / "quality.not_hydrated.tsv"
+            discarded_path = root / "hydrated" / "quality.discarded.tsv"
+            report_path = root / "hydrated" / "quality.report.json"
+            audit_path = root / "hydrated" / "quality.audit.json"
+            duplicate_text = "Texas, Florida, and Arizona have fewer COVID restrictions"
+            hydrator = FakeHydrator(
+                {
+                    "2222222222222222222": duplicate_text,
+                    "2323232323232323232": duplicate_text,
+                    "2424242424242424242": "Another normal public health update",
+                }
+            )
+
+            summary = asyncio.run(
+                build_quality_corpus(
+                    input_path=input_dir,
+                    output_path=output_path,
+                    hydrator=hydrator,
+                    not_hydrated_path=not_hydrated_path,
+                    discarded_path=discarded_path,
+                    report_path=report_path,
+                    audit_path=audit_path,
+                    target_valid=2,
+                    max_attempts=3,
+                )
+            )
+
+            raw_lines = output_path.read_text(encoding="utf-8-sig").splitlines()
+            with output_path.open(encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle, delimiter="\t"))
+            with discarded_path.open(encoding="utf-8-sig", newline="") as handle:
+                discarded = list(csv.DictReader(handle, delimiter="\t"))
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(summary.output_rows, 2)
+        self.assertEqual(raw_lines[0], "tweetId\ttexto")
+        self.assertEqual(raw_lines[1], f"2222222222222222222\t{duplicate_text}")
+        self.assertNotIn("\\", "\n".join(raw_lines))
+        self.assertNotIn('"', "\n".join(raw_lines))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(discarded[0]["reason"], "duplicate_text")
+        self.assertTrue(audit["ok"])
+
+    def test_quality_audit_reports_violations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad.tsv"
+            path.write_text(
+                "\ufefftweetId\ttexto\n"
+                "2525252525252525252\tBad thread text 1/2\n"
+                "2626262626262626262\tBad text with \\ backslash\n",
+                encoding="utf-8",
+            )
+
+            audit = audit_quality_tsv(path, expected_count=2)
+
+        self.assertFalse(audit.ok)
+        self.assertEqual(audit.violations["thread_marker"], 1)
+        self.assertEqual(audit.violations["backslash"], 1)
 
 
 if __name__ == "__main__":
