@@ -267,6 +267,26 @@ export function comparatorSeriesIterationExtent(series = []) {
   };
 }
 
+export function comparatorIterationAxisWindow(series = []) {
+  const extent = comparatorSeriesIterationExtent(series);
+  if (!extent) return null;
+  let min = Math.floor(extent.min);
+  let max = Math.ceil(extent.max);
+  if (min === max) {
+    if (min > 0) {
+      min -= 1;
+    } else {
+      max += 1;
+    }
+  }
+  return {
+    defaultMin: min,
+    defaultMax: max,
+    zoomMin: min,
+    zoomMax: max,
+  };
+}
+
 export function comparatorLimitSeriesToIteration(series = [], iterationLimit = null) {
   const limit = Number(iterationLimit);
   const hasLimit = Number.isFinite(limit);

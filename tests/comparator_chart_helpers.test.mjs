@@ -21,6 +21,7 @@ import {
   comparatorChartAxisWindow,
   comparatorEntityEntropy,
   comparatorExpandedAxisWindow,
+  comparatorIterationAxisWindow,
   comparatorIsBinaryProposal,
   comparatorIsGloballyNonDominated,
   comparatorMetricCellClassName,
@@ -774,6 +775,20 @@ test("iteration extent and limiter use finite generations without mutating sourc
   assert.deepEqual(comparatorSeriesIterationExtent(series), { min: 0, max: 4 });
   assert.deepEqual(limited.map((item) => item.data), [[[0, 0.05], [1, 0.1], [2, 0.3]], [[1, 0.2]]]);
   assert.deepEqual(series[0].data, [[0, 0.05], [1, 0.1], [2, 0.3], [3, 0.4]]);
+});
+
+test("iteration axis window uses integer generation bounds without decimal padding", () => {
+  const series = [
+    { name: "A", data: [[0, 0.28], [20, 0.36], [70, 0.39]] },
+    { name: "B", data: [[1, 0.29], [60, 0.38], [Number.NaN, 0.4]] },
+  ];
+
+  assert.deepEqual(comparatorIterationAxisWindow(series), {
+    defaultMin: 0,
+    defaultMax: 70,
+    zoomMin: 0,
+    zoomMax: 70,
+  });
 });
 
 test("final metric replacement updates only the last finite series point", () => {

@@ -16,6 +16,7 @@ import {
   comparatorHypervolumeArea,
   comparatorIsBinaryProposal,
   comparatorIsGloballyNonDominated,
+  comparatorIterationAxisWindow,
   comparatorMetricCellClassName,
   comparatorMetricDeltaLabel,
   comparatorMetricDeltaPercent,
@@ -9475,11 +9476,7 @@ function comparatorInteractiveLineOption({
     referenceTarget.markLine = referenceLinesHidden ? { ...referenceLines, data: [] } : referenceLines;
   }
   const chartPoints = activeSeries.flatMap((item) => item.data || []);
-  const xAxisWindow = comparatorChartAxisWindow(chartPoints, "x", {
-    paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
-    zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
-    minSpan: 1,
-  });
+  const xAxisWindow = comparatorIterationAxisWindow(activeSeries);
   const yAxisWindow = comparatorChartAxisWindow(chartPoints, "y", {
     paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
     zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
