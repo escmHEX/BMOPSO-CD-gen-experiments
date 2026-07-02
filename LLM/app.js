@@ -1,6 +1,7 @@
 import {
   comparatorBmopsoInternalAnalyses,
   comparatorApplyColumnOrder,
+  comparatorAverageFinite,
   comparatorBenchmarkProposals,
   comparatorBestMetricProposalIds,
   comparatorCanRecontinueRun,
@@ -8,6 +9,7 @@ import {
   comparatorCountByProposal,
   comparatorExpandedAxisWindow,
   comparatorFrontDiagnostics,
+  comparatorContributionByProposal,
   comparatorGlobalNonDominatedFront,
   comparatorHasBmopsoInternalAnalysis,
   comparatorHypervolumeArea,
@@ -30,6 +32,7 @@ import {
   comparatorPointInteractionKey,
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
+  comparatorSelectedFrontPointsForIndividuals,
   comparatorSeriesIterationExtent,
   comparatorVisibleFrontChartPoints,
   comparatorVisibleFrontPointCount,
@@ -418,6 +421,8 @@ let comparatorChartLegendState = new WeakMap();
 let comparatorChartSignature = "";
 let comparatorFrontDiagnosticLoadToken = 0;
 let comparatorFrontDiagnosticCache = new Map();
+let comparatorFrontDiagnosticsByScope = new Map();
+let comparatorFrontPointExclusionsByScope = new Map();
 let comparatorProjectionCharts = [];
 let comparatorProjectionSignature = "";
 let comparatorProjectionLoadToken = 0;
@@ -895,6 +900,16 @@ const COMPARATOR_METRIC_COLUMN_ORDER_STORAGE_PREFIX = "comparator.metricColumnOr
 const COMPARATOR_CHART_ZOOM_FACTOR = 100;
 const COMPARATOR_CHART_PADDING_RATIO = 0.08;
 const COMPARATOR_INACTIVE_POINT_OPACITY = 0.22;
+const COMPARATOR_FRONT_POINT_NAMESPACE = "pareto-points";
+const COMPARATOR_ADJUSTABLE_QUALITY_METRICS = Object.freeze([
+  "nonDominatedRows",
+  "hypervolume",
+  "contribution",
+  "extent",
+  "unaryEntropy",
+  "globalInertia",
+  "globalEntropy",
+]);
 const COMPARATOR_LINE_HIT_RADIUS_PX = 14;
 const COMPARATOR_METRIC_REFERENCE_TOOL_KEY = "myComparatorMetricReferenceLines";
 const COMPARATOR_METRIC_REFERENCE_HIDE_TITLE = "Ocultar lineas mejor/peor";
@@ -5339,6 +5354,7 @@ function resetComparatorUi(options = {}) {
   comparatorChartFilterIds = new Set();
   comparatorChartFilterSignature = "";
   comparatorPointChartRepetitionIndex = null;
+  clearComparatorFrontPointUiState();
   disposeComparatorCharts();
   disposeComparatorProjectionCharts();
   disposeComparatorInternalBmopsoCharts();
@@ -5426,6 +5442,241 @@ function comparatorGitStatusText(proposal) {
 
 function comparatorEntityId(item) {
   return String(item?.instanceId || item?.proposalId || "");
+}
+
+function comparatorFrontRunId() {
+  return String(latestComparatorRun?.runId || currentComparatorRunId || "").trim();
+}
+
+function comparatorNormalizedRepetitionIndex(value) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
+function comparatorFrontPointScopeKey(runId, proposal, repetitionIndex = null, namespace = COMPARATOR_FRONT_POINT_NAMESPACE) {
+  const entityId = comparatorEntityId(proposal);
+  if (!entityId) return "";
+  return JSON.stringify({
+    runId: String(runId || "__active_comparator_run__"),
+    entityId,
+    repetitionIndex: comparatorNormalizedRepetitionIndex(repetitionIndex),
+    namespace,
+  });
+}
+
+function comparatorFrontExcludedKeysForScope(scopeKey) {
+  if (!scopeKey) return new Set();
+  if (!comparatorFrontPointExclusionsByScope.has(scopeKey)) {
+    comparatorFrontPointExclusionsByScope.set(scopeKey, new Set());
+  }
+  return comparatorFrontPointExclusionsByScope.get(scopeKey);
+}
+
+function comparatorFrontDiagnosticsForScope(scopeKey) {
+  if (!scopeKey) return new Map();
+  if (!comparatorFrontDiagnosticsByScope.has(scopeKey)) {
+    comparatorFrontDiagnosticsByScope.set(scopeKey, new Map());
+  }
+  return comparatorFrontDiagnosticsByScope.get(scopeKey);
+}
+
+function clearComparatorFrontPointUiState() {
+  comparatorFrontDiagnosticsByScope = new Map();
+  comparatorFrontPointExclusionsByScope = new Map();
+}
+
+function comparatorVisibleFrontContext(proposal, runId = comparatorFrontRunId(), sourceProposal = proposal) {
+  const repetitionIndex = comparatorNormalizedRepetitionIndex(proposal?.pointChartRepetition?.repetitionIndex);
+  const scopeKey = comparatorFrontPointScopeKey(runId, proposal, repetitionIndex, COMPARATOR_FRONT_POINT_NAMESPACE);
+  const excludedKeys = comparatorFrontExcludedKeysForScope(scopeKey);
+  const diagnosticsByKey = comparatorFrontDiagnosticsForScope(scopeKey);
+  const visibleFront = comparatorVisibleFrontChartPoints(proposal?.charts || {}, COMPARATOR_FRONT_POINT_NAMESPACE);
+  const allPoints = comparatorApplyFrontDiagnostics(
+    visibleFront.individuals.map((point) => comparatorChartPointFromRaw(point)),
+    diagnosticsByKey,
+    COMPARATOR_FRONT_POINT_NAMESPACE,
+  );
+  const partition = comparatorPartitionInteractivePoints(allPoints, excludedKeys, COMPARATOR_FRONT_POINT_NAMESPACE);
+  return {
+    proposal,
+    sourceProposal,
+    repetitionIndex,
+    scopeKey,
+    excludedKeys,
+    diagnosticsByKey,
+    allPoints,
+    activePoints: partition.active.map((entry) => entry.point),
+    inactiveCount: partition.inactive.length,
+    hasActiveExclusions: partition.inactive.length > 0,
+  };
+}
+
+function comparatorMetricValueFromMetrics(metrics = {}, metricKey = "") {
+  const rawValue = metricKey === "nonDominatedRows"
+    ? metrics.nonDominatedRows ?? metrics.postHocNonDominatedRows
+    : metrics[metricKey];
+  if (rawValue === null || rawValue === undefined || rawValue === "") return null;
+  const value = Number(rawValue);
+  return Number.isFinite(value) ? value : null;
+}
+
+function comparatorMetricLabelFromMetrics(metrics = {}, metricKey = "") {
+  const value = comparatorMetricValueFromMetrics(metrics, metricKey);
+  if (value === null) return "No aplica";
+  if (metricKey === "nonDominatedRows") return formatComparatorCostQuantity(value);
+  const label = metrics[`${metricKey}Label`];
+  return label ? String(label) : formatOptionalNumber(value, 6);
+}
+
+function comparatorMetricLabelFromValue(metricKey, value) {
+  if (value === null || value === undefined || value === "") return "No aplica";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "No aplica";
+  return metricKey === "nonDominatedRows"
+    ? formatComparatorCostQuantity(numeric)
+    : formatOptionalNumber(numeric, 6);
+}
+
+function comparatorAggregateAdjustedMetricValue(proposal, metricKey, selectedAdjustedValue) {
+  const selectedRepetitionIndex = comparatorNormalizedRepetitionIndex(comparatorPointChartRepetitionIndex);
+  const repetitions = comparatorPointChartRepetitions(proposal);
+  const hasRepetitionPayloads = selectedRepetitionIndex !== null && repetitions.length > 1;
+  if (!hasRepetitionPayloads) return selectedAdjustedValue;
+
+  const replacementIndex = repetitions.findIndex((item) =>
+    comparatorNormalizedRepetitionIndex(item.repetitionIndex) === selectedRepetitionIndex,
+  );
+  if (replacementIndex === -1) return selectedAdjustedValue;
+
+  const values = repetitions.map((item, index) => (
+    index === replacementIndex
+      ? selectedAdjustedValue
+      : comparatorMetricValueFromMetrics(item.metrics || {}, metricKey)
+  ));
+  return comparatorAverageFinite(values);
+}
+
+function comparatorSetMetricAdjustment(adjustments, proposal, metricKey, adjustedValue) {
+  if (!COMPARATOR_ADJUSTABLE_QUALITY_METRICS.includes(metricKey)) return;
+  const entityId = comparatorEntityId(proposal);
+  if (!entityId) return;
+  const originalValue = comparatorMetricValueFromMetrics(proposal.metrics || {}, metricKey);
+  const adjusted = Number(adjustedValue);
+  const normalizedAdjusted = Number.isFinite(adjusted) ? adjusted : null;
+  if (normalizedAdjusted === null && originalValue === null) return;
+  const proposalAdjustments = adjustments.get(entityId) || {};
+  proposalAdjustments[metricKey] = {
+    value: normalizedAdjusted,
+    label: comparatorMetricLabelFromValue(metricKey, normalizedAdjusted),
+    originalValue,
+    originalLabel: comparatorMetricLabelFromMetrics(proposal.metrics || {}, metricKey),
+  };
+  adjustments.set(entityId, proposalAdjustments);
+}
+
+function comparatorContributionValuesByEntity(proposals, runId) {
+  const selectedRepetitionIndex = comparatorNormalizedRepetitionIndex(comparatorPointChartRepetitionIndex);
+  const repetitionOptions = comparatorPointChartRepetitionOptions(proposals);
+  const repetitions = selectedRepetitionIndex && repetitionOptions.length > 1
+    ? repetitionOptions.map((item) => item.repetitionIndex)
+    : [selectedRepetitionIndex];
+  const valuesByEntity = new Map();
+
+  repetitions.forEach((repetitionIndex) => {
+    const pointsByProposal = new Map();
+    proposals.forEach((proposal) => {
+      const viewProposal = comparatorPointChartViewProposal(proposal, repetitionIndex);
+      const entityId = comparatorEntityId(viewProposal);
+      if (!entityId) return;
+      if (repetitionIndex === selectedRepetitionIndex) {
+        pointsByProposal.set(entityId, comparatorVisibleFrontContext(viewProposal, runId).activePoints);
+        return;
+      }
+      const visibleFront = comparatorVisibleFrontChartPoints(viewProposal.charts || {}, COMPARATOR_FRONT_POINT_NAMESPACE);
+      pointsByProposal.set(
+        entityId,
+        visibleFront.individuals.map((point) => comparatorChartPointFromRaw(point)),
+      );
+    });
+    const contributions = comparatorContributionByProposal(pointsByProposal);
+    contributions.forEach((value, entityId) => {
+      const values = valuesByEntity.get(entityId) || [];
+      values.push(value);
+      valuesByEntity.set(entityId, values);
+    });
+  });
+
+  const aggregated = new Map();
+  valuesByEntity.forEach((values, entityId) => {
+    aggregated.set(entityId, comparatorAverageFinite(values));
+  });
+  return aggregated;
+}
+
+function comparatorAdjustedQualityMetricMap(proposals) {
+  const completed = (proposals || []).filter((proposal) => proposal.status === "completed");
+  if (!completed.length) return new Map();
+  const runId = comparatorFrontRunId();
+  const contexts = completed.map((proposal) =>
+    comparatorVisibleFrontContext(
+      comparatorPointChartViewProposal(proposal, comparatorPointChartRepetitionIndex),
+      runId,
+      proposal,
+    ),
+  );
+  const hasAnyExclusions = contexts.some((context) => context.hasActiveExclusions);
+  if (!hasAnyExclusions) return new Map();
+
+  const adjustments = new Map();
+  contexts.forEach((context) => {
+    if (!context.hasActiveExclusions) return;
+    const diagnostics = comparatorFrontDiagnostics(context.activePoints);
+    for (const metricKey of ["nonDominatedRows", "hypervolume", "extent", "unaryEntropy", "globalInertia", "globalEntropy"]) {
+      const selectedAdjustedValue = diagnostics[metricKey];
+      if ((metricKey === "globalInertia" || metricKey === "globalEntropy") && selectedAdjustedValue === null) {
+        continue;
+      }
+      comparatorSetMetricAdjustment(
+        adjustments,
+        context.sourceProposal,
+        metricKey,
+        comparatorAggregateAdjustedMetricValue(context.sourceProposal, metricKey, selectedAdjustedValue),
+      );
+    }
+  });
+
+  const contributionByEntity = comparatorContributionValuesByEntity(completed, runId);
+  completed.forEach((proposal) => {
+    const entityId = comparatorEntityId(proposal);
+    comparatorSetMetricAdjustment(adjustments, proposal, "contribution", contributionByEntity.get(entityId));
+  });
+
+  return adjustments;
+}
+
+function comparatorProposalsWithAdjustedQualityMetrics(proposals) {
+  const adjustments = comparatorAdjustedQualityMetricMap(proposals);
+  if (!adjustments.size) return proposals;
+  return proposals.map((proposal) => {
+    const entityId = comparatorEntityId(proposal);
+    const proposalAdjustments = adjustments.get(entityId);
+    if (!proposalAdjustments) return proposal;
+    const metrics = { ...(proposal.metrics || {}) };
+    Object.entries(proposalAdjustments).forEach(([metricKey, adjustment]) => {
+      metrics[metricKey] = adjustment.value;
+      if (metricKey !== "nonDominatedRows") {
+        metrics[`${metricKey}Label`] = adjustment.label;
+      }
+      if (metricKey === "nonDominatedRows" && "postHocNonDominatedRows" in metrics) {
+        metrics.postHocNonDominatedRows = adjustment.value;
+      }
+    });
+    return {
+      ...proposal,
+      metrics,
+      comparatorAdjustedMetrics: proposalAdjustments,
+    };
+  });
 }
 
 function comparatorChartStyleForProposal(proposal, fallbackIndex = 0, styleMap = comparatorChartStyles) {
@@ -7393,6 +7644,11 @@ function renderComparatorCostSummary(costSummary) {
 }
 
 function renderComparatorRun(run) {
+  const previousRunId = comparatorFrontRunId();
+  const nextRunId = String(run?.runId || "").trim();
+  if (previousRunId && nextRunId && previousRunId !== nextRunId) {
+    clearComparatorFrontPointUiState();
+  }
   latestComparatorRun = run;
   storeComparatorRunId(run.runId);
   hydrateComparatorInstancesFromRun(run);
@@ -7943,7 +8199,8 @@ function handleComparatorMetricColumnDragEnd() {
 
 function renderComparatorCostTable(proposals, policy) {
   if (!dom.comparatorCostTableHead || !dom.comparatorCostTableBody) return;
-  const orderedProposals = comparatorOrderedMetricProposals(proposals);
+  const displayProposals = comparatorProposalsWithAdjustedQualityMetrics(proposals);
+  const orderedProposals = comparatorOrderedMetricProposals(displayProposals);
   const primaryProposal = orderedProposals[0] || null;
   const primaryProposalId = primaryProposal ? comparatorEntityId(primaryProposal) : "";
   dom.comparatorCostTableHead.innerHTML = `
@@ -8004,19 +8261,37 @@ function comparatorMetricValue(proposal, metric) {
 
 function comparatorCostMetricCell(proposal, metric, winners, options = {}) {
   const { cost, value, reported } = comparatorMetricValue(proposal, metric);
+  const adjustment = comparatorMetricAdjustment(proposal, metric);
   const primaryColumn = Boolean(options.primaryColumn);
   const best = proposal.status === "completed" && reported && winners.has(comparatorEntityId(proposal));
-  const meanLabel = reported ? metric.format(proposal, cost) : "No reportado";
-  const label = comparatorMetricMeanStdDevLabel(meanLabel, reported ? comparatorMetricStdDevLabel(proposal, metric, cost) : "");
+  const meanLabel = reported
+    ? metric.format(proposal, cost)
+    : adjustment
+      ? adjustment.label
+      : "No reportado";
+  const stdDevLabel = adjustment || !reported ? "" : comparatorMetricStdDevLabel(proposal, metric, cost);
+  const label = comparatorMetricMeanStdDevLabel(meanLabel, stdDevLabel);
   const className = comparatorMetricCellClassName({ primaryColumn, best });
   const columnId = String(options.columnId || comparatorEntityId(proposal));
   const deltaHtml = primaryColumn || !reported
     ? ""
     : comparatorMetricDeltaHtml(options.primaryValue, value, metric.direction);
-  const valueHtml = best
+  const valueHtml = comparatorMetricCellValueHtml(label, adjustment, best);
+  return `<td class="${className}" data-comparator-metric-column-id="${escapeHtml(columnId)}" draggable="true"><span class="comparator-metric-value">${valueHtml}</span>${deltaHtml}</td>`;
+}
+
+function comparatorMetricAdjustment(proposal, metric) {
+  const metricId = String(metric?.id || "");
+  if (!metricId) return null;
+  return proposal.comparatorAdjustedMetrics?.[metricId] || null;
+}
+
+function comparatorMetricCellValueHtml(label, adjustment, best) {
+  const currentHtml = best
     ? `<strong>${escapeHtml(label)}</strong>`
     : escapeHtml(label);
-  return `<td class="${className}" data-comparator-metric-column-id="${escapeHtml(columnId)}" draggable="true"><span class="comparator-metric-value">${valueHtml}</span>${deltaHtml}</td>`;
+  if (!adjustment) return currentHtml;
+  return `${currentHtml} <span class="comparator-metric-original-value">[${escapeHtml(adjustment.originalLabel)}]</span>`;
 }
 
 function comparatorMetricStdDevLabel(proposal, metric, cost) {
@@ -8832,7 +9107,7 @@ function syncComparatorChartLocalLegends(root = document) {
   });
 }
 
-function installComparatorPointToggle(chart, chartNode, buildOption, excludedKeys) {
+function installComparatorPointToggle(chart, chartNode, buildOption, excludedKeys, onToggle = null) {
   chart.on("click", (params) => {
     const key = params?.data?.pointInteractionKey;
     if (!key) return;
@@ -8843,6 +9118,9 @@ function installComparatorPointToggle(chart, chartNode, buildOption, excludedKey
     }
     const selected = comparatorLegendSelection(chart);
     setComparatorChartOption(chart, chartNode, buildOption(), selected);
+    if (typeof onToggle === "function") {
+      onToggle();
+    }
   });
 }
 
@@ -8922,23 +9200,31 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
       window.queueMicrotask(() => {
         const normalizedChart = window.echarts.init(normalizedChartNode);
         comparatorCharts.push(normalizedChart);
-        const excludedKeys = new Set();
-        const diagnosticsByKey = new Map();
+        const scopeKey = comparatorFrontPointScopeKey(
+          runId,
+          proposal,
+          proposal.pointChartRepetition?.repetitionIndex,
+          COMPARATOR_FRONT_POINT_NAMESPACE,
+        );
+        const excludedKeys = comparatorFrontExcludedKeysForScope(scopeKey);
+        const diagnosticsByKey = comparatorFrontDiagnosticsForScope(scopeKey);
         const diagnosticLoadToken = comparatorFrontDiagnosticLoadToken;
         const buildOption = () => paretoChartOption(
           "Frente comparable normalizado",
           proposal.charts || {},
           proposal.metrics || {},
           color,
-          { excludedKeys, diagnosticsByKey },
+          { excludedKeys, diagnosticsByKey, pointNamespace: COMPARATOR_FRONT_POINT_NAMESPACE },
         );
         const option = buildOption();
         setComparatorChartOption(normalizedChart, normalizedChartNode, option);
-        installComparatorPointToggle(normalizedChart, normalizedChartNode, buildOption, excludedKeys);
+        installComparatorPointToggle(normalizedChart, normalizedChartNode, buildOption, excludedKeys, () => {
+          if (latestComparatorRun) renderComparatorCostDetails(latestComparatorRun);
+        });
         const requestPoints = comparatorFrontDiagnosticRequestPoints(
-          comparatorVisibleFrontChartPoints(proposal.charts || {}, "pareto-points").individuals
+          comparatorVisibleFrontChartPoints(proposal.charts || {}, COMPARATOR_FRONT_POINT_NAMESPACE).individuals
             .map((point) => comparatorChartPointFromRaw(point)),
-          "pareto-points",
+          COMPARATOR_FRONT_POINT_NAMESPACE,
         );
         loadComparatorFrontPointDiagnostics(runId, requestPoints)
           .then((diagnostics) => {
@@ -8948,6 +9234,7 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
             diagnostics.forEach((value, key) => diagnosticsByKey.set(key, value));
             const selected = comparatorLegendSelection(normalizedChart);
             setComparatorChartOption(normalizedChart, normalizedChartNode, buildOption(), selected);
+            if (latestComparatorRun) renderComparatorCostDetails(latestComparatorRun);
           })
           .catch(() => {});
       });
@@ -9334,7 +9621,11 @@ function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa
     options.diagnosticsByKey,
     pointNamespace,
   );
-  const selectedPoints = visibleFront.selected.map((point) => comparatorChartPointFromRaw(point));
+  const selectedPoints = comparatorSelectedFrontPointsForIndividuals(
+    visibleFront.individuals,
+    visibleFront.selected,
+    pointNamespace,
+  ).map((point) => comparatorChartPointFromRaw(point));
   const allPartition = comparatorPartitionInteractivePoints(allPoints, excludedKeys, pointNamespace);
   const selectedPartition = comparatorPartitionInteractivePoints(selectedPoints, excludedKeys, pointNamespace);
   const activeAllPoints = allPartition.active.map((entry) => entry.point);
@@ -10595,6 +10886,7 @@ dom.comparatorPointRepetitionSelect?.addEventListener("change", () => {
   comparatorProjectionSignature = "";
   comparatorInternalBmopsoSignature = "";
   if (latestComparatorRun) {
+    renderComparatorCostDetails(latestComparatorRun);
     renderComparatorCharts(latestComparatorRun);
     renderComparatorEmbeddingProjection(latestComparatorRun);
     syncComparatorInternalBmopsoTab(latestComparatorRun);

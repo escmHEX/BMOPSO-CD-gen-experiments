@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  comparatorAverageFinite,
+  comparatorAverageWithReplacement,
   comparatorBmopsoInternalAnalyses,
   comparatorBenchmarkProposals,
   comparatorApplyColumnOrder,
@@ -10,6 +12,8 @@ import {
   comparatorHasBmopsoInternalAnalysis,
   comparatorCanRecontinueRun,
   comparatorCountByProposal,
+  comparatorContributionByProposal,
+  comparatorExtent,
   comparatorGlobalNonDominatedFront,
   comparatorFrontDiagnostics,
   comparatorHypervolumeArea,
@@ -35,6 +39,7 @@ import {
   comparatorPointInteractionKey,
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
+  comparatorSelectedFrontPointsForIndividuals,
   comparatorSeriesIterationExtent,
   comparatorUnaryEntropy,
   comparatorVisibleFrontPointCount,
@@ -423,6 +428,45 @@ test("binary front chart points preserve native pareto individuals", () => {
   assert.deepEqual(points.selected.map((point) => point.label), ["binary native front", "binary native point"]);
 });
 
+test("selected front points inherit the matching individual interaction identity", () => {
+  const individuals = [
+    {
+      x: 0.9604044556617737,
+      y: 0.22277108105746185,
+      instanceId: "binary-mopso-cd",
+      proposalId: "binary-mopso-cd",
+      sourceIndex: 10,
+      rank: 1,
+      label: "front point",
+      prompt: "front prompt",
+    },
+  ];
+  const selected = [
+    {
+      x: 0.9604044556617737,
+      y: 0.22277108105746185,
+      instanceId: "binary-mopso-cd",
+      proposalId: "binary-mopso-cd",
+      sourceIndex: null,
+      rank: 1,
+      label: "front point",
+      prompt: "front prompt",
+    },
+  ];
+
+  const [normalizedSelected] = comparatorSelectedFrontPointsForIndividuals(
+    individuals,
+    selected,
+    "pareto-points",
+  );
+
+  assert.equal(normalizedSelected.sourceIndex, 10);
+  assert.equal(
+    comparatorPointInteractionKey(normalizedSelected, 0, "pareto-points"),
+    comparatorPointInteractionKey(individuals[0], 0, "pareto-points"),
+  );
+});
+
 test("point chart view proposal selects a single repetition without merging K", () => {
   const proposal = {
     proposalId: "binary-mopso-cd",
@@ -577,6 +621,63 @@ test("front diagnostics recalculate from active comparable points only", () => {
   assert.notEqual(full.globalEntropy, withoutFirst.globalEntropy);
 });
 
+test("front extent matches backend comparable range formula", () => {
+  assert.equal(comparatorExtent([{ value: [0.2, 0.8] }]), 0);
+  assert.equal(
+    comparatorExtent([
+      { value: [0.2, 0.8] },
+      { value: [0.8, 0.2] },
+    ]),
+    Number(Math.sqrt(1.2).toPrecision(12)),
+  );
+});
+
+test("global contribution gives shared credit on the adjusted combined front", () => {
+  const contributions = comparatorContributionByProposal(new Map([
+    ["binary-mopso-cd", [{ value: [0.9, 0.4] }, { value: [0.6, 0.8] }]],
+    ["evolmd-mo", [{ value: [0.9, 0.4] }, { value: [0.3, 0.3] }]],
+    ["evolmd", [{ value: [0.2, 0.2] }]],
+  ]));
+
+  assert.equal(contributions.get("binary-mopso-cd"), 0.75);
+  assert.equal(contributions.get("evolmd-mo"), 0.25);
+  assert.equal(contributions.get("evolmd"), 0);
+});
+
+test("front diagnostics expose adjusted table metrics from active points", () => {
+  const points = [
+    { value: [0.2, 0.2], semanticEmbedding: [0, 0], entityTerms: ["alpha"], entityTokenCount: 3 },
+    { value: [0.8, 0.8], semanticEmbedding: [8, 0], entityTerms: ["beta"], entityTokenCount: 3 },
+    { value: [0.6, 0.4], semanticEmbedding: [0, 8], entityTerms: ["gamma"], entityTokenCount: 3 },
+  ];
+
+  const adjusted = comparatorFrontDiagnostics(points.slice(1));
+
+  assert.equal(adjusted.nonDominatedRows, 2);
+  assert.equal(Number(adjusted.hypervolume.toFixed(6)), 0.64);
+  assert.equal(adjusted.extent, Number(Math.sqrt(0.6).toPrecision(12)));
+  assert.equal(adjusted.unaryEntropy, 1);
+  assert.equal(adjusted.globalInertia, 0);
+  assert.notEqual(adjusted.globalEntropy, null);
+});
+
+test("front diagnostics keep semantic metrics unavailable until diagnostics are complete", () => {
+  const adjusted = comparatorFrontDiagnostics([
+    { value: [0.8, 0.8], semanticEmbedding: [1, 0], entityTerms: ["alpha"], entityTokenCount: 2 },
+    { value: [0.7, 0.4] },
+  ]);
+
+  assert.equal(Number(adjusted.hypervolume.toFixed(6)), 0.64);
+  assert.equal(adjusted.globalInertia, null);
+  assert.equal(adjusted.globalEntropy, null);
+});
+
+test("adjusted K averages substitute only the visible repetition value", () => {
+  assert.equal(comparatorAverageFinite([0.2, 0.4, 0.6]), 0.4);
+  assert.equal(comparatorAverageWithReplacement([0.2, 0.4, 0.6], 1, 0.1), 0.3);
+  assert.equal(comparatorAverageWithReplacement([0.2, null, 0.6], 1, null), 0.4);
+});
+
 test("front unary entropy matches the comparator grid definition", () => {
   assert.equal(comparatorUnaryEntropy([{ value: [0.2, 0.8] }]), 0);
   assert.equal(
@@ -612,6 +713,8 @@ test("front entity entropy aggregates per-point semantic terms", () => {
   assert.equal(Number(score.toFixed(6)), Number((0.9182958340544896 / Math.log2(9)).toFixed(6)));
   assert.equal(comparatorEntityEntropy([{ entityTerms: [], entityTokenCount: 3 }]), 0);
   assert.equal(comparatorEntityEntropy([{ value: [0, 0] }]), null);
+  assert.equal(comparatorEntityEntropy([{ entityTerms: ["alpha"] }]), null);
+  assert.equal(comparatorEntityEntropy([{ entityTokenCount: 3 }]), null);
 });
 
 test("interactive point keys are stable for cloned chart points", () => {

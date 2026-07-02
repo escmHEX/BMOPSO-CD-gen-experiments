@@ -2135,6 +2135,16 @@ table.wide-table {
   line-height: 1.2;
 }
 
+.comparator-metric-original-value {
+  display: inline-block;
+  margin-left: 3px;
+  color: #64748b;
+  font-size: 0.82rem;
+  font-weight: 700;
+  opacity: 0.48;
+  white-space: nowrap;
+}
+
 .comparator-metric-delta {
   display: inline-block;
   margin-left: 4px;

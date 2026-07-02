@@ -49,7 +49,7 @@ export function comparatorPointInteractionKey(point, fallbackIndex = 0, namespac
   return [stableIdentityValue(namespace), coordinatePart, Math.max(0, Number(fallbackIndex) || 0)].join("|");
 }
 
-function comparatorFrontMembershipKey(point, namespace = "") {
+export function comparatorFrontMembershipKey(point, namespace = "") {
   const coordinates = comparatorPointCoordinates(point);
   const coordinatePart = coordinates
     ? `${cleanAxisNumber(coordinates.x)},${cleanAxisNumber(coordinates.y)}`
@@ -87,6 +87,33 @@ export function comparatorVisibleFrontChartPoints(charts = {}, namespace = "") {
     frontKeys.has(comparatorFrontMembershipKey(point, namespace)),
   );
   return { individuals, selected };
+}
+
+export function comparatorSelectedFrontPointsForIndividuals(individuals = [], selected = [], namespace = "") {
+  const individualsByMembership = new Map();
+  (individuals || []).forEach((point) => {
+    const key = comparatorFrontMembershipKey(point, namespace);
+    if (key && !individualsByMembership.has(key)) {
+      individualsByMembership.set(key, point);
+    }
+  });
+
+  return (selected || []).map((point) => {
+    const match = individualsByMembership.get(comparatorFrontMembershipKey(point, namespace));
+    if (!match) return point;
+    return {
+      ...point,
+      instanceId: point.instanceId ?? match.instanceId,
+      proposalId: point.proposalId ?? match.proposalId,
+      sourceIndex: point.sourceIndex ?? match.sourceIndex,
+      repetitionIndex: point.repetitionIndex ?? match.repetitionIndex,
+      rank: point.rank ?? match.rank,
+      label: point.label ?? match.label,
+      prompt: point.prompt ?? match.prompt,
+      displayName: point.displayName ?? match.displayName,
+      baseDisplayName: point.baseDisplayName ?? match.baseDisplayName,
+    };
+  });
 }
 
 function finiteRepetitionIndex(value) {
@@ -540,6 +567,24 @@ export function comparatorHypervolumeArea(points) {
   return { lineData, labelPosition, area };
 }
 
+export function comparatorExtent(points = []) {
+  const coordinates = (points || [])
+    .map(comparatorPointCoordinates)
+    .filter(Boolean)
+    .map((point) => [point.x, point.y]);
+  if (coordinates.length <= 1) return 0;
+
+  const width = Math.min(...coordinates.map((point) => point.length));
+  if (width <= 0) return 0;
+
+  let totalRange = 0;
+  for (let index = 0; index < width; index += 1) {
+    const values = coordinates.map((point) => clampNumber(Number(point[index]) || 0, 0, 1));
+    totalRange += Math.max(...values) - Math.min(...values);
+  }
+  return cleanAxisNumber(Math.sqrt(totalRange));
+}
+
 export function comparatorUnaryEntropy(points = [], mu = 5) {
   const coordinates = (points || [])
     .map(comparatorPointCoordinates)
@@ -677,24 +722,26 @@ export function comparatorKMeansInertia(points = [], clusterCount = 5) {
 }
 
 export function comparatorEntityEntropy(points = []) {
-  let hasDiagnostic = false;
-  let totalTokens = 0;
-  const counts = new Map();
-
-  (points || []).forEach((point) => {
+  const diagnostics = (points || []).map((point) => {
     const terms = Array.isArray(point?.entityTerms)
       ? point.entityTerms
       : point?.frontDiagnostics?.entityTerms;
     const tokenCount = Number(point?.entityTokenCount ?? point?.frontDiagnostics?.entityTokenCount);
-    if (Array.isArray(terms) || Number.isFinite(tokenCount)) hasDiagnostic = true;
+    return { terms, tokenCount, complete: Array.isArray(terms) && Number.isFinite(tokenCount) };
+  });
+  if (!diagnostics.length || diagnostics.some((point) => !point.complete)) return null;
+
+  let totalTokens = 0;
+  const counts = new Map();
+
+  diagnostics.forEach(({ terms, tokenCount }) => {
     if (Number.isFinite(tokenCount) && tokenCount > 0) totalTokens += tokenCount;
-    (Array.isArray(terms) ? terms : []).forEach((term) => {
+    terms.forEach((term) => {
       const key = String(term || "").trim().toLowerCase();
       if (key) counts.set(key, (counts.get(key) || 0) + 1);
     });
   });
 
-  if (!hasDiagnostic) return null;
   if (!counts.size || totalTokens <= 1) return 0;
 
   const totalTerms = [...counts.values()].reduce((sum, count) => sum + count, 0);
@@ -706,12 +753,94 @@ export function comparatorEntityEntropy(points = []) {
   return cleanAxisNumber(entropy / Math.log2(totalTokens));
 }
 
+function pointHasSemanticEmbedding(point) {
+  return Boolean(semanticEmbedding(point));
+}
+
+function pointHasEntityDiagnostics(point) {
+  const terms = Array.isArray(point?.entityTerms)
+    ? point.entityTerms
+    : point?.frontDiagnostics?.entityTerms;
+  const tokenCount = Number(point?.entityTokenCount ?? point?.frontDiagnostics?.entityTokenCount);
+  return Array.isArray(terms) && Number.isFinite(tokenCount);
+}
+
+export function comparatorAverageFinite(values = []) {
+  const finiteValues = (values || [])
+    .filter((value) => value !== null && value !== undefined && value !== "")
+    .map(Number)
+    .filter(Number.isFinite);
+  if (!finiteValues.length) return null;
+  return cleanAxisNumber(finiteValues.reduce((sum, value) => sum + value, 0) / finiteValues.length);
+}
+
+export function comparatorAverageWithReplacement(values = [], replacementIndex = -1, replacementValue = null) {
+  const targetIndex = Math.trunc(Number(replacementIndex));
+  const replaced = (values || []).map((value, index) => (
+    index === targetIndex ? replacementValue : value
+  ));
+  return comparatorAverageFinite(replaced);
+}
+
+function normalPointsByProposalEntries(pointsByProposal = {}) {
+  if (pointsByProposal instanceof Map) {
+    return [...pointsByProposal.entries()];
+  }
+  if (pointsByProposal && typeof pointsByProposal === "object") {
+    return Object.entries(pointsByProposal);
+  }
+  return [];
+}
+
+export function comparatorContributionByProposal(pointsByProposal = {}) {
+  const proposalPoints = new Map(
+    normalPointsByProposalEntries(pointsByProposal).map(([proposalId, points]) => [
+      stableIdentityValue(proposalId),
+      new Set((Array.isArray(points) ? points : [])
+        .map(comparatorPointCoordinates)
+        .filter(Boolean)
+        .map((point) => `${cleanAxisNumber(point.x)},${cleanAxisNumber(point.y)}`)),
+    ]).filter(([proposalId]) => proposalId),
+  );
+  const allPoints = [...new Set([...proposalPoints.values()].flatMap((points) => [...points]))]
+    .map((key) => {
+      const [x, y] = key.split(",").map(Number);
+      return { key, x, y };
+    })
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  const frontKeys = new Set(comparatorGlobalNonDominatedFront(allPoints).map((point) => point.key));
+  const contributions = new Map([...proposalPoints.keys()].map((proposalId) => [proposalId, 0]));
+  if (!frontKeys.size) return contributions;
+
+  frontKeys.forEach((pointKey) => {
+    const producers = [...proposalPoints.entries()]
+      .filter(([_proposalId, points]) => points.has(pointKey))
+      .map(([proposalId]) => proposalId);
+    if (!producers.length) return;
+    const credit = 1 / producers.length;
+    producers.forEach((proposalId) => {
+      contributions.set(proposalId, (contributions.get(proposalId) || 0) + (credit / frontKeys.size));
+    });
+  });
+  contributions.forEach((value, proposalId) => {
+    contributions.set(proposalId, cleanAxisNumber(value));
+  });
+  return contributions;
+}
+
 export function comparatorFrontDiagnostics(points = [], options = {}) {
+  const activePoints = points || [];
+  const hasCompleteEmbeddings = activePoints.length > 0 && activePoints.every(pointHasSemanticEmbedding);
+  const hasCompleteEntityDiagnostics = activePoints.length > 0 && activePoints.every(pointHasEntityDiagnostics);
   return {
-    hypervolume: comparatorHypervolumeArea(points)?.area ?? null,
-    unaryEntropy: comparatorUnaryEntropy(points, options.unaryEntropyGridSize ?? 5),
-    globalInertia: comparatorKMeansInertia(points, options.kMeansClusters ?? 5),
-    globalEntropy: comparatorEntityEntropy(points),
+    nonDominatedRows: activePoints.length,
+    hypervolume: comparatorHypervolumeArea(activePoints)?.area ?? null,
+    extent: activePoints.length ? comparatorExtent(activePoints) : null,
+    unaryEntropy: activePoints.length ? comparatorUnaryEntropy(activePoints, options.unaryEntropyGridSize ?? 5) : null,
+    globalInertia: hasCompleteEmbeddings
+      ? comparatorKMeansInertia(activePoints, options.kMeansClusters ?? 5)
+      : null,
+    globalEntropy: hasCompleteEntityDiagnostics ? comparatorEntityEntropy(activePoints) : null,
   };
 }
 
