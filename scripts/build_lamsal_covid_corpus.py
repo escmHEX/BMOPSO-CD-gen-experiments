@@ -666,6 +666,112 @@ async def build_quality_corpus(
     return summary
 
 
+def build_quality_corpus_from_cache(
+    *,
+    cache_paths: Iterable[Path],
+    output_path: Path | str,
+    not_hydrated_path: Path | str | None = None,
+    discarded_path: Path | str | None = None,
+    report_path: Path | str | None = None,
+    audit_path: Path | str | None = None,
+    target_valid: int = DEFAULT_TARGET_VALID,
+    overwrite: bool = False,
+) -> HydrationSummary:
+    started_at = _utc_now()
+    output_path = Path(output_path)
+    not_hydrated_path = Path(not_hydrated_path) if not_hydrated_path else output_path.with_suffix(".not_hydrated.tsv")
+    discarded_path = Path(discarded_path) if discarded_path else output_path.with_suffix(".discarded.tsv")
+    report_path = Path(report_path) if report_path else None
+    audit_path = Path(audit_path) if audit_path else output_path.with_suffix(".audit.json")
+    cache_paths = [Path(path) for path in cache_paths]
+
+    if overwrite:
+        artifacts = [output_path, not_hydrated_path, discarded_path, audit_path]
+        if report_path:
+            artifacts.append(report_path)
+        _remove_existing_artifacts(*artifacts)
+
+    output_ids, existing_texts = _read_existing_quality_output(output_path)
+    existing_ids = set(output_ids)
+    existing_ids.update(_read_existing_ids_from_field(not_hydrated_path, "tweetId", delimiter=TSV_DELIMITER))
+    existing_ids.update(_read_existing_ids_from_field(discarded_path, "tweetId", delimiter=TSV_DELIMITER))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    not_hydrated_path.parent.mkdir(parents=True, exist_ok=True)
+    discarded_path.parent.mkdir(parents=True, exist_ok=True)
+
+    target_new_valid = max(0, target_valid - len(output_ids))
+    total_discovered = 0
+    skipped_existing = 0
+    hydrated = 0
+    discarded = 0
+
+    with output_path.open("a", encoding="utf-8", newline="") as output_handle, not_hydrated_path.open(
+        "a", encoding="utf-8", newline=""
+    ) as miss_handle, discarded_path.open("a", encoding="utf-8", newline="") as discard_handle:
+        _write_tsv_header_if_empty(output_path, output_handle, OUTPUT_FIELDS)
+        _write_tsv_header_if_empty(not_hydrated_path, miss_handle, NOT_HYDRATED_FIELDS)
+        _write_tsv_header_if_empty(discarded_path, discard_handle, DISCARDED_FIELDS)
+
+        if target_new_valid != 0:
+            for tweet_id, text in iter_hydrated_text_cache_records(cache_paths):
+                total_discovered += 1
+                if tweet_id in existing_ids:
+                    skipped_existing += 1
+                    continue
+
+                filter_result = filter_quality_tweet_text(text)
+                if filter_result.reason is None and filter_result.text in existing_texts:
+                    filter_result = FilterResult(
+                        text="",
+                        reason="duplicate_text",
+                        cleaned_length=len(filter_quality_tweet_text(text).text),
+                    )
+
+                if filter_result.reason is not None:
+                    _write_tsv_row(discard_handle, (tweet_id, filter_result.reason, str(filter_result.cleaned_length)))
+                    discarded += 1
+                    existing_ids.add(tweet_id)
+                    continue
+
+                _write_tsv_row(output_handle, (tweet_id, filter_result.text))
+                existing_ids.add(tweet_id)
+                existing_texts.add(filter_result.text)
+                hydrated += 1
+                if hydrated >= target_new_valid:
+                    break
+
+    audit = audit_quality_tsv(output_path, expected_count=target_valid)
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    audit_path.write_text(json.dumps(asdict(audit), indent=2, ensure_ascii=False), encoding="utf-8")
+
+    summary = HydrationSummary(
+        input_path=";".join(str(path) for path in cache_paths),
+        output_path=str(output_path),
+        not_hydrated_path=str(not_hydrated_path),
+        report_path=str(report_path) if report_path else None,
+        total_discovered=total_discovered,
+        skipped_existing=skipped_existing,
+        selected=total_discovered - skipped_existing,
+        hydrated=hydrated,
+        not_hydrated=0,
+        started_at=started_at,
+        completed_at=_utc_now(),
+        discarded=discarded,
+        target_valid=target_valid,
+        max_attempts=None,
+        output_rows=_count_tsv_data_rows(output_path),
+        not_hydrated_rows=_count_tsv_data_rows(not_hydrated_path),
+        discarded_rows=_count_tsv_data_rows(discarded_path),
+        audit_path=str(audit_path),
+    )
+    if report_path:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(asdict(summary), indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return summary
+
+
 @dataclass(frozen=True)
 class _CsvSource:
     label: str
@@ -834,6 +940,13 @@ def iter_hydrated_text_cache_paths(cache_dir: Path, *, exclude_paths: Iterable[P
 
 def load_hydrated_text_cache(paths: Iterable[Path]) -> dict[str, str]:
     cache: dict[str, str] = {}
+    for tweet_id, text in iter_hydrated_text_cache_records(paths):
+        if tweet_id not in cache:
+            cache[tweet_id] = text
+    return cache
+
+
+def iter_hydrated_text_cache_records(paths: Iterable[Path]) -> Iterable[tuple[str, str]]:
     for path in paths:
         delimiter = TSV_DELIMITER if path.suffix.lower() == ".tsv" else ","
         try:
@@ -848,13 +961,12 @@ def load_hydrated_text_cache(paths: Iterable[Path]) -> dict[str, str]:
                 for row in reader:
                     tweet_id = _clean_tweet_id(str(row.get("tweetId", "")))
                     text = str(row.get("texto", ""))
-                    if tweet_id is not None and text and tweet_id not in cache:
-                        cache[tweet_id] = text
+                    if tweet_id is not None and text:
+                        yield tweet_id, text
         except csv.Error:
             continue
         except UnicodeDecodeError:
             continue
-    return cache
 
 
 def iter_hydration_skip_cache_paths(cache_dir: Path, *, exclude_paths: Iterable[Path] = ()) -> Iterable[Path]:
@@ -1080,6 +1192,17 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Disable local hydrated tweetId,texto cache reuse in quality mode.",
     )
+    parser.add_argument(
+        "--cache-only",
+        action="store_true",
+        help="Build quality TSV only from local hydrated cache sources, without network hydration.",
+    )
+    parser.add_argument(
+        "--cache-source",
+        action="append",
+        default=[],
+        help="Specific tweetId,texto CSV/TSV cache file to use with --cache-only. Can be repeated.",
+    )
     return parser.parse_args(argv)
 
 
@@ -1098,9 +1221,37 @@ async def _run_from_args(args: argparse.Namespace) -> HydrationSummary:
         raise ValueError("--quality requires --format tsv")
     if args.output_format == "tsv" and not args.quality:
         raise ValueError("--format tsv is only supported with --quality")
+    if args.cache_only and not args.quality:
+        raise ValueError("--cache-only requires --quality")
 
     output_path = _resolve_output_path(args)
     report_path = Path(args.report) if args.report else _default_report_path(output_path)
+    if args.cache_only:
+        quality_auxiliary_paths = (
+            output_path.with_suffix(".not_hydrated.tsv"),
+            output_path.with_suffix(".discarded.tsv"),
+        )
+        cache_paths = (
+            [Path(path) for path in args.cache_source]
+            if args.cache_source
+            else list(
+                iter_hydrated_text_cache_paths(
+                    Path(args.hydrated_cache_dir),
+                    exclude_paths=(output_path, *quality_auxiliary_paths),
+                )
+            )
+        )
+        return build_quality_corpus_from_cache(
+            cache_paths=cache_paths,
+            output_path=output_path,
+            not_hydrated_path=Path(args.not_hydrated) if args.not_hydrated else output_path.with_suffix(".not_hydrated.tsv"),
+            discarded_path=output_path.with_suffix(".discarded.tsv"),
+            report_path=report_path,
+            audit_path=output_path.with_suffix(".audit.json"),
+            target_valid=args.target_valid,
+            overwrite=args.overwrite,
+        )
+
     hydrator = TwscrapeTweetTextHydrator(
         accounts_db=Path(args.accounts_db),
         account_name=args.account_name,

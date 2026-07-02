@@ -14,10 +14,12 @@ from scripts.build_lamsal_covid_corpus import (
     build_filtered_corpus,
     build_corpus,
     build_quality_corpus,
+    build_quality_corpus_from_cache,
     discover_tweet_ids,
     filter_quality_tweet_text,
     filter_tweet_text,
     iter_hydration_skip_cache_paths,
+    iter_hydrated_text_cache_records,
     iter_hydrated_text_cache_paths,
     load_hydration_skip_ids,
     load_hydrated_text_cache,
@@ -66,6 +68,22 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
         self.assertTrue(args.quality)
         self.assertEqual(args.output_format, "tsv")
         self.assertEqual(args.target_valid, 50)
+
+    def test_cli_accepts_quality_cache_only_flags(self):
+        args = _parse_args(
+            [
+                "--filtered",
+                "--quality",
+                "--format",
+                "tsv",
+                "--cache-only",
+                "--cache-source",
+                "cache.tsv",
+            ]
+        )
+
+        self.assertTrue(args.cache_only)
+        self.assertEqual(args.cache_source, ["cache.tsv"])
 
     def test_cached_hydrator_uses_local_text_before_fallback(self):
         fallback = FakeHydrator({"2222222222222222222": "remote text"})
@@ -117,6 +135,56 @@ class LamsalCovidCorpusBuilderTest(unittest.TestCase):
                 "2222222222222222222": "TSV text, with comma",
             },
         )
+
+    def test_iter_hydrated_text_cache_records_preserves_file_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "cache.tsv"
+            cache_path.write_text(
+                "tweetId\ttexto\n"
+                "1111111111111111111\tFirst text\n"
+                "2222222222222222222\tSecond text\n",
+                encoding="utf-8",
+            )
+
+            records = list(iter_hydrated_text_cache_records([cache_path]))
+
+        self.assertEqual(
+            records,
+            [
+                ("1111111111111111111", "First text"),
+                ("2222222222222222222", "Second text"),
+            ],
+        )
+
+    def test_build_quality_corpus_from_cache_writes_target_valid_without_network(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_path = tmp_path / "cache.tsv"
+            cache_path.write_text(
+                "tweetId\ttexto\n"
+                "1111111111111111111\tThis is a normal cached COVID text\n"
+                "2222222222222222222\tThis is a normal cached COVID text\n"
+                "3333333333333333333\tAnother normal cached COVID text\n",
+                encoding="utf-8",
+            )
+            output_path = tmp_path / "quality.tsv"
+
+            summary = build_quality_corpus_from_cache(
+                cache_paths=[cache_path],
+                output_path=output_path,
+                target_valid=2,
+                overwrite=True,
+            )
+            with output_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle, delimiter="\t"))
+            audit_ok = json.loads(output_path.with_suffix(".audit.json").read_text(encoding="utf-8"))["ok"]
+
+        self.assertEqual(summary.hydrated, 2)
+        self.assertEqual(summary.discarded, 1)
+        self.assertEqual(summary.output_rows, 2)
+        self.assertEqual(rows[0]["tweetId"], "1111111111111111111")
+        self.assertEqual(rows[1]["tweetId"], "3333333333333333333")
+        self.assertTrue(audit_ok)
 
     def test_load_hydration_skip_ids_uses_auxiliary_files_except_exclusions(self):
         with tempfile.TemporaryDirectory() as tmp:
