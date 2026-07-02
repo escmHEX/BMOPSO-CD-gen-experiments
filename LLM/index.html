@@ -31,6 +31,7 @@
           <button class="nav-item" type="button" data-tool="initialPopulationComparison">Comparación de estrategias de gen. de pob. inicial</button>
           <button class="nav-item" type="button" data-tool="turbulenceComparison">Comparación operador turbulencia</button>
           <button class="nav-item" type="button" data-tool="proposalComparator">Comparador de propuestas</button>
+          <button class="nav-item" type="button" data-tool="referenceTextSelection">Obtencion de texto de referencia</button>
           <button class="nav-item" type="button" data-tool="embeddingCalculator">Calculadora SBERT</button>
         </nav>
         <div class="sidebar-note">
@@ -2367,6 +2368,164 @@ Context:
               </div>
               <dl id="comparatorIntegrationDetails" class="definition-grid copyable-definition-grid"></dl>
             </article>
+          </section>
+        </section>
+
+        <section id="referenceTextSelection" class="tool-panel" aria-label="Obtencion de texto de referencia">
+          <header class="tool-header">
+            <div>
+              <p class="eyebrow">IEEE COVID + SBERT + K-means</p>
+              <h1>Obtencion de texto de referencia</h1>
+            </div>
+            <div class="header-status">
+              <span id="referenceSelectionConnectionDot" class="status-dot" aria-hidden="true"></span>
+              <span id="referenceSelectionConnectionText">Sin ejecucion</span>
+            </div>
+          </header>
+
+          <section class="grid">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Configuracion</h2>
+                <span>Selecciona una instancia central del cluster semantico mayoritario.</span>
+              </div>
+              <div class="form-grid">
+                <label class="span-2">
+                  <span>Ruta TSV</span>
+                  <input id="referenceSelectionDatasetPath" type="text" value="data/external/covid19_tweets/hydrated/10k_data.tsv" autocomplete="off">
+                  <small class="field-note">Debe contener columnas tweetId y texto separadas por tabulador.</small>
+                </label>
+                <label>
+                  <span>Textos aleatorios</span>
+                  <input id="referenceSelectionSampleSize" type="number" min="1" max="1000000" value="1000">
+                </label>
+                <label>
+                  <span>K clustering</span>
+                  <input id="referenceSelectionClusterCount" type="number" min="1" max="10000" value="4">
+                </label>
+                <label>
+                  <span>Min. palabras</span>
+                  <input id="referenceSelectionMinWords" type="number" min="0" max="100000" value="20">
+                </label>
+                <label>
+                  <span>Max. palabras</span>
+                  <input id="referenceSelectionMaxWords" type="number" min="0" max="100000" value="80">
+                </label>
+                <label>
+                  <span>Semilla</span>
+                  <input id="referenceSelectionSeed" type="number" min="0" max="2147483647" value="42">
+                </label>
+                <label>
+                  <span>Peso semantico lambda</span>
+                  <input id="referenceSelectionSemanticWeight" type="number" min="0" max="1" step="0.01" value="0.7">
+                </label>
+                <label>
+                  <span>Embedding SBERT</span>
+                  <select id="referenceSelectionEmbeddingModel">
+                    <option value="all-MiniLM-L6-v2" selected>all-MiniLM-L6-v2</option>
+                    <option value="thenlper/gte-small">gte-small</option>
+                  </select>
+                </label>
+              </div>
+              <div class="inline-actions">
+                <button id="runReferenceSelectionButton" type="button">Obtener texto</button>
+                <button id="clearReferenceSelectionButton" class="secondary" type="button">Limpiar</button>
+                <button id="saveSelectedReferenceButton" class="secondary" type="button" disabled>Guardar en referencias</button>
+              </div>
+            </article>
+          </section>
+
+          <section class="metrics-grid" aria-label="Resumen obtencion texto referencia">
+            <article class="metric">
+              <span>Estado</span>
+              <strong id="referenceSelectionRunStatus">--</strong>
+              <p>Estado general de la corrida backend.</p>
+            </article>
+            <article class="metric">
+              <span>Progreso</span>
+              <strong id="referenceSelectionProgressPercent">--</strong>
+              <p id="referenceSelectionProgressSummary">Sin corrida activa.</p>
+            </article>
+            <article class="metric">
+              <span>Filtrados</span>
+              <strong id="referenceSelectionFilteredCount">--</strong>
+              <p>Textos que cumplen el rango de longitud.</p>
+            </article>
+            <article class="metric">
+              <span>Muestra</span>
+              <strong id="referenceSelectionSampleCount">--</strong>
+              <p>Textos usados para embeddings y clustering.</p>
+            </article>
+            <article class="metric">
+              <span>Cluster mayoritario</span>
+              <strong id="referenceSelectionMajorityClusterSize">--</strong>
+              <p>Tamano del cluster seleccionado.</p>
+            </article>
+            <article class="metric">
+              <span>Score</span>
+              <strong id="referenceSelectionScore">--</strong>
+              <p>Puntaje final del texto elegido.</p>
+            </article>
+          </section>
+
+          <section class="status-panel" aria-live="polite">
+            <span id="referenceSelectionStatusTone" class="status-dot" aria-hidden="true"></span>
+            <div>
+              <p id="referenceSelectionStatusTitle">Listo</p>
+              <p id="referenceSelectionStatusDetail">Configura el TSV y ejecuta la seleccion reproducible.</p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Progreso</h2>
+              <span id="referenceSelectionProgressDetail">Sin ejecucion.</span>
+            </div>
+            <div class="progress-track" aria-hidden="true">
+              <span id="referenceSelectionProgressBar"></span>
+            </div>
+          </section>
+
+          <section class="grid two-columns results-layout">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Texto seleccionado</h2>
+                <span id="referenceSelectionSelectedId">--</span>
+              </div>
+              <pre id="referenceSelectionResultText" class="output-box">Ejecuta el modulo para ver el texto seleccionado.</pre>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Metadatos</h2>
+              </div>
+              <dl id="referenceSelectionMetadata" class="definition-grid copyable-definition-grid"></dl>
+            </article>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h2>Candidatos principales</h2>
+              <span>Ordenados por score dentro del cluster mayoritario.</span>
+            </div>
+            <div class="table-wrap">
+              <table class="wide-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>tweetId</th>
+                    <th>Palabras</th>
+                    <th>Score</th>
+                    <th>Dist. sem.</th>
+                    <th>Dist. long.</th>
+                    <th>Texto</th>
+                  </tr>
+                </thead>
+                <tbody id="referenceSelectionCandidatesBody">
+                  <tr><td colspan="7">Sin candidatos todavia.</td></tr>
+                </tbody>
+              </table>
+            </div>
           </section>
         </section>
 

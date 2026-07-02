@@ -443,6 +443,9 @@ let initialComparisonPollTimer = null;
 let currentInitialComparisonRunId = null;
 let turbulenceComparisonPollTimer = null;
 let currentTurbulenceComparisonRunId = null;
+let referenceTextSelectionPollTimer = null;
+let currentReferenceTextSelectionRunId = null;
+let latestReferenceTextSelectionRun = null;
 let turbulenceMetricPopover = null;
 let referenceTextLibrary = [];
 let lmStudioModelOptions = [];
@@ -820,6 +823,35 @@ const dom = {
   comparatorLogOutput: document.querySelector("#comparatorLogOutput"),
   copyComparatorLogButton: document.querySelector("#copyComparatorLogButton"),
   comparatorIntegrationDetails: document.querySelector("#comparatorIntegrationDetails"),
+  referenceSelectionDatasetPath: document.querySelector("#referenceSelectionDatasetPath"),
+  referenceSelectionSampleSize: document.querySelector("#referenceSelectionSampleSize"),
+  referenceSelectionClusterCount: document.querySelector("#referenceSelectionClusterCount"),
+  referenceSelectionMinWords: document.querySelector("#referenceSelectionMinWords"),
+  referenceSelectionMaxWords: document.querySelector("#referenceSelectionMaxWords"),
+  referenceSelectionSeed: document.querySelector("#referenceSelectionSeed"),
+  referenceSelectionSemanticWeight: document.querySelector("#referenceSelectionSemanticWeight"),
+  referenceSelectionEmbeddingModel: document.querySelector("#referenceSelectionEmbeddingModel"),
+  runReferenceSelectionButton: document.querySelector("#runReferenceSelectionButton"),
+  clearReferenceSelectionButton: document.querySelector("#clearReferenceSelectionButton"),
+  saveSelectedReferenceButton: document.querySelector("#saveSelectedReferenceButton"),
+  referenceSelectionConnectionDot: document.querySelector("#referenceSelectionConnectionDot"),
+  referenceSelectionConnectionText: document.querySelector("#referenceSelectionConnectionText"),
+  referenceSelectionRunStatus: document.querySelector("#referenceSelectionRunStatus"),
+  referenceSelectionProgressPercent: document.querySelector("#referenceSelectionProgressPercent"),
+  referenceSelectionProgressSummary: document.querySelector("#referenceSelectionProgressSummary"),
+  referenceSelectionFilteredCount: document.querySelector("#referenceSelectionFilteredCount"),
+  referenceSelectionSampleCount: document.querySelector("#referenceSelectionSampleCount"),
+  referenceSelectionMajorityClusterSize: document.querySelector("#referenceSelectionMajorityClusterSize"),
+  referenceSelectionScore: document.querySelector("#referenceSelectionScore"),
+  referenceSelectionStatusTone: document.querySelector("#referenceSelectionStatusTone"),
+  referenceSelectionStatusTitle: document.querySelector("#referenceSelectionStatusTitle"),
+  referenceSelectionStatusDetail: document.querySelector("#referenceSelectionStatusDetail"),
+  referenceSelectionProgressBar: document.querySelector("#referenceSelectionProgressBar"),
+  referenceSelectionProgressDetail: document.querySelector("#referenceSelectionProgressDetail"),
+  referenceSelectionSelectedId: document.querySelector("#referenceSelectionSelectedId"),
+  referenceSelectionResultText: document.querySelector("#referenceSelectionResultText"),
+  referenceSelectionMetadata: document.querySelector("#referenceSelectionMetadata"),
+  referenceSelectionCandidatesBody: document.querySelector("#referenceSelectionCandidatesBody"),
   embeddingModelLabel: document.querySelector("#embeddingModelLabel"),
   embeddingModelSelect: document.querySelector("#embeddingModelSelect"),
   embeddingTextA: document.querySelector("#embeddingTextA"),
@@ -887,6 +919,8 @@ const INITIAL_POPULATION_TERMINAL_STATUSES = new Set(["completed", "failed", "ca
 const INITIAL_POPULATION_COMPARISON_API = "/api/initial-population-comparison";
 const INITIAL_POPULATION_COMPARISON_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const REFERENCE_TEXTS_API = "/api/reference-texts";
+const REFERENCE_TEXT_SELECTION_API = "/api/reference-text-selection";
+const REFERENCE_TEXT_SELECTION_TERMINAL_STATUSES = new Set(["completed", "failed"]);
 const TURBULENCE_COMPARISON_API = "/api/turbulence-comparison";
 const TURBULENCE_COMPARISON_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const SBERT_API = "/api/sbert";
@@ -2143,6 +2177,326 @@ function setupReferenceTextLibraryControls() {
     control.textarea.addEventListener("input", () => syncReferenceTextSelection(control));
     control.saveButton.addEventListener("click", () => saveReferenceTextFromControl(control));
   });
+}
+
+async function requestReferenceTextSelectionJson(path, options = {}) {
+  const response = await fetch(`${REFERENCE_TEXT_SELECTION_API}${path}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+function referenceSelectionStatusLabel(status) {
+  return {
+    queued: "En cola",
+    running: "Ejecutando",
+    completed: "Completada",
+    failed: "Fallida",
+  }[status] || status || "--";
+}
+
+function readReferenceTextSelectionConfig() {
+  const datasetPath = dom.referenceSelectionDatasetPath.value.trim();
+  if (!datasetPath) {
+    throw new Error("Define la ruta TSV.");
+  }
+  const minWords = Math.floor(readClampedNumber(dom.referenceSelectionMinWords, "Min. palabras", 0, 100000));
+  const maxWords = Math.floor(readClampedNumber(dom.referenceSelectionMaxWords, "Max. palabras", 0, 100000));
+  if (minWords > maxWords) {
+    throw new Error("Min. palabras debe ser menor o igual a Max. palabras.");
+  }
+  return {
+    datasetPath,
+    sampleSize: Math.floor(readClampedNumber(dom.referenceSelectionSampleSize, "Textos aleatorios", 1, 1000000)),
+    clusterCount: Math.floor(readClampedNumber(dom.referenceSelectionClusterCount, "K clustering", 1, 10000)),
+    minWords,
+    maxWords,
+    seed: Math.floor(readClampedNumber(dom.referenceSelectionSeed, "Semilla", 0, 2147483647)),
+    semanticWeight: readClampedNumber(dom.referenceSelectionSemanticWeight, "Peso semantico lambda", 0, 1),
+    embeddingModel: dom.referenceSelectionEmbeddingModel.value,
+  };
+}
+
+function setReferenceTextSelectionRunning(isRunning) {
+  dom.runReferenceSelectionButton.disabled = isRunning;
+  dom.clearReferenceSelectionButton.disabled = isRunning;
+  dom.saveSelectedReferenceButton.disabled = isRunning || latestReferenceTextSelectionRun?.status !== "completed";
+  [
+    dom.referenceSelectionDatasetPath,
+    dom.referenceSelectionSampleSize,
+    dom.referenceSelectionClusterCount,
+    dom.referenceSelectionMinWords,
+    dom.referenceSelectionMaxWords,
+    dom.referenceSelectionSeed,
+    dom.referenceSelectionSemanticWeight,
+    dom.referenceSelectionEmbeddingModel,
+  ].forEach((field) => {
+    field.disabled = isRunning;
+  });
+}
+
+function stopReferenceTextSelectionPolling() {
+  if (referenceTextSelectionPollTimer) {
+    window.clearInterval(referenceTextSelectionPollTimer);
+    referenceTextSelectionPollTimer = null;
+  }
+}
+
+function resetReferenceTextSelectionUi() {
+  stopReferenceTextSelectionPolling();
+  currentReferenceTextSelectionRunId = null;
+  latestReferenceTextSelectionRun = null;
+  dom.referenceSelectionRunStatus.textContent = "--";
+  dom.referenceSelectionProgressPercent.textContent = "--";
+  dom.referenceSelectionProgressSummary.textContent = "Sin corrida activa.";
+  dom.referenceSelectionFilteredCount.textContent = "--";
+  dom.referenceSelectionSampleCount.textContent = "--";
+  dom.referenceSelectionMajorityClusterSize.textContent = "--";
+  dom.referenceSelectionScore.textContent = "--";
+  dom.referenceSelectionConnectionText.textContent = "Sin ejecucion";
+  dom.referenceSelectionConnectionDot.classList.remove("is-busy", "is-error");
+  dom.referenceSelectionProgressDetail.textContent = "Sin ejecucion.";
+  dom.referenceSelectionProgressBar.style.width = "0%";
+  dom.referenceSelectionSelectedId.textContent = "--";
+  dom.referenceSelectionResultText.textContent = "Ejecuta el modulo para ver el texto seleccionado.";
+  dom.referenceSelectionCandidatesBody.innerHTML = '<tr><td colspan="7">Sin candidatos todavia.</td></tr>';
+  renderDefinitionList(dom.referenceSelectionMetadata, []);
+  setStatus(
+    dom.referenceSelectionStatusTone,
+    dom.referenceSelectionStatusTitle,
+    dom.referenceSelectionStatusDetail,
+    "Listo",
+    "Configura el TSV y ejecuta la seleccion reproducible.",
+  );
+  setReferenceTextSelectionRunning(false);
+}
+
+async function loadReferenceTextSelectionDefaults() {
+  try {
+    const payload = await requestReferenceTextSelectionJson("/defaults");
+    const defaults = payload.defaults || {};
+    dom.referenceSelectionDatasetPath.value = defaults.datasetPath || dom.referenceSelectionDatasetPath.value;
+    dom.referenceSelectionSampleSize.value = defaults.sampleSize ?? dom.referenceSelectionSampleSize.value;
+    dom.referenceSelectionClusterCount.value = defaults.clusterCount ?? dom.referenceSelectionClusterCount.value;
+    dom.referenceSelectionMinWords.value = defaults.minWords ?? dom.referenceSelectionMinWords.value;
+    dom.referenceSelectionMaxWords.value = defaults.maxWords ?? dom.referenceSelectionMaxWords.value;
+    dom.referenceSelectionSeed.value = defaults.seed ?? dom.referenceSelectionSeed.value;
+    dom.referenceSelectionSemanticWeight.value = defaults.semanticWeight ?? dom.referenceSelectionSemanticWeight.value;
+    dom.referenceSelectionEmbeddingModel.value = defaults.embeddingModel || dom.referenceSelectionEmbeddingModel.value;
+  } catch (error) {
+    setStatus(
+      dom.referenceSelectionStatusTone,
+      dom.referenceSelectionStatusTitle,
+      dom.referenceSelectionStatusDetail,
+      "No se pudieron cargar defaults",
+      error.message,
+      "error",
+    );
+  }
+}
+
+async function runReferenceTextSelection() {
+  let config;
+  try {
+    config = readReferenceTextSelectionConfig();
+  } catch (error) {
+    setStatus(
+      dom.referenceSelectionStatusTone,
+      dom.referenceSelectionStatusTitle,
+      dom.referenceSelectionStatusDetail,
+      "Configuracion incompleta",
+      error.message,
+      "error",
+    );
+    return;
+  }
+
+  resetReferenceTextSelectionUi();
+  setReferenceTextSelectionRunning(true);
+  setStatus(
+    dom.referenceSelectionStatusTone,
+    dom.referenceSelectionStatusTitle,
+    dom.referenceSelectionStatusDetail,
+    "Iniciando seleccion",
+    "El backend cargara el TSV, calculara embeddings y ejecutara K-means.",
+    "busy",
+  );
+  try {
+    const run = await requestReferenceTextSelectionJson("/runs", {
+      method: "POST",
+      body: JSON.stringify(config),
+    });
+    currentReferenceTextSelectionRunId = run.runId;
+    renderReferenceTextSelectionRun(run);
+    referenceTextSelectionPollTimer = window.setInterval(
+      () => refreshReferenceTextSelectionRun(currentReferenceTextSelectionRunId),
+      1500,
+    );
+    await refreshReferenceTextSelectionRun(currentReferenceTextSelectionRunId);
+  } catch (error) {
+    setReferenceTextSelectionRunning(false);
+    setStatus(
+      dom.referenceSelectionStatusTone,
+      dom.referenceSelectionStatusTitle,
+      dom.referenceSelectionStatusDetail,
+      "No se pudo ejecutar",
+      error.message,
+      "error",
+    );
+  }
+}
+
+async function refreshReferenceTextSelectionRun(runId) {
+  if (!runId) return null;
+  try {
+    const run = await requestReferenceTextSelectionJson(`/runs/${encodeURIComponent(runId)}`);
+    renderReferenceTextSelectionRun(run);
+    if (REFERENCE_TEXT_SELECTION_TERMINAL_STATUSES.has(run.status)) {
+      stopReferenceTextSelectionPolling();
+      setReferenceTextSelectionRunning(false);
+    }
+    return run;
+  } catch (error) {
+    stopReferenceTextSelectionPolling();
+    setReferenceTextSelectionRunning(false);
+    setStatus(
+      dom.referenceSelectionStatusTone,
+      dom.referenceSelectionStatusTitle,
+      dom.referenceSelectionStatusDetail,
+      "No se pudo actualizar",
+      error.message,
+      "error",
+    );
+    return null;
+  }
+}
+
+function renderReferenceTextSelectionRun(run) {
+  latestReferenceTextSelectionRun = run;
+  const progress = run.progress || {};
+  const status = referenceSelectionStatusLabel(run.status);
+  const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  dom.referenceSelectionRunStatus.textContent = status;
+  dom.referenceSelectionProgressPercent.textContent = `${percent}%`;
+  dom.referenceSelectionProgressSummary.textContent = progress.detail || "Sin detalle.";
+  dom.referenceSelectionFilteredCount.textContent = run.filteredCount ?? "--";
+  dom.referenceSelectionSampleCount.textContent = run.sampleCount ?? "--";
+  dom.referenceSelectionMajorityClusterSize.textContent = run.majorityClusterSize ?? "--";
+  dom.referenceSelectionScore.textContent = formatOptionalNumber(run.score, 6);
+  dom.referenceSelectionConnectionText.textContent = status;
+  dom.referenceSelectionConnectionDot.classList.toggle("is-busy", run.status === "queued" || run.status === "running");
+  dom.referenceSelectionConnectionDot.classList.toggle("is-error", run.status === "failed");
+  dom.referenceSelectionProgressDetail.textContent = progress.detail || "Sin detalle.";
+  dom.referenceSelectionProgressBar.style.width = `${percent}%`;
+  dom.referenceSelectionSelectedId.textContent = run.selectedTweetId || "--";
+  dom.referenceSelectionResultText.textContent = run.selectedText || "Sin texto seleccionado todavia.";
+  renderReferenceTextSelectionMetadata(run);
+  renderReferenceTextSelectionCandidates(run.rankedCandidates || []);
+  dom.saveSelectedReferenceButton.disabled = run.status !== "completed";
+  setStatus(
+    dom.referenceSelectionStatusTone,
+    dom.referenceSelectionStatusTitle,
+    dom.referenceSelectionStatusDetail,
+    `Seleccion ${status}`,
+    run.error || progress.detail || "Seleccion reproducible lista.",
+    run.status === "queued" || run.status === "running" ? "busy" : run.status === "failed" ? "error" : "ready",
+  );
+  decorateAbbreviationTooltips(document.getElementById("referenceTextSelection") || document);
+}
+
+function renderReferenceTextSelectionMetadata(run) {
+  const cost = run.embeddingCost || {};
+  const config = run.config || {};
+  renderDefinitionList(dom.referenceSelectionMetadata, [
+    ["Run ID", run.runId || "--"],
+    ["TSV", run.datasetPath || config.datasetPath || "--"],
+    ["tweetId", run.selectedTweetId || "--"],
+    ["Indice original", run.selectedOriginalIndex ?? "--"],
+    ["Cluster", run.clusterDisplayIndex ?? "--"],
+    ["Palabras", run.wordCount ?? "--"],
+    ["Distancia semantica", formatOptionalNumber(run.semanticDistance, 6)],
+    ["Distancia longitud", formatOptionalNumber(run.lengthDistance, 2)],
+    ["Modelo", cost.embeddingModel || config.embeddingModel || "--"],
+    ["Embeddings", cost.embeddingTexts ?? "--"],
+  ]);
+}
+
+function renderReferenceTextSelectionCandidates(candidates) {
+  if (!candidates.length) {
+    dom.referenceSelectionCandidatesBody.innerHTML = '<tr><td colspan="7">Sin candidatos todavia.</td></tr>';
+    return;
+  }
+  dom.referenceSelectionCandidatesBody.replaceChildren(
+    ...candidates.map((candidate, index) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${index + 1}</td>
+        <td>${copyableTextHtml(candidate.tweetId || "--")}</td>
+        <td>${escapeHtml(String(candidate.wordCount ?? "--"))}</td>
+        <td>${formatOptionalNumber(candidate.score, 6)}</td>
+        <td>${formatOptionalNumber(candidate.semanticDistance, 6)}</td>
+        <td>${formatOptionalNumber(candidate.lengthDistance, 2)}</td>
+        <td class="context-cell long-cell"><div class="scroll-cell">${escapeHtml(candidate.text || "--")}</div></td>
+      `;
+      return tr;
+    }),
+  );
+}
+
+async function saveSelectedReferenceText() {
+  const run = latestReferenceTextSelectionRun;
+  if (!run || run.status !== "completed" || !run.selectedText) {
+    setStatus(
+      dom.referenceSelectionStatusTone,
+      dom.referenceSelectionStatusTitle,
+      dom.referenceSelectionStatusDetail,
+      "No hay texto para guardar",
+      "Ejecuta una seleccion completada antes de guardar.",
+      "error",
+    );
+    return;
+  }
+  dom.saveSelectedReferenceButton.disabled = true;
+  try {
+    const payload = await requestReferenceTextsJson({
+      method: "POST",
+      body: JSON.stringify({
+        label: `Referencia seleccionada ${run.selectedTweetId || run.runId}`,
+        paper: "IEEE COVID",
+        ref: run.selectedTweetId || "",
+        source: `Obtencion de texto de referencia; run ${run.runId}`,
+        text: run.selectedText,
+      }),
+    });
+    referenceTextLibrary = Array.isArray(payload.items) ? payload.items : referenceTextLibrary;
+    populateReferenceTextControls();
+    setStatus(
+      dom.referenceSelectionStatusTone,
+      dom.referenceSelectionStatusTitle,
+      dom.referenceSelectionStatusDetail,
+      "Texto guardado",
+      payload.item?.label ? `Guardado: ${payload.item.label}` : "Texto agregado a la biblioteca local.",
+    );
+  } catch (error) {
+    setStatus(
+      dom.referenceSelectionStatusTone,
+      dom.referenceSelectionStatusTitle,
+      dom.referenceSelectionStatusDetail,
+      "No se pudo guardar",
+      error.message,
+      "error",
+    );
+  } finally {
+    dom.saveSelectedReferenceButton.disabled = latestReferenceTextSelectionRun?.status !== "completed";
+  }
 }
 
 function setSolutionRunning(isRunning) {
@@ -10225,6 +10579,9 @@ dom.downloadComparatorRunDataButton?.addEventListener("click", downloadComparato
 dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
 dom.recontinueComparatorButton?.addEventListener("click", recontinueComparatorRun);
 dom.resumeComparatorButton?.addEventListener("click", resumeComparatorRun);
+dom.runReferenceSelectionButton?.addEventListener("click", runReferenceTextSelection);
+dom.clearReferenceSelectionButton?.addEventListener("click", resetReferenceTextSelectionUi);
+dom.saveSelectedReferenceButton?.addEventListener("click", saveSelectedReferenceText);
 dom.comparatorResumeRunId?.addEventListener("input", () => {
   syncComparatorDownloadButton();
   syncComparatorRecontinueButton(latestComparatorRun);
@@ -10409,6 +10766,8 @@ loadInitialComparisonStrategies();
 resetTurbulenceComparisonUi();
 refreshTurbulencePpdbStatus();
 resetComparatorUi({ clearStoredRunId: false });
+resetReferenceTextSelectionUi();
+loadReferenceTextSelectionDefaults();
 if (dom.comparatorResumeRunId) {
   dom.comparatorResumeRunId.value = loadStoredComparatorRunId();
 }

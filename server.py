@@ -23,6 +23,7 @@ from baselines.comparator import ComparatorRunConflictError, ComparatorService
 from initial_population.comparison import InitialPopulationComparisonService
 from initial_population.service import InitialPopulationService
 from llm_studio import LmStudioClient, LmStudioHttpError
+from reference_text_selection.service import ReferenceTextSelectionService
 from reference_text_store import ReferenceTextStore
 from runtime_defaults import OLLAMA_OPENAI_API_MODE, OLLAMA_OPENAI_BASE_URL
 from sbert_service import SbertSimilarityService
@@ -41,6 +42,7 @@ for extension, content_type in MIMETYPES.items():
 INITIAL_POPULATION_PREFIX = "/api/initial-population"
 INITIAL_POPULATION_COMPARISON_PREFIX = "/api/initial-population-comparison"
 REFERENCE_TEXTS_PREFIX = "/api/reference-texts"
+REFERENCE_TEXT_SELECTION_PREFIX = "/api/reference-text-selection"
 TURBULENCE_COMPARISON_PREFIX = "/api/turbulence-comparison"
 SBERT_PREFIX = "/api/sbert"
 LM_STUDIO_API_PREFIX = "/api/lm-studio"
@@ -619,6 +621,7 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
     comparator_service: ComparatorService
     initial_population_service: InitialPopulationService
     initial_population_comparison_service: InitialPopulationComparisonService
+    reference_text_selection_service: ReferenceTextSelectionService
     reference_text_store: ReferenceTextStore
     turbulence_comparison_service: TurbulenceComparisonService
     sbert_service: SbertSimilarityService
@@ -637,6 +640,9 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             return
         if self.path.startswith(REFERENCE_TEXTS_PREFIX):
             self.handle_reference_texts_get()
+            return
+        if self.path.startswith(REFERENCE_TEXT_SELECTION_PREFIX):
+            self.handle_reference_text_selection_get()
             return
         if self.path.startswith(TURBULENCE_COMPARISON_PREFIX):
             self.handle_turbulence_comparison_get()
@@ -661,6 +667,9 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             return
         if self.path.startswith(REFERENCE_TEXTS_PREFIX):
             self.handle_reference_texts_post()
+            return
+        if self.path.startswith(REFERENCE_TEXT_SELECTION_PREFIX):
+            self.handle_reference_text_selection_post()
             return
         if self.path.startswith(TURBULENCE_COMPARISON_PREFIX):
             self.handle_turbulence_comparison_post()
@@ -698,6 +707,7 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             or self.path.startswith(INITIAL_POPULATION_PREFIX)
             or self.path.startswith(INITIAL_POPULATION_COMPARISON_PREFIX)
             or self.path.startswith(REFERENCE_TEXTS_PREFIX)
+            or self.path.startswith(REFERENCE_TEXT_SELECTION_PREFIX)
             or self.path.startswith(TURBULENCE_COMPARISON_PREFIX)
             or self.path.startswith(SBERT_PREFIX)
             or self.path.startswith(LM_STUDIO_API_PREFIX)
@@ -773,6 +783,7 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             "comparator": self.comparator_service,
             "initialPopulation": self.initial_population_service,
             "initialPopulationComparison": self.initial_population_comparison_service,
+            "referenceTextSelection": self.reference_text_selection_service,
             "turbulenceComparison": self.turbulence_comparison_service,
         }
 
@@ -1074,6 +1085,41 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as error:
             self.send_json(500, {"error": str(error)})
 
+    def handle_reference_text_selection_get(self) -> None:
+        path_parts = self.reference_text_selection_path_parts()
+        try:
+            if path_parts == ["defaults"]:
+                self.send_json(200, {"defaults": self.reference_text_selection_service.default_config()})
+                return
+
+            if len(path_parts) == 2 and path_parts[0] == "runs":
+                run = self.reference_text_selection_service.get_run(path_parts[1])
+                if not run:
+                    self.send_json(404, {"error": "Run not found."})
+                    return
+                self.send_json(200, run)
+                return
+
+            self.send_json(404, {"error": "Not found."})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+        except Exception as error:
+            self.send_json(500, {"error": str(error)})
+
+    def handle_reference_text_selection_post(self) -> None:
+        path_parts = self.reference_text_selection_path_parts()
+        try:
+            if path_parts == ["runs"]:
+                run = self.reference_text_selection_service.start_run(self.read_json_body())
+                self.send_json(202, run)
+                return
+
+            self.send_json(404, {"error": "Not found."})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+        except Exception as error:
+            self.send_json(500, {"error": str(error)})
+
     def handle_turbulence_comparison_get(self) -> None:
         path_parts = self.turbulence_comparison_path_parts()
         try:
@@ -1207,6 +1253,13 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             return []
         return [urllib.parse.unquote(part) for part in api_path.split("/") if part]
 
+    def reference_text_selection_path_parts(self) -> list[str]:
+        parsed = urllib.parse.urlsplit(self.path)
+        api_path = parsed.path.removeprefix(REFERENCE_TEXT_SELECTION_PREFIX).strip("/")
+        if not api_path:
+            return []
+        return [urllib.parse.unquote(part) for part in api_path.split("/") if part]
+
     def turbulence_comparison_path_parts(self) -> list[str]:
         parsed = urllib.parse.urlsplit(self.path)
         api_path = parsed.path.removeprefix(TURBULENCE_COMPARISON_PREFIX).strip("/")
@@ -1294,6 +1347,7 @@ def main() -> None:
     ToolPortalHandler.comparator_service = ComparatorService(root)
     ToolPortalHandler.initial_population_service = InitialPopulationService(root)
     ToolPortalHandler.initial_population_comparison_service = InitialPopulationComparisonService(root)
+    ToolPortalHandler.reference_text_selection_service = ReferenceTextSelectionService(root)
     ToolPortalHandler.reference_text_store = ReferenceTextStore(root)
     ToolPortalHandler.turbulence_comparison_service = TurbulenceComparisonService(root)
     ToolPortalHandler.sbert_service = SbertSimilarityService()
@@ -1307,6 +1361,7 @@ def main() -> None:
         print(f"Serving comparator API at http://{args.host}:{args.port}{COMPARATOR_PREFIX}/")
         print(f"Serving initial population API at http://{args.host}:{args.port}{INITIAL_POPULATION_PREFIX}/")
         print(f"Serving initial population comparison API at http://{args.host}:{args.port}{INITIAL_POPULATION_COMPARISON_PREFIX}/")
+        print(f"Serving reference text selection API at http://{args.host}:{args.port}{REFERENCE_TEXT_SELECTION_PREFIX}/")
         print(f"Serving reference texts API at http://{args.host}:{args.port}{REFERENCE_TEXTS_PREFIX}/")
         print(f"Serving turbulence comparison API at http://{args.host}:{args.port}{TURBULENCE_COMPARISON_PREFIX}/")
         print(f"Serving SBERT API at http://{args.host}:{args.port}{SBERT_PREFIX}/")
