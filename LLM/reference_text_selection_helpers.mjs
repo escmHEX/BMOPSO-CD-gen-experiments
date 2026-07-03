@@ -1,13 +1,17 @@
 const NUMERIC_SORT_KEYS = new Set([
-  "score",
-  "semanticDistance",
-  "lengthDistance",
+  "selectionRank",
   "wordCount",
+  "clusterDisplayIndex",
+  "clusterSize",
+  "scoreLocal",
+  "globalRepresentativity",
+  "mmrScore",
+  "minSemanticDistanceToSelected",
   "originalIndex",
 ]);
 
 export const DEFAULT_REFERENCE_TEXT_SELECTION_SORT = {
-  key: "score",
+  key: "__default",
   direction: "asc",
 };
 
@@ -24,6 +28,22 @@ function compareText(left, right) {
   });
 }
 
+function compareDefaultRepresentatives(left, right) {
+  const leftRank = Number(left.representative.selectionRank);
+  const rightRank = Number(right.representative.selectionRank);
+  const leftSelected = Number.isFinite(leftRank);
+  const rightSelected = Number.isFinite(rightRank);
+  if (leftSelected !== rightSelected) return leftSelected ? -1 : 1;
+  if (leftSelected && rightSelected && leftRank !== rightRank) return leftRank - rightRank;
+  if (!leftSelected && !rightSelected) {
+    const qualityDiff =
+      finiteSortNumber(right.representative.globalRepresentativity, "asc") -
+      finiteSortNumber(left.representative.globalRepresentativity, "asc");
+    if (qualityDiff !== 0) return qualityDiff;
+  }
+  return left.index - right.index;
+}
+
 export function nextReferenceTextSelectionSort(currentSort, key) {
   const current = currentSort || DEFAULT_REFERENCE_TEXT_SELECTION_SORT;
   if (current.key === key) {
@@ -35,22 +55,30 @@ export function nextReferenceTextSelectionSort(currentSort, key) {
   return { key, direction: "asc" };
 }
 
-export function sortReferenceTextSelectionCandidates(candidates, sort = DEFAULT_REFERENCE_TEXT_SELECTION_SORT) {
+export function sortReferenceTextSelectionRepresentatives(
+  representatives,
+  sort = DEFAULT_REFERENCE_TEXT_SELECTION_SORT,
+) {
   const sortState = sort || DEFAULT_REFERENCE_TEXT_SELECTION_SORT;
+  const key = sortState.key || DEFAULT_REFERENCE_TEXT_SELECTION_SORT.key;
   const direction = sortState.direction === "desc" ? "desc" : "asc";
   const multiplier = direction === "desc" ? -1 : 1;
-  const key = sortState.key || DEFAULT_REFERENCE_TEXT_SELECTION_SORT.key;
-  return [...(candidates || [])]
-    .map((candidate, index) => ({ candidate, index }))
+  return [...(representatives || [])]
+    .map((representative, index) => ({ representative, index }))
     .sort((left, right) => {
+      if (key === DEFAULT_REFERENCE_TEXT_SELECTION_SORT.key) {
+        return compareDefaultRepresentatives(left, right);
+      }
       let comparison;
       if (NUMERIC_SORT_KEYS.has(key)) {
-        comparison = finiteSortNumber(left.candidate[key], direction) - finiteSortNumber(right.candidate[key], direction);
+        comparison =
+          finiteSortNumber(left.representative[key], direction) -
+          finiteSortNumber(right.representative[key], direction);
       } else {
-        comparison = compareText(left.candidate[key], right.candidate[key]);
+        comparison = compareText(left.representative[key], right.representative[key]);
       }
       if (comparison !== 0) return comparison * multiplier;
       return left.index - right.index;
     })
-    .map((item) => item.candidate);
+    .map((item) => item.representative);
 }

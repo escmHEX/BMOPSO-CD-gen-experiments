@@ -2387,7 +2387,7 @@ Context:
             <article class="panel">
               <div class="panel-title">
                 <h2>Configuracion</h2>
-                <span>Selecciona una instancia central del cluster semantico mayoritario.</span>
+                <span>Selecciona hasta N textos representativos con diversidad MMR.</span>
               </div>
               <div class="form-grid">
                 <label class="span-2">
@@ -2400,8 +2400,12 @@ Context:
                   <input id="referenceSelectionSampleSize" type="number" min="1" max="1000000" value="1000">
                 </label>
                 <label>
-                  <span>K clustering</span>
-                  <input id="referenceSelectionClusterCount" type="number" min="1" max="10000" value="4">
+                  <span>N_ref</span>
+                  <input id="referenceSelectionReferenceCount" type="number" min="1" max="10000" value="1">
+                </label>
+                <label>
+                  <span>K_min</span>
+                  <input id="referenceSelectionMinClusterCount" type="number" min="1" max="10000" value="4">
                 </label>
                 <label>
                   <span>Min. palabras</span>
@@ -2420,6 +2424,14 @@ Context:
                   <input id="referenceSelectionSemanticWeight" type="number" min="0" max="1" step="0.01" value="0.7">
                 </label>
                 <label>
+                  <span>Peso calidad rho</span>
+                  <input id="referenceSelectionQualityWeight" type="number" min="0" max="1" step="0.01" value="0.65">
+                </label>
+                <label>
+                  <span>Peso MMR eta</span>
+                  <input id="referenceSelectionMmrWeight" type="number" min="0" max="1" step="0.01" value="0.7">
+                </label>
+                <label>
                   <span>Embedding SBERT</span>
                   <select id="referenceSelectionEmbeddingModel">
                     <option value="all-MiniLM-L6-v2" selected>all-MiniLM-L6-v2</option>
@@ -2428,7 +2440,7 @@ Context:
                 </label>
               </div>
               <div class="inline-actions">
-                <button id="runReferenceSelectionButton" type="button">Obtener texto</button>
+                <button id="runReferenceSelectionButton" type="button">Obtener textos</button>
                 <button id="clearReferenceSelectionButton" class="secondary" type="button">Limpiar</button>
                 <button id="saveSelectedReferenceButton" class="secondary" type="button" disabled>Guardar en referencias</button>
               </div>
@@ -2469,14 +2481,19 @@ Context:
               <p>Textos usados para embeddings y clustering.</p>
             </article>
             <article class="metric">
-              <span>Cluster mayoritario</span>
-              <strong id="referenceSelectionMajorityClusterSize">--</strong>
-              <p>Tamano del cluster seleccionado.</p>
+              <span>K efectivo</span>
+              <strong id="referenceSelectionEffectiveClusterCount">--</strong>
+              <p>Clusters usados: min(max(K_min, 2*N_ref), muestra).</p>
             </article>
             <article class="metric">
-              <span>Score</span>
-              <strong id="referenceSelectionScore">--</strong>
-              <p>Puntaje final del texto elegido.</p>
+              <span>Representantes</span>
+              <strong id="referenceSelectionRepresentativeCount">--</strong>
+              <p>Un representante local por cluster.</p>
+            </article>
+            <article class="metric">
+              <span>Seleccionados</span>
+              <strong id="referenceSelectionSelectedCount">--</strong>
+              <p>Textos finales seleccionados.</p>
             </article>
           </section>
 
@@ -2517,10 +2534,10 @@ Context:
           <section class="grid two-columns results-layout">
             <article class="panel">
               <div class="panel-title">
-                <h2>Texto seleccionado</h2>
-                <span id="referenceSelectionSelectedId">--</span>
+                <h2>Textos seleccionados</h2>
+                <span id="referenceSelectionSelectedCountLabel">--</span>
               </div>
-              <pre id="referenceSelectionResultText" class="output-box">Ejecuta el modulo para ver el texto seleccionado.</pre>
+              <div id="referenceSelectionSelectedTexts" class="semantic-artifact-content">Ejecuta el modulo para ver los textos seleccionados.</div>
             </article>
 
             <article class="panel">
@@ -2533,24 +2550,28 @@ Context:
 
           <section class="panel">
             <div class="panel-title">
-              <h2>Candidatos principales</h2>
-              <span>Ordenados por score dentro del cluster mayoritario.</span>
+              <h2>Representantes por cluster</h2>
+              <span>Seleccionados primero; luego calidad global descendente.</span>
             </div>
             <div class="table-wrap">
               <table class="wide-table">
-                <thead id="referenceSelectionCandidatesHead">
+                <thead id="referenceSelectionRepresentativesHead">
                   <tr>
                     <th>#</th>
+                    <th><button class="table-sort-button" type="button" data-reference-sort="selectionRank">Rank <span data-reference-sort-indicator="selectionRank"></span></button></th>
                     <th><button class="table-sort-button" type="button" data-reference-sort="tweetId">tweetId <span data-reference-sort-indicator="tweetId"></span></button></th>
                     <th><button class="table-sort-button" type="button" data-reference-sort="wordCount">Palabras <span data-reference-sort-indicator="wordCount"></span></button></th>
-                    <th><button class="table-sort-button" type="button" data-reference-sort="score">Score <span data-reference-sort-indicator="score"></span></button></th>
-                    <th><button class="table-sort-button" type="button" data-reference-sort="semanticDistance">Dist. sem. <span data-reference-sort-indicator="semanticDistance"></span></button></th>
-                    <th><button class="table-sort-button" type="button" data-reference-sort="lengthDistance">Dist. long. <span data-reference-sort-indicator="lengthDistance"></span></button></th>
+                    <th><button class="table-sort-button" type="button" data-reference-sort="clusterDisplayIndex">Cluster <span data-reference-sort-indicator="clusterDisplayIndex"></span></button></th>
+                    <th><button class="table-sort-button" type="button" data-reference-sort="clusterSize">Tamano cluster <span data-reference-sort-indicator="clusterSize"></span></button></th>
+                    <th><button class="table-sort-button" type="button" data-reference-sort="scoreLocal">scoreLocal <span data-reference-sort-indicator="scoreLocal"></span></button></th>
+                    <th><button class="table-sort-button" type="button" data-reference-sort="globalRepresentativity">q global <span data-reference-sort-indicator="globalRepresentativity"></span></button></th>
+                    <th><button class="table-sort-button" type="button" data-reference-sort="mmrScore">MMR <span data-reference-sort-indicator="mmrScore"></span></button></th>
+                    <th><button class="table-sort-button" type="button" data-reference-sort="minSemanticDistanceToSelected">Diversidad min. <span data-reference-sort-indicator="minSemanticDistanceToSelected"></span></button></th>
                     <th><button class="table-sort-button" type="button" data-reference-sort="text">Texto <span data-reference-sort-indicator="text"></span></button></th>
                   </tr>
                 </thead>
-                <tbody id="referenceSelectionCandidatesBody">
-                  <tr><td colspan="7">Sin candidatos todavia.</td></tr>
+                <tbody id="referenceSelectionRepresentativesBody">
+                  <tr><td colspan="11">Sin representantes todavia.</td></tr>
                 </tbody>
               </table>
             </div>

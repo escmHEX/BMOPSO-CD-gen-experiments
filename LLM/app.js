@@ -47,7 +47,7 @@ import {
 import {
   DEFAULT_REFERENCE_TEXT_SELECTION_SORT,
   nextReferenceTextSelectionSort,
-  sortReferenceTextSelectionCandidates,
+  sortReferenceTextSelectionRepresentatives,
 } from "./reference_text_selection_helpers.mjs";
 
 const EMBEDDING_MODELS = {
@@ -462,8 +462,8 @@ let latestReferenceTextSelectionRun = null;
 let referenceTextSelectionProjectionChart = null;
 let referenceTextSelectionProjectionSignature = "";
 let referenceTextSelectionProjectionLoadToken = 0;
-let referenceTextSelectionCandidates = [];
-let referenceTextSelectionCandidateSort = { ...DEFAULT_REFERENCE_TEXT_SELECTION_SORT };
+let referenceTextSelectionRepresentatives = [];
+let referenceTextSelectionRepresentativeSort = { ...DEFAULT_REFERENCE_TEXT_SELECTION_SORT };
 let turbulenceMetricPopover = null;
 let referenceTextLibrary = [];
 let lmStudioModelOptions = [];
@@ -843,11 +843,14 @@ const dom = {
   comparatorIntegrationDetails: document.querySelector("#comparatorIntegrationDetails"),
   referenceSelectionDatasetPath: document.querySelector("#referenceSelectionDatasetPath"),
   referenceSelectionSampleSize: document.querySelector("#referenceSelectionSampleSize"),
-  referenceSelectionClusterCount: document.querySelector("#referenceSelectionClusterCount"),
+  referenceSelectionReferenceCount: document.querySelector("#referenceSelectionReferenceCount"),
+  referenceSelectionMinClusterCount: document.querySelector("#referenceSelectionMinClusterCount"),
   referenceSelectionMinWords: document.querySelector("#referenceSelectionMinWords"),
   referenceSelectionMaxWords: document.querySelector("#referenceSelectionMaxWords"),
   referenceSelectionSeed: document.querySelector("#referenceSelectionSeed"),
   referenceSelectionSemanticWeight: document.querySelector("#referenceSelectionSemanticWeight"),
+  referenceSelectionQualityWeight: document.querySelector("#referenceSelectionQualityWeight"),
+  referenceSelectionMmrWeight: document.querySelector("#referenceSelectionMmrWeight"),
   referenceSelectionEmbeddingModel: document.querySelector("#referenceSelectionEmbeddingModel"),
   runReferenceSelectionButton: document.querySelector("#runReferenceSelectionButton"),
   clearReferenceSelectionButton: document.querySelector("#clearReferenceSelectionButton"),
@@ -862,21 +865,22 @@ const dom = {
   referenceSelectionProgressSummary: document.querySelector("#referenceSelectionProgressSummary"),
   referenceSelectionFilteredCount: document.querySelector("#referenceSelectionFilteredCount"),
   referenceSelectionSampleCount: document.querySelector("#referenceSelectionSampleCount"),
-  referenceSelectionMajorityClusterSize: document.querySelector("#referenceSelectionMajorityClusterSize"),
-  referenceSelectionScore: document.querySelector("#referenceSelectionScore"),
+  referenceSelectionEffectiveClusterCount: document.querySelector("#referenceSelectionEffectiveClusterCount"),
+  referenceSelectionRepresentativeCount: document.querySelector("#referenceSelectionRepresentativeCount"),
+  referenceSelectionSelectedCount: document.querySelector("#referenceSelectionSelectedCount"),
   referenceSelectionStatusTone: document.querySelector("#referenceSelectionStatusTone"),
   referenceSelectionStatusTitle: document.querySelector("#referenceSelectionStatusTitle"),
   referenceSelectionStatusDetail: document.querySelector("#referenceSelectionStatusDetail"),
   referenceSelectionProgressBar: document.querySelector("#referenceSelectionProgressBar"),
   referenceSelectionProgressDetail: document.querySelector("#referenceSelectionProgressDetail"),
-  referenceSelectionSelectedId: document.querySelector("#referenceSelectionSelectedId"),
-  referenceSelectionResultText: document.querySelector("#referenceSelectionResultText"),
+  referenceSelectionSelectedCountLabel: document.querySelector("#referenceSelectionSelectedCountLabel"),
+  referenceSelectionSelectedTexts: document.querySelector("#referenceSelectionSelectedTexts"),
   referenceSelectionMetadata: document.querySelector("#referenceSelectionMetadata"),
   referenceSelectionProjectionMethod: document.querySelector("#referenceSelectionProjectionMethod"),
   referenceSelectionProjectionStatus: document.querySelector("#referenceSelectionProjectionStatus"),
   referenceSelectionProjectionChart: document.querySelector("#referenceSelectionProjectionChart"),
-  referenceSelectionCandidatesHead: document.querySelector("#referenceSelectionCandidatesHead"),
-  referenceSelectionCandidatesBody: document.querySelector("#referenceSelectionCandidatesBody"),
+  referenceSelectionRepresentativesHead: document.querySelector("#referenceSelectionRepresentativesHead"),
+  referenceSelectionRepresentativesBody: document.querySelector("#referenceSelectionRepresentativesBody"),
   embeddingModelLabel: document.querySelector("#embeddingModelLabel"),
   embeddingModelSelect: document.querySelector("#embeddingModelSelect"),
   embeddingTextA: document.querySelector("#embeddingTextA"),
@@ -2254,12 +2258,15 @@ function readReferenceTextSelectionConfig() {
   }
   return {
     datasetPath,
+    referenceCount: Math.floor(readClampedNumber(dom.referenceSelectionReferenceCount, "N_ref", 1, 10000)),
     sampleSize: Math.floor(readClampedNumber(dom.referenceSelectionSampleSize, "Textos aleatorios", 1, 1000000)),
-    clusterCount: Math.floor(readClampedNumber(dom.referenceSelectionClusterCount, "K clustering", 1, 10000)),
+    minClusterCount: Math.floor(readClampedNumber(dom.referenceSelectionMinClusterCount, "K_min", 1, 10000)),
     minWords,
     maxWords,
     seed: Math.floor(readClampedNumber(dom.referenceSelectionSeed, "Semilla", 0, 2147483647)),
     semanticWeight: readClampedNumber(dom.referenceSelectionSemanticWeight, "Peso semantico lambda", 0, 1),
+    qualityWeight: readClampedNumber(dom.referenceSelectionQualityWeight, "Peso calidad rho", 0, 1),
+    mmrWeight: readClampedNumber(dom.referenceSelectionMmrWeight, "Peso MMR eta", 0, 1),
     embeddingModel: dom.referenceSelectionEmbeddingModel.value,
   };
 }
@@ -2267,7 +2274,9 @@ function readReferenceTextSelectionConfig() {
 function setReferenceTextSelectionRunning(isRunning) {
   dom.runReferenceSelectionButton.disabled = isRunning;
   dom.clearReferenceSelectionButton.disabled = isRunning;
-  dom.saveSelectedReferenceButton.disabled = isRunning || latestReferenceTextSelectionRun?.status !== "completed";
+  const selectedCount = latestReferenceTextSelectionRun?.selectedReferences?.length || 0;
+  dom.saveSelectedReferenceButton.disabled =
+    isRunning || latestReferenceTextSelectionRun?.status !== "completed" || selectedCount < 1;
   if (dom.resumeReferenceSelectionButton) {
     dom.resumeReferenceSelectionButton.disabled = isRunning;
   }
@@ -2277,14 +2286,17 @@ function setReferenceTextSelectionRunning(isRunning) {
   [
     dom.referenceSelectionDatasetPath,
     dom.referenceSelectionSampleSize,
-    dom.referenceSelectionClusterCount,
+    dom.referenceSelectionReferenceCount,
+    dom.referenceSelectionMinClusterCount,
     dom.referenceSelectionMinWords,
     dom.referenceSelectionMaxWords,
     dom.referenceSelectionSeed,
     dom.referenceSelectionSemanticWeight,
+    dom.referenceSelectionQualityWeight,
+    dom.referenceSelectionMmrWeight,
     dom.referenceSelectionEmbeddingModel,
   ].forEach((field) => {
-    field.disabled = isRunning;
+    if (field) field.disabled = isRunning;
   });
 }
 
@@ -2338,8 +2350,8 @@ function resetReferenceTextSelectionUi() {
   stopReferenceTextSelectionPolling();
   currentReferenceTextSelectionRunId = null;
   latestReferenceTextSelectionRun = null;
-  referenceTextSelectionCandidates = [];
-  referenceTextSelectionCandidateSort = { ...DEFAULT_REFERENCE_TEXT_SELECTION_SORT };
+  referenceTextSelectionRepresentatives = [];
+  referenceTextSelectionRepresentativeSort = { ...DEFAULT_REFERENCE_TEXT_SELECTION_SORT };
   resetReferenceTextSelectionProjection();
   dom.referenceSelectionRunId.textContent = "--";
   dom.referenceSelectionRunStatus.textContent = "--";
@@ -2347,15 +2359,16 @@ function resetReferenceTextSelectionUi() {
   dom.referenceSelectionProgressSummary.textContent = "Sin corrida activa.";
   dom.referenceSelectionFilteredCount.textContent = "--";
   dom.referenceSelectionSampleCount.textContent = "--";
-  dom.referenceSelectionMajorityClusterSize.textContent = "--";
-  dom.referenceSelectionScore.textContent = "--";
+  dom.referenceSelectionEffectiveClusterCount.textContent = "--";
+  dom.referenceSelectionRepresentativeCount.textContent = "--";
+  dom.referenceSelectionSelectedCount.textContent = "--";
   dom.referenceSelectionConnectionText.textContent = "Sin ejecucion";
   dom.referenceSelectionConnectionDot.classList.remove("is-busy", "is-error");
   dom.referenceSelectionProgressDetail.textContent = "Sin ejecucion.";
   dom.referenceSelectionProgressBar.style.width = "0%";
-  dom.referenceSelectionSelectedId.textContent = "--";
-  dom.referenceSelectionResultText.textContent = "Ejecuta el modulo para ver el texto seleccionado.";
-  renderReferenceTextSelectionCandidates([]);
+  dom.referenceSelectionSelectedCountLabel.textContent = "--";
+  dom.referenceSelectionSelectedTexts.textContent = "Ejecuta el modulo para ver los textos seleccionados.";
+  renderReferenceTextSelectionRepresentatives([]);
   renderDefinitionList(dom.referenceSelectionMetadata, []);
   setStatus(
     dom.referenceSelectionStatusTone,
@@ -2372,12 +2385,15 @@ async function loadReferenceTextSelectionDefaults() {
     const payload = await requestReferenceTextSelectionJson("/defaults");
     const defaults = payload.defaults || {};
     dom.referenceSelectionDatasetPath.value = defaults.datasetPath || dom.referenceSelectionDatasetPath.value;
+    dom.referenceSelectionReferenceCount.value = defaults.referenceCount ?? dom.referenceSelectionReferenceCount.value;
     dom.referenceSelectionSampleSize.value = defaults.sampleSize ?? dom.referenceSelectionSampleSize.value;
-    dom.referenceSelectionClusterCount.value = defaults.clusterCount ?? dom.referenceSelectionClusterCount.value;
+    dom.referenceSelectionMinClusterCount.value = defaults.minClusterCount ?? dom.referenceSelectionMinClusterCount.value;
     dom.referenceSelectionMinWords.value = defaults.minWords ?? dom.referenceSelectionMinWords.value;
     dom.referenceSelectionMaxWords.value = defaults.maxWords ?? dom.referenceSelectionMaxWords.value;
     dom.referenceSelectionSeed.value = defaults.seed ?? dom.referenceSelectionSeed.value;
     dom.referenceSelectionSemanticWeight.value = defaults.semanticWeight ?? dom.referenceSelectionSemanticWeight.value;
+    dom.referenceSelectionQualityWeight.value = defaults.qualityWeight ?? dom.referenceSelectionQualityWeight.value;
+    dom.referenceSelectionMmrWeight.value = defaults.mmrWeight ?? dom.referenceSelectionMmrWeight.value;
     dom.referenceSelectionEmbeddingModel.value = defaults.embeddingModel || dom.referenceSelectionEmbeddingModel.value;
   } catch (error) {
     setStatus(
@@ -2520,18 +2536,18 @@ function renderReferenceTextSelectionRun(run) {
   dom.referenceSelectionProgressSummary.textContent = progress.detail || "Sin detalle.";
   dom.referenceSelectionFilteredCount.textContent = run.filteredCount ?? "--";
   dom.referenceSelectionSampleCount.textContent = run.sampleCount ?? "--";
-  dom.referenceSelectionMajorityClusterSize.textContent = run.majorityClusterSize ?? "--";
-  dom.referenceSelectionScore.textContent = formatOptionalNumber(run.score, 6);
+  dom.referenceSelectionEffectiveClusterCount.textContent = run.effectiveClusterCount ?? "--";
+  dom.referenceSelectionRepresentativeCount.textContent = run.representativeCount ?? "--";
+  dom.referenceSelectionSelectedCount.textContent = run.selectedCount ?? run.selectedReferences?.length ?? "--";
   dom.referenceSelectionConnectionText.textContent = status;
   dom.referenceSelectionConnectionDot.classList.toggle("is-busy", run.status === "queued" || run.status === "running");
   dom.referenceSelectionConnectionDot.classList.toggle("is-error", run.status === "failed");
   dom.referenceSelectionProgressDetail.textContent = progress.detail || "Sin detalle.";
   dom.referenceSelectionProgressBar.style.width = `${percent}%`;
-  dom.referenceSelectionSelectedId.textContent = run.selectedTweetId || "--";
-  dom.referenceSelectionResultText.textContent = run.selectedText || "Sin texto seleccionado todavia.";
+  renderReferenceTextSelectionSelectedTexts(run.selectedReferences || []);
   renderReferenceTextSelectionMetadata(run);
-  renderReferenceTextSelectionCandidates(run.rankedCandidates || []);
-  dom.saveSelectedReferenceButton.disabled = run.status !== "completed";
+  renderReferenceTextSelectionRepresentatives(run.representatives || []);
+  dom.saveSelectedReferenceButton.disabled = run.status !== "completed" || !(run.selectedReferences || []).length;
   if (run.status === "completed") {
     renderReferenceTextSelectionProjection(run);
   } else {
@@ -2563,7 +2579,7 @@ async function renderReferenceTextSelectionProjection(run) {
     runId: run.runId,
     method,
     sampleCount: run.sampleCount,
-    selectedTweetId: run.selectedTweetId,
+    selectedReferences: (run.selectedReferences || []).map((reference) => reference.tweetId || reference.originalIndex),
   });
   if (signature === referenceTextSelectionProjectionSignature) return;
   referenceTextSelectionProjectionSignature = signature;
@@ -2616,12 +2632,16 @@ function referenceTextSelectionProjectionPointData(point) {
     originalIndex: point.originalIndex,
     wordCount: point.wordCount,
     clusterDisplayIndex: point.clusterDisplayIndex,
-    isMajorityCluster: Boolean(point.isMajorityCluster),
+    clusterSize: point.clusterSize,
+    isRepresentative: Boolean(point.isRepresentative),
     isSelected: Boolean(point.isSelected),
-    rank: point.rank,
-    score: point.score,
+    selectionRank: point.selectionRank,
+    scoreLocal: point.scoreLocal,
     semanticDistance: point.semanticDistance,
     lengthDistance: point.lengthDistance,
+    globalRepresentativity: point.globalRepresentativity,
+    mmrScore: point.mmrScore,
+    minSemanticDistanceToSelected: point.minSemanticDistanceToSelected,
   };
 }
 
@@ -2658,7 +2678,7 @@ function referenceTextSelectionProjectionChartOption(payload) {
   return baseScatterOption("Muestra proyectada", [
     ...clusterSeries,
     {
-      name: "Texto seleccionado",
+      name: "Textos seleccionados",
       type: "scatter",
       symbol: "star",
       symbolSize: 24,
@@ -2678,16 +2698,18 @@ function referenceTextSelectionProjectionChartOption(payload) {
 function referenceTextSelectionProjectionTooltipFormatter(params) {
   const data = params.data || {};
   const value = params.value || [];
-  const selected = data.isSelected ? "<br>Texto seleccionado" : "";
-  const majority = data.isMajorityCluster ? "<br>Cluster mayoritario" : "";
+  const selected = data.isSelected ? `<br>Seleccionado: #${escapeHtml(String(data.selectionRank ?? "--"))}` : "";
+  const representative = data.isRepresentative ? "<br>Representante de cluster" : "";
   return `
     <strong>${escapeHtml(params.seriesName)}</strong><br>
     X: ${formatOptionalNumber(value[0], 6)}<br>
     Y: ${formatOptionalNumber(value[1], 6)}<br>
     tweetId: ${escapeHtml(String(data.tweetId || "--"))}<br>
     Palabras: ${escapeHtml(String(data.wordCount ?? "--"))}<br>
-    Rank: ${escapeHtml(String(data.rank ?? "--"))}<br>
-    Score: ${formatOptionalNumber(data.score, 6)}${selected}${majority}<br>
+    Cluster: ${escapeHtml(String(data.clusterDisplayIndex ?? "--"))}<br>
+    scoreLocal: ${formatOptionalNumber(data.scoreLocal, 6)}<br>
+    q global: ${formatOptionalNumber(data.globalRepresentativity, 6)}<br>
+    MMR: ${formatOptionalNumber(data.mmrScore, 6)}${selected}${representative}<br>
     ${escapeHtml(String(data.labelText || "")).slice(0, 300)}
   `;
 }
@@ -2698,39 +2720,76 @@ function renderReferenceTextSelectionMetadata(run) {
   renderDefinitionList(dom.referenceSelectionMetadata, [
     ["Run ID", run.runId || "--"],
     ["TSV", run.datasetPath || config.datasetPath || "--"],
-    ["tweetId", run.selectedTweetId || "--"],
-    ["Indice original", run.selectedOriginalIndex ?? "--"],
-    ["Cluster", run.clusterDisplayIndex ?? "--"],
-    ["Palabras", run.wordCount ?? "--"],
-    ["Distancia semantica", formatOptionalNumber(run.semanticDistance, 6)],
-    ["Distancia longitud", formatOptionalNumber(run.lengthDistance, 2)],
+    ["N_ref", config.referenceCount ?? run.referenceCount ?? "--"],
+    ["K_min", config.minClusterCount ?? "--"],
+    ["K efectivo", run.effectiveClusterCount ?? "--"],
+    ["Representantes", run.representativeCount ?? "--"],
+    ["Seleccionados", run.selectedCount ?? (run.selectedReferences || []).length ?? "--"],
+    ["lambda", formatOptionalNumber(config.semanticWeight, 3)],
+    ["rho", formatOptionalNumber(config.qualityWeight, 3)],
+    ["eta", formatOptionalNumber(config.mmrWeight, 3)],
     ["Modelo", cost.embeddingModel || config.embeddingModel || "--"],
     ["Embeddings", cost.embeddingTexts ?? "--"],
   ]);
 }
 
-function renderReferenceTextSelectionCandidates(candidates) {
-  referenceTextSelectionCandidates = Array.isArray(candidates) ? candidates : referenceTextSelectionCandidates;
-  const sortedCandidates = sortReferenceTextSelectionCandidates(
-    referenceTextSelectionCandidates,
-    referenceTextSelectionCandidateSort,
-  );
-  renderReferenceTextSelectionSortIndicators();
-  if (!sortedCandidates.length) {
-    dom.referenceSelectionCandidatesBody.innerHTML = '<tr><td colspan="7">Sin candidatos todavia.</td></tr>';
+function renderReferenceTextSelectionSelectedTexts(selectedReferences) {
+  const references = Array.isArray(selectedReferences) ? selectedReferences : [];
+  dom.referenceSelectionSelectedCountLabel.textContent = references.length ? `${references.length} texto(s)` : "--";
+  if (!references.length) {
+    dom.referenceSelectionSelectedTexts.textContent = "Sin textos seleccionados todavia.";
     return;
   }
-  dom.referenceSelectionCandidatesBody.replaceChildren(
-    ...sortedCandidates.map((candidate, index) => {
+  dom.referenceSelectionSelectedTexts.replaceChildren(
+    ...references.map((reference) => {
+      const article = document.createElement("article");
+      article.className = "semantic-artifact-card";
+      article.innerHTML = `
+        <div class="semantic-artifact-card-header">
+          <strong>#${escapeHtml(String(reference.selectionRank ?? "--"))} ${copyableTextHtml(reference.tweetId || "--")}</strong>
+          <span>Cluster ${escapeHtml(String(reference.clusterDisplayIndex ?? "--"))}</span>
+        </div>
+        <div class="copyable-long-text">${copyableTextHtml(reference.text || "")}</div>
+        <dl class="definition-grid compact-definition-grid">
+          <div><dt>Palabras</dt><dd>${escapeHtml(String(reference.wordCount ?? "--"))}</dd></div>
+          <div><dt>scoreLocal</dt><dd>${formatOptionalNumber(reference.scoreLocal, 6)}</dd></div>
+          <div><dt>q global</dt><dd>${formatOptionalNumber(reference.globalRepresentativity, 6)}</dd></div>
+          <div><dt>MMR</dt><dd>${formatOptionalNumber(reference.mmrScore, 6)}</dd></div>
+        </dl>
+      `;
+      return article;
+    }),
+  );
+}
+
+function renderReferenceTextSelectionRepresentatives(representatives) {
+  referenceTextSelectionRepresentatives = Array.isArray(representatives)
+    ? representatives
+    : referenceTextSelectionRepresentatives;
+  const sortedRepresentatives = sortReferenceTextSelectionRepresentatives(
+    referenceTextSelectionRepresentatives,
+    referenceTextSelectionRepresentativeSort,
+  );
+  renderReferenceTextSelectionSortIndicators();
+  if (!sortedRepresentatives.length) {
+    dom.referenceSelectionRepresentativesBody.innerHTML = '<tr><td colspan="11">Sin representantes todavia.</td></tr>';
+    return;
+  }
+  dom.referenceSelectionRepresentativesBody.replaceChildren(
+    ...sortedRepresentatives.map((representative, index) => {
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${index + 1}</td>
-        <td>${copyableTextHtml(candidate.tweetId || "--")}</td>
-        <td>${escapeHtml(String(candidate.wordCount ?? "--"))}</td>
-        <td>${formatOptionalNumber(candidate.score, 6)}</td>
-        <td>${formatOptionalNumber(candidate.semanticDistance, 6)}</td>
-        <td>${formatOptionalNumber(candidate.lengthDistance, 2)}</td>
-        <td class="context-cell long-cell"><div class="scroll-cell">${escapeHtml(candidate.text || "--")}</div></td>
+        <td>${escapeHtml(String(representative.selectionRank ?? "--"))}</td>
+        <td>${copyableTextHtml(representative.tweetId || "--")}</td>
+        <td>${escapeHtml(String(representative.wordCount ?? "--"))}</td>
+        <td>${escapeHtml(String(representative.clusterDisplayIndex ?? "--"))}</td>
+        <td>${escapeHtml(String(representative.clusterSize ?? "--"))}</td>
+        <td>${formatOptionalNumber(representative.scoreLocal, 6)}</td>
+        <td>${formatOptionalNumber(representative.globalRepresentativity, 6)}</td>
+        <td>${formatOptionalNumber(representative.mmrScore, 6)}</td>
+        <td>${formatOptionalNumber(representative.minSemanticDistanceToSelected, 6)}</td>
+        <td class="context-cell long-cell"><div class="scroll-cell">${escapeHtml(representative.text || "--")}</div></td>
       `;
       return tr;
     }),
@@ -2738,36 +2797,37 @@ function renderReferenceTextSelectionCandidates(candidates) {
 }
 
 function renderReferenceTextSelectionSortIndicators() {
-  dom.referenceSelectionCandidatesHead?.querySelectorAll("[data-reference-sort]").forEach((button) => {
+  dom.referenceSelectionRepresentativesHead?.querySelectorAll("[data-reference-sort]").forEach((button) => {
     const key = button.dataset.referenceSort;
-    const active = key === referenceTextSelectionCandidateSort.key;
-    button.setAttribute("aria-sort", active ? referenceTextSelectionCandidateSort.direction : "none");
+    const active = key === referenceTextSelectionRepresentativeSort.key;
+    button.setAttribute("aria-sort", active ? referenceTextSelectionRepresentativeSort.direction : "none");
     const indicator = button.querySelector("[data-reference-sort-indicator]");
     if (indicator) {
-      indicator.textContent = active ? referenceTextSelectionCandidateSort.direction : "";
+      indicator.textContent = active ? referenceTextSelectionRepresentativeSort.direction : "";
     }
   });
 }
 
-function handleReferenceTextSelectionCandidateSort(event) {
+function handleReferenceTextSelectionRepresentativeSort(event) {
   if (!(event.target instanceof Element)) return;
   const button = event.target.closest("[data-reference-sort]");
   if (!button) return;
-  referenceTextSelectionCandidateSort = nextReferenceTextSelectionSort(
-    referenceTextSelectionCandidateSort,
+  referenceTextSelectionRepresentativeSort = nextReferenceTextSelectionSort(
+    referenceTextSelectionRepresentativeSort,
     button.dataset.referenceSort,
   );
-  renderReferenceTextSelectionCandidates(referenceTextSelectionCandidates);
+  renderReferenceTextSelectionRepresentatives(referenceTextSelectionRepresentatives);
 }
 
-async function saveSelectedReferenceText() {
+async function saveSelectedReferenceTexts() {
   const run = latestReferenceTextSelectionRun;
-  if (!run || run.status !== "completed" || !run.selectedText) {
+  const selectedReferences = Array.isArray(run?.selectedReferences) ? run.selectedReferences : [];
+  if (!run || run.status !== "completed" || !selectedReferences.length) {
     setStatus(
       dom.referenceSelectionStatusTone,
       dom.referenceSelectionStatusTitle,
       dom.referenceSelectionStatusDetail,
-      "No hay texto para guardar",
+      "No hay textos para guardar",
       "Ejecuta una seleccion completada antes de guardar.",
       "error",
     );
@@ -2775,24 +2835,40 @@ async function saveSelectedReferenceText() {
   }
   dom.saveSelectedReferenceButton.disabled = true;
   try {
-    const payload = await requestReferenceTextsJson({
-      method: "POST",
-      body: JSON.stringify({
-        label: `Referencia seleccionada ${run.selectedTweetId || run.runId}`,
-        paper: "IEEE COVID",
-        ref: run.selectedTweetId || "",
-        source: `Obtencion de texto de referencia; run ${run.runId}`,
-        text: run.selectedText,
-      }),
-    });
-    referenceTextLibrary = Array.isArray(payload.items) ? payload.items : referenceTextLibrary;
+    const existingTexts = new Set(
+      referenceTextLibrary
+        .map((item) => String(item.text || "").trim())
+        .filter(Boolean),
+    );
+    let savedCount = 0;
+    let skippedCount = 0;
+    for (const reference of selectedReferences) {
+      const text = String(reference.text || "").trim();
+      if (!text || existingTexts.has(text)) {
+        skippedCount += 1;
+        continue;
+      }
+      const payload = await requestReferenceTextsJson({
+        method: "POST",
+        body: JSON.stringify({
+          label: `Referencia seleccionada #${reference.selectionRank || savedCount + skippedCount + 1} ${reference.tweetId || run.runId}`,
+          paper: "IEEE COVID",
+          ref: reference.tweetId || "",
+          source: `Obtencion de textos de referencia; run ${run.runId}; rank ${reference.selectionRank ?? "--"}`,
+          text,
+        }),
+      });
+      referenceTextLibrary = Array.isArray(payload.items) ? payload.items : referenceTextLibrary;
+      existingTexts.add(text);
+      savedCount += 1;
+    }
     populateReferenceTextControls();
     setStatus(
       dom.referenceSelectionStatusTone,
       dom.referenceSelectionStatusTitle,
       dom.referenceSelectionStatusDetail,
-      "Texto guardado",
-      payload.item?.label ? `Guardado: ${payload.item.label}` : "Texto agregado a la biblioteca local.",
+      "Textos procesados",
+      `${savedCount} guardado(s), ${skippedCount} omitido(s) por duplicado exacto.`,
     );
   } catch (error) {
     setStatus(
@@ -2804,7 +2880,9 @@ async function saveSelectedReferenceText() {
       "error",
     );
   } finally {
-    dom.saveSelectedReferenceButton.disabled = latestReferenceTextSelectionRun?.status !== "completed";
+    const selectedCount = latestReferenceTextSelectionRun?.selectedReferences?.length || 0;
+    dom.saveSelectedReferenceButton.disabled =
+      latestReferenceTextSelectionRun?.status !== "completed" || selectedCount < 1;
   }
 }
 
@@ -11257,9 +11335,9 @@ dom.recontinueComparatorButton?.addEventListener("click", recontinueComparatorRu
 dom.resumeComparatorButton?.addEventListener("click", resumeComparatorRun);
 dom.runReferenceSelectionButton?.addEventListener("click", runReferenceTextSelection);
 dom.clearReferenceSelectionButton?.addEventListener("click", resetReferenceTextSelectionUi);
-dom.saveSelectedReferenceButton?.addEventListener("click", saveSelectedReferenceText);
+dom.saveSelectedReferenceButton?.addEventListener("click", saveSelectedReferenceTexts);
 dom.resumeReferenceSelectionButton?.addEventListener("click", resumeReferenceTextSelectionRun);
-dom.referenceSelectionCandidatesHead?.addEventListener("click", handleReferenceTextSelectionCandidateSort);
+dom.referenceSelectionRepresentativesHead?.addEventListener("click", handleReferenceTextSelectionRepresentativeSort);
 dom.referenceSelectionProjectionMethod?.addEventListener("change", () => {
   referenceTextSelectionProjectionSignature = "";
   if (latestReferenceTextSelectionRun?.status === "completed") {

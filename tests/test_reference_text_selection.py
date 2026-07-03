@@ -44,184 +44,188 @@ def write_tsv(path: Path, rows: list[tuple[str, str]], header: str = "tweetId\tt
     path.write_text(content, encoding="utf-8")
 
 
+def wait_for_completed_run(service: ReferenceTextSelectionService, run: dict) -> dict:
+    deadline = time.monotonic() + 5
+    while run["status"] in {"queued", "running"} and time.monotonic() < deadline:
+        time.sleep(0.05)
+        run = service.get_run(run["runId"])
+    return run
+
+
 class ReferenceTextSelectionAlgorithmTests(unittest.TestCase):
-    def test_defaults_match_reference_strategy(self):
+    def test_defaults_match_unified_reference_strategy(self):
         self.assertEqual(
             DEFAULT_REFERENCE_TEXT_SELECTION_CONFIG,
             {
                 "datasetPath": "data/external/covid19_tweets/hydrated/10k_data.tsv",
+                "referenceCount": 1,
                 "sampleSize": 1000,
-                "clusterCount": 4,
+                "minClusterCount": 4,
                 "minWords": 20,
                 "maxWords": 80,
                 "seed": 42,
                 "semanticWeight": 0.7,
+                "qualityWeight": 0.65,
+                "mmrWeight": 0.7,
                 "embeddingModel": "all-MiniLM-L6-v2",
             },
         )
 
-    def test_selects_majority_cluster_central_text_and_preserves_original_index(self):
+    def test_selects_n_references_by_global_representativity_then_mmr(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             dataset = root / "dataset.tsv"
-            texts = {
-                "t1": "alpha beta gamma",
-                "t2": "alpha beta gamma delta",
-                "t3": "alpha beta gamma delta epsilon zeta eta theta",
-                "t4": "omega psi chi",
-            }
-            write_tsv(dataset, list(texts.items()))
+            rows = [
+                ("t1", "alpha beta gamma"),
+                ("t2", "alpha beta delta"),
+                ("t3", "omega psi chi"),
+                ("t4", "kappa lambda mu"),
+            ]
+            write_tsv(dataset, rows)
+            texts = dict(rows)
             embeddings = FakeEmbeddingService(
                 {
                     texts["t1"]: [1.0, 0.0],
-                    texts["t2"]: [0.994937, 0.100499],
-                    texts["t3"]: [0.979804, -0.19996],
-                    texts["t4"]: [-1.0, 0.0],
+                    texts["t2"]: [0.98, 0.2],
+                    texts["t3"]: [-1.0, 0.0],
+                    texts["t4"]: [0.0, 1.0],
                 }
             )
 
             result = select_reference_text(
                 {
                     "datasetPath": str(dataset),
+                    "referenceCount": 2,
                     "sampleSize": 4,
-                    "clusterCount": 2,
+                    "minClusterCount": 1,
                     "minWords": 1,
                     "maxWords": 10,
-                    "seed": 7,
+                    "seed": 42,
                     "semanticWeight": 0.7,
+                    "qualityWeight": 0.65,
+                    "mmrWeight": 0.7,
                     "embeddingModel": "all-MiniLM-L6-v2",
                 },
                 root=root,
                 embedding_service=embeddings,
             )
 
-        self.assertEqual(result["selectedTweetId"], "t1")
-        self.assertEqual(result["selectedText"], texts["t1"])
-        self.assertEqual(result["selectedOriginalIndex"], 1)
-        self.assertEqual(result["filteredCount"], 4)
-        self.assertEqual(result["sampleCount"], 4)
-        self.assertEqual(result["majorityClusterSize"], 3)
-        self.assertGreaterEqual(result["score"], 0.0)
-        self.assertLessEqual(result["score"], 1.0)
-        self.assertEqual(result["embeddingCost"]["embeddingTexts"], 4)
-        self.assertEqual(result["rankedCandidates"][0]["tweetId"], "t1")
+        self.assertEqual(result["effectiveClusterCount"], 4)
+        self.assertEqual(result["selectedCount"], 2)
+        self.assertEqual([item["tweetId"] for item in result["selectedReferences"]], ["t1", "t3"])
+        self.assertEqual([item["selectionRank"] for item in result["selectedReferences"]], [1, 2])
+        self.assertEqual(result["representativeCount"], 4)
+        self.assertNotIn("selectedText", result)
+        self.assertNotIn("rankedCandidates", result)
 
-    def test_tie_breaks_by_original_dataset_index_after_score_and_distances(self):
+    def test_local_representative_tie_breaks_by_original_dataset_index(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             dataset = root / "dataset.tsv"
             first = "same length text"
             second = "same other text"
             write_tsv(dataset, [("first", first), ("second", second)])
-            embeddings = FakeEmbeddingService(
-                {
-                    first: [1.0, 0.0],
-                    second: [1.0, 0.0],
-                }
-            )
+            embeddings = FakeEmbeddingService({first: [1.0, 0.0], second: [1.0, 0.0]})
 
             result = select_reference_text(
                 {
                     "datasetPath": str(dataset),
+                    "referenceCount": 1,
                     "sampleSize": 2,
-                    "clusterCount": 1,
+                    "minClusterCount": 1,
                     "minWords": 1,
                     "maxWords": 10,
                     "seed": 99,
                     "semanticWeight": 0.7,
+                    "qualityWeight": 0.65,
+                    "mmrWeight": 0.7,
                     "embeddingModel": "all-MiniLM-L6-v2",
                 },
                 root=root,
                 embedding_service=embeddings,
             )
 
-        self.assertEqual(result["selectedTweetId"], "first")
-        self.assertEqual(result["selectedOriginalIndex"], 1)
+        self.assertEqual(result["selectedReferences"][0]["tweetId"], "first")
+        self.assertEqual(result["selectedReferences"][0]["originalIndex"], 1)
 
-    def test_missing_tsv_raises_clear_validation_error(self):
+    def test_validation_errors_are_clear(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             embeddings = FakeEmbeddingService({})
-
             with self.assertRaisesRegex(ValueError, "No existe el TSV"):
                 select_reference_text(
                     {
                         "datasetPath": "missing.tsv",
+                        "referenceCount": 1,
                         "sampleSize": 2,
-                        "clusterCount": 1,
+                        "minClusterCount": 1,
                         "minWords": 1,
                         "maxWords": 10,
                         "seed": 1,
                         "semanticWeight": 0.7,
+                        "qualityWeight": 0.65,
+                        "mmrWeight": 0.7,
                         "embeddingModel": "all-MiniLM-L6-v2",
                     },
                     root=root,
                     embedding_service=embeddings,
                 )
 
-    def test_missing_required_columns_raise_clear_validation_error(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
             dataset = root / "dataset.tsv"
             write_tsv(dataset, [("1", "hello world")], header="id\ttext\n")
-            embeddings = FakeEmbeddingService({})
-
             with self.assertRaisesRegex(ValueError, "tweetId.*texto"):
                 select_reference_text(
                     {
                         "datasetPath": str(dataset),
+                        "referenceCount": 1,
                         "sampleSize": 2,
-                        "clusterCount": 1,
+                        "minClusterCount": 1,
                         "minWords": 1,
                         "maxWords": 10,
                         "seed": 1,
                         "semanticWeight": 0.7,
+                        "qualityWeight": 0.65,
+                        "mmrWeight": 0.7,
                         "embeddingModel": "all-MiniLM-L6-v2",
                     },
                     root=root,
                     embedding_service=embeddings,
                 )
 
-    def test_empty_filtered_set_raises_clear_validation_error(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            dataset = root / "dataset.tsv"
             write_tsv(dataset, [("1", "too short")])
-            embeddings = FakeEmbeddingService({})
-
             with self.assertRaisesRegex(ValueError, "No existen textos"):
                 select_reference_text(
                     {
                         "datasetPath": str(dataset),
+                        "referenceCount": 1,
                         "sampleSize": 2,
-                        "clusterCount": 1,
+                        "minClusterCount": 1,
                         "minWords": 5,
                         "maxWords": 10,
                         "seed": 1,
                         "semanticWeight": 0.7,
+                        "qualityWeight": 0.65,
+                        "mmrWeight": 0.7,
                         "embeddingModel": "all-MiniLM-L6-v2",
                     },
                     root=root,
                     embedding_service=embeddings,
                 )
 
-    def test_sample_smaller_than_cluster_count_raises_clear_validation_error(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            dataset = root / "dataset.tsv"
             write_tsv(dataset, [("1", "one valid text"), ("2", "another valid text")])
-            embeddings = FakeEmbeddingService({})
-
-            with self.assertRaisesRegex(ValueError, "clusterCount"):
+            with self.assertRaisesRegex(ValueError, "referenceCount"):
                 select_reference_text(
                     {
                         "datasetPath": str(dataset),
+                        "referenceCount": 3,
                         "sampleSize": 2,
-                        "clusterCount": 3,
+                        "minClusterCount": 1,
                         "minWords": 1,
                         "maxWords": 10,
                         "seed": 1,
                         "semanticWeight": 0.7,
+                        "qualityWeight": 0.65,
+                        "mmrWeight": 0.7,
                         "embeddingModel": "all-MiniLM-L6-v2",
                     },
                     root=root,
@@ -230,65 +234,26 @@ class ReferenceTextSelectionAlgorithmTests(unittest.TestCase):
 
 
 class ReferenceTextSelectionServiceTests(unittest.TestCase):
-    def test_service_persists_completed_run_artifacts(self):
+    def test_service_persists_plural_run_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             dataset = root / "dataset.tsv"
-            first = "alpha beta gamma"
-            second = "alpha beta delta"
-            write_tsv(dataset, [("first", first), ("second", second)])
-            service = ReferenceTextSelectionService(
-                root,
-                embedding_service=FakeEmbeddingService({first: [1.0, 0.0], second: [0.98, 0.2]}),
-            )
-
-            run = service.start_run(
-                {
-                    "datasetPath": str(dataset),
-                    "sampleSize": 2,
-                    "clusterCount": 1,
-                    "minWords": 1,
-                    "maxWords": 10,
-                    "seed": 42,
-                    "semanticWeight": 0.7,
-                    "embeddingModel": "all-MiniLM-L6-v2",
-                }
-            )
-            deadline = time.monotonic() + 5
-            while run["status"] in {"queued", "running"} and time.monotonic() < deadline:
-                time.sleep(0.05)
-                run = service.get_run(run["runId"])
-
-            self.assertEqual(run["status"], "completed")
-            run_dir = root / "runs" / "reference-text-selection" / run["runId"]
-            self.assertTrue((run_dir / "config.json").exists())
-            self.assertTrue((run_dir / "summary.json").exists())
-            self.assertTrue((run_dir / "selected_reference_text.json").exists())
-            self.assertTrue((run_dir / "ranked_candidates.json").exists())
-            self.assertTrue((run_dir / "sampled_candidates.json").exists())
-            self.assertTrue((run_dir / "sample_embeddings.npy").exists())
-            sampled_candidates = read_json(run_dir / "sampled_candidates.json")
-            sample_embeddings = np.load(run_dir / "sample_embeddings.npy")
-            self.assertEqual(len(sampled_candidates), run["sampleCount"])
-            self.assertEqual(sample_embeddings.shape[0], run["sampleCount"])
-            self.assertEqual([item["originalIndex"] for item in sampled_candidates], [1, 2])
-            self.assertEqual(sum(1 for item in sampled_candidates if item["isSelected"]), 1)
-
-    def test_service_projects_persisted_sample_embeddings(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            dataset = root / "dataset.tsv"
-            first = "alpha beta gamma"
-            second = "alpha beta delta"
-            third = "omega psi chi"
-            write_tsv(dataset, [("first", first), ("second", second), ("third", third)])
+            rows = [
+                ("first", "alpha beta gamma"),
+                ("second", "alpha beta delta"),
+                ("third", "omega psi chi"),
+                ("fourth", "kappa lambda mu"),
+            ]
+            write_tsv(dataset, rows)
+            texts = dict(rows)
             service = ReferenceTextSelectionService(
                 root,
                 embedding_service=FakeEmbeddingService(
                     {
-                        first: [1.0, 0.0, 0.0],
-                        second: [0.98, 0.2, 0.0],
-                        third: [-1.0, 0.0, 0.0],
+                        texts["first"]: [1.0, 0.0, 0.0],
+                        texts["second"]: [0.98, 0.2, 0.0],
+                        texts["third"]: [-1.0, 0.0, 0.0],
+                        texts["fourth"]: [0.0, 1.0, 0.0],
                     }
                 ),
             )
@@ -296,43 +261,93 @@ class ReferenceTextSelectionServiceTests(unittest.TestCase):
             run = service.start_run(
                 {
                     "datasetPath": str(dataset),
-                    "sampleSize": 3,
-                    "clusterCount": 2,
+                    "referenceCount": 2,
+                    "sampleSize": 4,
+                    "minClusterCount": 1,
                     "minWords": 1,
                     "maxWords": 10,
                     "seed": 42,
                     "semanticWeight": 0.7,
+                    "qualityWeight": 0.65,
+                    "mmrWeight": 0.7,
                     "embeddingModel": "all-MiniLM-L6-v2",
                 }
             )
-            deadline = time.monotonic() + 5
-            while run["status"] in {"queued", "running"} and time.monotonic() < deadline:
-                time.sleep(0.05)
-                run = service.get_run(run["runId"])
+            run = wait_for_completed_run(service, run)
+
+            self.assertEqual(run["status"], "completed")
+            self.assertEqual(run["selectedCount"], 2)
+            run_dir = root / "runs" / "reference-text-selection" / run["runId"]
+            self.assertTrue((run_dir / "config.json").exists())
+            self.assertTrue((run_dir / "summary.json").exists())
+            self.assertTrue((run_dir / "selected_reference_texts.json").exists())
+            self.assertTrue((run_dir / "cluster_representatives.json").exists())
+            self.assertTrue((run_dir / "sampled_candidates.json").exists())
+            self.assertTrue((run_dir / "sample_embeddings.npy").exists())
+            self.assertFalse((run_dir / "selected_reference_text.json").exists())
+            self.assertFalse((run_dir / "ranked_candidates.json").exists())
+            selected = read_json(run_dir / "selected_reference_texts.json")
+            representatives = read_json(run_dir / "cluster_representatives.json")
+            sampled = read_json(run_dir / "sampled_candidates.json")
+            sample_embeddings = np.load(run_dir / "sample_embeddings.npy")
+            self.assertEqual(len(selected), 2)
+            self.assertEqual(len(representatives), run["representativeCount"])
+            self.assertEqual(len(sampled), run["sampleCount"])
+            self.assertEqual(sample_embeddings.shape[0], run["sampleCount"])
+            self.assertEqual(sum(1 for item in sampled if item["isSelected"]), 2)
+
+    def test_service_projects_multiple_selected_references(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.tsv"
+            rows = [
+                ("first", "alpha beta gamma"),
+                ("second", "alpha beta delta"),
+                ("third", "omega psi chi"),
+                ("fourth", "kappa lambda mu"),
+            ]
+            write_tsv(dataset, rows)
+            texts = dict(rows)
+            service = ReferenceTextSelectionService(
+                root,
+                embedding_service=FakeEmbeddingService(
+                    {
+                        texts["first"]: [1.0, 0.0, 0.0],
+                        texts["second"]: [0.98, 0.2, 0.0],
+                        texts["third"]: [-1.0, 0.0, 0.0],
+                        texts["fourth"]: [0.0, 1.0, 0.0],
+                    }
+                ),
+            )
+            run = service.start_run(
+                {
+                    "datasetPath": str(dataset),
+                    "referenceCount": 2,
+                    "sampleSize": 4,
+                    "minClusterCount": 1,
+                    "minWords": 1,
+                    "maxWords": 10,
+                    "seed": 42,
+                    "semanticWeight": 0.7,
+                    "qualityWeight": 0.65,
+                    "mmrWeight": 0.7,
+                    "embeddingModel": "all-MiniLM-L6-v2",
+                }
+            )
+            run = wait_for_completed_run(service, run)
 
             payload = service.get_run_embedding_projection(run["runId"], method="pca")
 
             self.assertEqual(payload["runId"], run["runId"])
             self.assertEqual(payload["method"], "pca")
-            self.assertEqual(payload["effectiveMethod"], "pca")
-            self.assertEqual(payload["embeddingModel"], "all-MiniLM-L6-v2")
-            self.assertEqual(payload["sampleCount"], 3)
-            self.assertEqual(len(payload["points"]), 3)
+            self.assertEqual(payload["sampleCount"], 4)
             selected_points = [point for point in payload["points"] if point["isSelected"]]
-            self.assertEqual(len(selected_points), 1)
-            self.assertEqual(selected_points[0]["tweetId"], run["selectedTweetId"])
-            self.assertIn("clusterSizes", payload)
+            self.assertEqual([point["selectionRank"] for point in selected_points], [1, 2])
             self.assertTrue(
                 (root / "runs" / "reference-text-selection" / run["runId"] / "embedding_projection_pca.json").exists()
             )
 
-    def test_projection_returns_none_for_missing_run(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            service = ReferenceTextSelectionService(Path(temp_dir), embedding_service=FakeEmbeddingService({}))
-
-            self.assertIsNone(service.get_run_embedding_projection("missing-run", method="pca"))
-
-    def test_projection_requires_persisted_sample_artifacts(self):
+    def test_old_singular_runs_are_incompatible(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             run_dir = root / "runs" / "reference-text-selection" / "old-run"
@@ -343,12 +358,15 @@ class ReferenceTextSelectionServiceTests(unittest.TestCase):
                     "runId": "old-run",
                     "runDir": str(run_dir),
                     "status": "completed",
+                    "selectedText": "legacy",
                     "config": {"embeddingModel": "all-MiniLM-L6-v2"},
                 },
             )
             service = ReferenceTextSelectionService(root, embedding_service=FakeEmbeddingService({}))
 
-            with self.assertRaisesRegex(ValueError, "artefactos de proyeccion"):
+            with self.assertRaisesRegex(ValueError, "incompatible"):
+                service.get_run("old-run")
+            with self.assertRaisesRegex(ValueError, "incompatible"):
                 service.get_run_embedding_projection("old-run", method="pca")
 
 
@@ -357,20 +375,20 @@ class ReferenceTextSelectionServerRouteTests(unittest.TestCase):
         sent: list[tuple[int, dict]] = []
         fake_handler = SimpleNamespace(
             reference_text_selection_path_parts=lambda: ["defaults"],
-            reference_text_selection_service=SimpleNamespace(default_config=lambda: {"sampleSize": 1000}),
+            reference_text_selection_service=SimpleNamespace(default_config=lambda: {"referenceCount": 1}),
             send_json=lambda status, payload: sent.append((status, payload)),
         )
 
         server.ToolPortalHandler.handle_reference_text_selection_get(fake_handler)
 
-        self.assertEqual(sent, [(200, {"defaults": {"sampleSize": 1000}})])
+        self.assertEqual(sent, [(200, {"defaults": {"referenceCount": 1}})])
 
     def test_start_run_route_returns_accepted_run(self):
         sent: list[tuple[int, dict]] = []
         fake_handler = SimpleNamespace(
             reference_text_selection_path_parts=lambda: ["runs"],
             reference_text_selection_service=SimpleNamespace(start_run=lambda payload: {"runId": "run-1"}),
-            read_json_body=lambda: {"sampleSize": 1000},
+            read_json_body=lambda: {"referenceCount": 1},
             send_json=lambda status, payload: sent.append((status, payload)),
         )
 
@@ -422,21 +440,6 @@ class ReferenceTextSelectionServerRouteTests(unittest.TestCase):
 
         self.assertEqual(sent, [(400, {"error": "method debe ser pca, tsne o umap."})])
 
-    def test_embedding_projection_route_returns_500_for_unexpected_errors(self):
-        sent: list[tuple[int, dict]] = []
-        fake_handler = SimpleNamespace(
-            path="/api/reference-text-selection/runs/run-1/embedding-projection?method=pca",
-            reference_text_selection_path_parts=lambda: ["runs", "run-1", "embedding-projection"],
-            reference_text_selection_service=SimpleNamespace(
-                get_run_embedding_projection=lambda run_id, method: (_ for _ in ()).throw(RuntimeError("boom"))
-            ),
-            send_json=lambda status, payload: sent.append((status, payload)),
-        )
-
-        server.ToolPortalHandler.handle_reference_text_selection_get(fake_handler)
-
-        self.assertEqual(sent, [(500, {"error": "boom"})])
-
 
 class ReferenceTextSelectionFrontendSmokeTests(unittest.TestCase):
     def test_reference_text_selection_nav_is_after_proposal_comparator(self):
@@ -449,21 +452,24 @@ class ReferenceTextSelectionFrontendSmokeTests(unittest.TestCase):
         self.assertLess(proposal_index, selection_index)
         self.assertLess(selection_index, embedding_index)
 
-    def test_reference_text_selection_ui_ids_exist(self):
+    def test_reference_text_selection_plural_ui_ids_exist_without_legacy_cluster_count(self):
         html = Path("LLM/index.html").read_text(encoding="utf-8")
         for element_id in (
             "referenceTextSelection",
             "referenceSelectionDatasetPath",
+            "referenceSelectionReferenceCount",
             "referenceSelectionSampleSize",
-            "referenceSelectionClusterCount",
+            "referenceSelectionMinClusterCount",
             "referenceSelectionMinWords",
             "referenceSelectionMaxWords",
             "referenceSelectionSeed",
             "referenceSelectionSemanticWeight",
+            "referenceSelectionQualityWeight",
+            "referenceSelectionMmrWeight",
             "runReferenceSelectionButton",
             "saveSelectedReferenceButton",
-            "referenceSelectionResultText",
-            "referenceSelectionCandidatesBody",
+            "referenceSelectionSelectedTexts",
+            "referenceSelectionRepresentativesBody",
             "referenceSelectionRunId",
             "referenceSelectionResumeRunId",
             "resumeReferenceSelectionButton",
@@ -472,10 +478,11 @@ class ReferenceTextSelectionFrontendSmokeTests(unittest.TestCase):
             "referenceSelectionProjectionChart",
         ):
             self.assertIn(f'id="{element_id}"', html)
+        self.assertNotIn('id="referenceSelectionClusterCount"', html)
+        self.assertNotIn("Texto seleccionado", html)
 
         app = Path("LLM/app.js").read_text(encoding="utf-8")
-        self.assertIn('const REFERENCE_TEXT_SELECTION_API = "/api/reference-text-selection";', app)
-        self.assertIn("runReferenceTextSelection", app)
+        self.assertIn("selectedReferences", app)
         self.assertIn("renderReferenceTextSelectionProjection", app)
 
 

@@ -1888,6 +1888,41 @@ label span {
   margin: 0;
 }
 
+.semantic-artifact-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 12px;
+}
+
+.semantic-artifact-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.semantic-artifact-card-header span {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.copyable-long-text {
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-strong);
+  padding: 10px;
+  line-height: 1.45;
+}
+
 .artifact-meta {
   color: var(--muted);
   font-size: 0.82rem;
