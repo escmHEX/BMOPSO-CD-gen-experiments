@@ -2058,6 +2058,77 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertNotIn("router.task_models.central_anchor_selection", set_values)
         self.assertFalse(any(path.startswith("router.task_models.") for path in command_set_paths(command)))
 
+    def test_binary_command_maps_alternative_model_to_default_llama_task_models(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {
+                    "binary-mopso-cd": {
+                        "cliValues": {
+                            "ollama.alternative_model": "lfm2.5:8b",
+                        }
+                    }
+                },
+            }
+        )
+        command = service._build_command(
+            {"config": config},
+            proposal,
+            Path("."),
+            Path("out"),
+            Path("reference.txt"),
+            777,
+        )
+
+        set_values = command_set_values(command)
+        self.assertEqual(set_values["ollama.alternative_model"], '"lfm2.5:8b"')
+        self.assertIn("router.task_models.semantic_anchor_extraction", set_values)
+        self.assertIn("router.task_models.semantic_pool_generation", set_values)
+        self.assertIn("router.task_models.semantic_pool_expansion", set_values)
+        self.assertIn("router.task_models.semantic_component_influence_candidates", set_values)
+        self.assertIn("router.task_models.synthetic_text_generation", set_values)
+        self.assertEqual(set_values["router.task_models.semantic_anchor_extraction"], '"lfm2.5:8b"')
+        self.assertEqual(set_values["router.task_models.semantic_pool_generation"], '"lfm2.5:8b"')
+        self.assertEqual(set_values["router.task_models.semantic_pool_expansion"], '"lfm2.5:8b"')
+        self.assertEqual(set_values["router.task_models.semantic_component_influence_candidates"], '"lfm2.5:8b"')
+        self.assertEqual(set_values["router.task_models.synthetic_text_generation"], '"lfm2.5:8b"')
+        self.assertNotIn("router.task_models.central_anchor_selection", set_values)
+
+    def test_binary_command_keeps_explicit_task_model_over_alternative_model(self):
+        service = ComparatorService(Path("."))
+        proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "selectedProposalIds": ["binary-mopso-cd"],
+                "proposalConfigs": {
+                    "binary-mopso-cd": {
+                        "cliValues": {
+                            "ollama.alternative_model": "lfm2.5:8b",
+                            "router.task_models.synthetic_text_generation": "qwen3.5:2b",
+                        }
+                    }
+                },
+            }
+        )
+        command = service._build_command(
+            {"config": config},
+            proposal,
+            Path("."),
+            Path("out"),
+            Path("reference.txt"),
+            777,
+        )
+
+        set_values = command_set_values(command)
+        self.assertEqual(set_values["router.task_models.synthetic_text_generation"], '"qwen3.5:2b"')
+        self.assertIn("router.task_models.semantic_pool_generation", set_values)
+        self.assertEqual(set_values["router.task_models.semantic_pool_generation"], '"lfm2.5:8b"')
+        self.assertNotIn("router.task_models.central_anchor_selection", set_values)
+
     def test_binary_command_injects_server_safe_ollama_timeout_by_default(self):
         service = ComparatorService(Path("."))
         proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
