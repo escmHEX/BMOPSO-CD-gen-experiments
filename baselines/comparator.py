@@ -1966,6 +1966,9 @@ class ProposalRunInstance:
     base_display_name: str
     proposal: ProposalDefinition
     proposal_config: dict[str, Any]
+    runtime_config: dict[str, Any]
+    n: int
+    repetitions_k: int
     order_index: int
 
 
@@ -2327,12 +2330,15 @@ class ComparatorService:
     ) -> dict[str, Any]:
         instance = self._coerce_instance(proposal)
         base_proposal = instance.proposal
-        total_repetitions = max(1, int(repetitions_k or 1))
+        total_repetitions = max(1, int(repetitions_k or instance.repetitions_k or 1))
         return {
             "instanceId": instance.instance_id,
             "proposalId": instance.proposal_id,
             "displayName": instance.display_name,
             "baseDisplayName": instance.base_display_name,
+            "runtimeConfig": instance.runtime_config,
+            "n": instance.n,
+            "repetitionsK": total_repetitions,
             "status": STATUS_QUEUED,
             "stageLabel": "En cola",
             "stageIndex": 0,
@@ -2369,7 +2375,7 @@ class ComparatorService:
             "logs": [],
             "proposals": [],
             "proposalStates": {
-                instance.instance_id: self._initial_proposal_state(instance, config.get("repetitionsK"))
+                instance.instance_id: self._initial_proposal_state(instance)
                 for instance in selected_instances
             },
             "progress": {
@@ -2792,7 +2798,6 @@ class ComparatorService:
         config = run.get("config") if isinstance(run.get("config"), dict) else {}
         selected_instances = self._selected_instances(config)
         states = run.setdefault("proposalStates", {})
-        total_repetitions = max(1, int(config.get("repetitionsK") or 1))
         completed_ids = {
             str(instance_id)
             for instance_id, state in states.items()
@@ -2805,7 +2810,12 @@ class ComparatorService:
         )
         completed_ids.discard("")
         for instance in selected_instances:
-            state = states.setdefault(instance.instance_id, self._initial_proposal_state(instance, total_repetitions))
+            total_repetitions = max(1, int(instance.repetitions_k or 1))
+            state = states.setdefault(instance.instance_id, self._initial_proposal_state(instance))
+            state["runtimeConfig"] = instance.runtime_config
+            state["n"] = instance.n
+            state["repetitionsK"] = total_repetitions
+            state["totalRepetitions"] = total_repetitions
             if instance.instance_id in completed_ids:
                 state.update(
                     {
@@ -2847,7 +2857,7 @@ class ComparatorService:
             self._delete_run_instance_dir(run_dir, instance_id)
 
         for instance in remaining_instances:
-            states[instance.instance_id] = self._initial_proposal_state(instance, total_repetitions)
+            states[instance.instance_id] = self._initial_proposal_state(instance)
 
         self._filter_run_logs_unlocked(run, reset_ids)
         self._sort_proposals_unlocked(run)
@@ -2999,10 +3009,16 @@ class ComparatorService:
             "displayName": str(result.get("displayName") or proposal.display_name),
             "baseDisplayName": str(result.get("baseDisplayName") or proposal.display_name),
             "proposalConfig": result.get("proposalConfig") if isinstance(result.get("proposalConfig"), dict) else {"extraArgs": "", "cliValues": {}},
+            "runtimeConfig": result.get("runtimeConfig") if isinstance(result.get("runtimeConfig"), dict) else {},
+            "n": result.get("n"),
+            "repetitionsK": result.get("repetitionsK"),
         }
 
     def _instance_from_result(self, proposal: ProposalDefinition, result: dict[str, Any]) -> ProposalRunInstance:
         identity = self._identity_from_result(proposal, result)
+        runtime_config = identity.get("runtimeConfig") if isinstance(identity.get("runtimeConfig"), dict) else {}
+        n = int(identity.get("n") or runtime_config.get("n") or COMPARATOR_DEFAULTS.get("n") or 1)
+        repetitions_k = int(identity.get("repetitionsK") or runtime_config.get("repetitionsK") or COMPARATOR_DEFAULTS.get("repetitionsK") or 1)
         return ProposalRunInstance(
             instance_id=identity["instanceId"],
             proposal_id=proposal.proposal_id,
@@ -3010,6 +3026,9 @@ class ComparatorService:
             base_display_name=identity["baseDisplayName"],
             proposal=proposal,
             proposal_config=identity["proposalConfig"],
+            runtime_config=runtime_config,
+            n=n,
+            repetitions_k=repetitions_k,
             order_index=0,
         )
 
@@ -3063,9 +3082,21 @@ class ComparatorService:
         if not reference_text:
             raise ValueError("referenceText is required.")
 
+        top_k = self._int_between(payload.get("topK", COMPARATOR_DEFAULTS.get("topK", 10)), "topK", 1, 200)
+        n = self._int_between(payload.get("n", COMPARATOR_DEFAULTS.get("n", 10)), "n", 1, 500)
+        generaciones = self._int_between(payload.get("generaciones", COMPARATOR_DEFAULTS.get("generaciones", 3)), "generaciones", 0, 500)
+        seed = self._int_between(payload.get("seed", COMPARATOR_DEFAULTS.get("seed", 42)), "seed", 0, 2_147_483_647)
+        repetitions_k = self._int_between(
+            payload.get("repetitionsK", COMPARATOR_DEFAULTS.get("repetitionsK", 1)),
+            "repetitionsK",
+            1,
+            30,
+        )
+        model = self._safe_model_name(payload.get("model", COMPARATOR_DEFAULTS.get("model", "llama3")))
+
         raw_instances = payload.get("proposalInstances")
         if raw_instances is not None:
-            proposal_instances = self._proposal_instances_config(raw_instances)
+            proposal_instances = self._proposal_instances_config(raw_instances, n, repetitions_k)
             selected = self._selected_ids_from_instances(proposal_instances)
             proposal_configs = self._legacy_proposal_configs_from_instances(proposal_instances)
         else:
@@ -3084,12 +3115,12 @@ class ComparatorService:
         costs_comparable = execution_mode == EXECUTION_MODE_FAIR_SEQUENTIAL
         config = {
             "referenceText": reference_text,
-            "topK": self._int_between(payload.get("topK", COMPARATOR_DEFAULTS.get("topK", 10)), "topK", 1, 200),
-            "n": self._int_between(payload.get("n", COMPARATOR_DEFAULTS.get("n", 10)), "n", 1, 500),
-            "generaciones": self._int_between(payload.get("generaciones", COMPARATOR_DEFAULTS.get("generaciones", 3)), "generaciones", 0, 500),
-            "seed": self._int_between(payload.get("seed", COMPARATOR_DEFAULTS.get("seed", 42)), "seed", 0, 2_147_483_647),
-            "repetitionsK": self._int_between(payload.get("repetitionsK", COMPARATOR_DEFAULTS.get("repetitionsK", 1)), "repetitionsK", 1, 30),
-            "model": self._safe_model_name(payload.get("model", COMPARATOR_DEFAULTS.get("model", "llama3"))),
+            "topK": top_k,
+            "n": n,
+            "generaciones": generaciones,
+            "seed": seed,
+            "repetitionsK": repetitions_k,
+            "model": model,
             "executionMode": execution_mode,
             "proposalParallelism": requested_parallelism,
             "effectiveProposalParallelism": effective_parallelism,
@@ -3118,6 +3149,8 @@ class ComparatorService:
             "sameInitialPopulationForBmopso": self._same_initial_population_config(
                 payload.get("sameInitialPopulationForBmopso"),
                 proposal_instances,
+                n,
+                repetitions_k,
             ),
             "updateRepositoriesBeforeRun": self._bool_config_value(
                 payload.get("updateRepositoriesBeforeRun", DEFAULT_UPDATE_REPOSITORIES_BEFORE_RUN),
@@ -3132,6 +3165,8 @@ class ComparatorService:
         self,
         value: Any,
         proposal_instances: list[dict[str, Any]],
+        default_n: int,
+        default_repetitions: int,
     ) -> dict[str, Any]:
         disabled = {"enabled": False, "generatorInstanceId": None, "scope": SAME_INITIAL_POPULATION_SCOPE}
         if value in (None, ""):
@@ -3157,7 +3192,39 @@ class ComparatorService:
             raise ValueError("sameInitialPopulationForBmopso.generatorInstanceId must reference an existing instance.")
         if str(generator.get("proposalId") or "") != BINARY_PROPOSAL_ID:
             raise ValueError("sameInitialPopulationForBmopso.generatorInstanceId must reference a Binary MOPSO-CD instance.")
+        self._validate_same_initial_population_runtime(proposal_instances, default_n, default_repetitions)
         return {"enabled": True, "generatorInstanceId": generator_id, "scope": SAME_INITIAL_POPULATION_SCOPE}
+
+    def _validate_same_initial_population_runtime(
+        self,
+        proposal_instances: list[dict[str, Any]],
+        default_n: int,
+        default_repetitions: int,
+    ) -> None:
+        binary_instances = [
+            instance
+            for instance in proposal_instances
+            if isinstance(instance, dict) and str(instance.get("proposalId") or "") == BINARY_PROPOSAL_ID
+        ]
+        if len(binary_instances) <= 1:
+            return
+        first_runtime = self._effective_runtime_tuple(binary_instances[0], default_n, default_repetitions)
+        for instance in binary_instances[1:]:
+            if self._effective_runtime_tuple(instance, default_n, default_repetitions) != first_runtime:
+                raise ValueError(
+                    "sameInitialPopulationForBmopso requires Binary MOPSO-CD instances to use the same N and K repeticiones."
+                )
+
+    def _effective_runtime_tuple(
+        self,
+        instance: dict[str, Any],
+        default_n: int,
+        default_repetitions: int,
+    ) -> tuple[int, int]:
+        runtime_config = instance.get("runtimeConfig") if isinstance(instance.get("runtimeConfig"), dict) else {}
+        n = int(runtime_config.get("n") or default_n)
+        repetitions = int(runtime_config.get("repetitionsK") or default_repetitions)
+        return n, repetitions
 
     def _validate_binary_task_thinking_config(self, config: dict[str, Any]) -> None:
         capabilities = comparator_ollama_model_capabilities()
@@ -3238,7 +3305,7 @@ class ComparatorService:
             raise ValueError("Select at least one proposal instance.")
         return selected
 
-    def _proposal_instances_config(self, value: Any) -> list[dict[str, Any]]:
+    def _proposal_instances_config(self, value: Any, default_n: int, default_repetitions: int) -> list[dict[str, Any]]:
         if not isinstance(value, list):
             raise ValueError("proposalInstances must be a list.")
         if not value:
@@ -3275,7 +3342,13 @@ class ComparatorService:
                 raw.get("proposalConfig") if "proposalConfig" in raw else raw.get("config"),
                 f"proposalInstances[{index}].proposalConfig",
             )
-            canonical = self._canonical_proposal_config(proposal, proposal_config)
+            runtime_config = self._runtime_config_value(
+                raw.get("runtimeConfig"),
+                default_n,
+                default_repetitions,
+                f"proposalInstances[{index}].runtimeConfig",
+            )
+            canonical = self._canonical_instance_config(proposal, proposal_config, runtime_config)
             existing = canonical_by_proposal.setdefault(proposal_id, {})
             if canonical in existing:
                 first_name = existing[canonical]
@@ -3292,6 +3365,7 @@ class ComparatorService:
                     "displayName": display_name,
                     "baseDisplayName": proposal.display_name,
                     "proposalConfig": proposal_config,
+                    "runtimeConfig": runtime_config,
                     "orderIndex": index,
                 }
             )
@@ -3309,6 +3383,7 @@ class ComparatorService:
                 "displayName": PROPOSAL_BY_ID[proposal_id].display_name,
                 "baseDisplayName": PROPOSAL_BY_ID[proposal_id].display_name,
                 "proposalConfig": proposal_configs.get(proposal_id, {"extraArgs": "", "cliValues": {}}),
+                "runtimeConfig": {},
                 "orderIndex": index,
             }
             for index, proposal_id in enumerate(selected)
@@ -3370,6 +3445,44 @@ class ComparatorService:
             "cliValues": cli_values,
         }
         return json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+    def _canonical_instance_config(
+        self,
+        proposal: ProposalDefinition,
+        proposal_config: dict[str, Any],
+        runtime_config: dict[str, Any],
+    ) -> str:
+        return json.dumps(
+            {
+                "proposalConfig": json.loads(self._canonical_proposal_config(proposal, proposal_config)),
+                "runtimeConfig": runtime_config,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+
+    def _runtime_config_value(
+        self,
+        raw: Any,
+        default_n: int,
+        default_repetitions: int,
+        label: str,
+    ) -> dict[str, int]:
+        if raw in (None, ""):
+            return {}
+        if not isinstance(raw, dict):
+            raise ValueError(f"{label} must be an object.")
+        runtime_config: dict[str, int] = {}
+        if "n" in raw and raw.get("n") not in (None, ""):
+            n = self._int_between(raw.get("n"), f"{label}.n", 1, 500)
+            if n != default_n:
+                runtime_config["n"] = n
+        if "repetitionsK" in raw and raw.get("repetitionsK") not in (None, ""):
+            repetitions = self._int_between(raw.get("repetitionsK"), f"{label}.repetitionsK", 1, 30)
+            if repetitions != default_repetitions:
+                runtime_config["repetitionsK"] = repetitions
+        return runtime_config
 
     def _canonical_cli_values_for_duplicates(self, proposal: ProposalDefinition, values: dict[str, Any]) -> dict[str, Any]:
         options = self._configurable_cli_options(proposal)
@@ -3699,18 +3812,28 @@ class ComparatorService:
         ids = config.get("selectedProposalIds") or list(DEFAULT_SELECTED_PROPOSALS)
         return [PROPOSAL_BY_ID[proposal_id] for proposal_id in ids]
 
+    def _instance_runtime_values(self, raw_instance: dict[str, Any] | None, config: dict[str, Any] | None) -> tuple[dict[str, Any], int, int]:
+        runtime_config = {}
+        if isinstance(raw_instance, dict) and isinstance(raw_instance.get("runtimeConfig"), dict):
+            runtime_config = dict(raw_instance.get("runtimeConfig") or {})
+        config = config or {}
+        n = int(runtime_config.get("n") or config.get("n") or COMPARATOR_DEFAULTS.get("n") or 1)
+        repetitions_k = int(runtime_config.get("repetitionsK") or config.get("repetitionsK") or COMPARATOR_DEFAULTS.get("repetitionsK") or 1)
+        return runtime_config, n, repetitions_k
+
     def _selected_instances(self, config: dict[str, Any]) -> list[ProposalRunInstance]:
         raw_instances = config.get("proposalInstances") or []
         if not raw_instances:
             proposal_configs = config.get("proposalConfigs") or {}
             return [
-                ProposalRunInstance(
+                self._proposal_instance_from_parts(
+                    proposal=proposal,
                     instance_id=proposal.proposal_id,
-                    proposal_id=proposal.proposal_id,
                     display_name=proposal.display_name,
                     base_display_name=proposal.display_name,
-                    proposal=proposal,
                     proposal_config=proposal_configs.get(proposal.proposal_id, {"extraArgs": "", "cliValues": {}}),
+                    runtime_config={},
+                    config=config,
                     order_index=index,
                 )
                 for index, proposal in enumerate(self._selected_proposals(config))
@@ -3726,31 +3849,59 @@ class ComparatorService:
                 continue
             instance_id = str(item.get("instanceId") or proposal_id).strip() or proposal_id
             display_name = str(item.get("displayName") or proposal.display_name).strip() or proposal.display_name
+            runtime_config = item.get("runtimeConfig") if isinstance(item.get("runtimeConfig"), dict) else {}
             instances.append(
-                ProposalRunInstance(
+                self._proposal_instance_from_parts(
+                    proposal=proposal,
                     instance_id=instance_id,
-                    proposal_id=proposal_id,
                     display_name=display_name,
                     base_display_name=str(item.get("baseDisplayName") or proposal.display_name),
-                    proposal=proposal,
                     proposal_config=item.get("proposalConfig") if isinstance(item.get("proposalConfig"), dict) else {"extraArgs": "", "cliValues": {}},
+                    runtime_config=runtime_config,
+                    config=config,
                     order_index=int(finite_float(item.get("orderIndex"), index)),
                 )
             )
         return instances
+
+    def _proposal_instance_from_parts(
+        self,
+        proposal: ProposalDefinition,
+        instance_id: str,
+        display_name: str,
+        base_display_name: str,
+        proposal_config: dict[str, Any],
+        runtime_config: dict[str, Any],
+        config: dict[str, Any] | None,
+        order_index: int,
+    ) -> ProposalRunInstance:
+        runtime_config, n, repetitions_k = self._instance_runtime_values({"runtimeConfig": runtime_config}, config)
+        return ProposalRunInstance(
+            instance_id=instance_id,
+            proposal_id=proposal.proposal_id,
+            display_name=display_name,
+            base_display_name=base_display_name,
+            proposal=proposal,
+            proposal_config=proposal_config,
+            runtime_config=runtime_config,
+            n=n,
+            repetitions_k=repetitions_k,
+            order_index=order_index,
+        )
 
     def _coerce_instance(self, value: ProposalDefinition | ProposalRunInstance, config: dict[str, Any] | None = None) -> ProposalRunInstance:
         if isinstance(value, ProposalRunInstance):
             return value
         proposal = value
         proposal_config = ((config or {}).get("proposalConfigs") or {}).get(proposal.proposal_id, {"extraArgs": "", "cliValues": {}})
-        return ProposalRunInstance(
+        return self._proposal_instance_from_parts(
+            proposal=proposal,
             instance_id=proposal.proposal_id,
-            proposal_id=proposal.proposal_id,
             display_name=proposal.display_name,
             base_display_name=proposal.display_name,
-            proposal=proposal,
             proposal_config=proposal_config,
+            runtime_config={},
+            config=config,
             order_index=0,
         )
 
@@ -3761,6 +3912,8 @@ class ComparatorService:
             "displayName": instance.display_name,
             "baseDisplayName": instance.base_display_name,
             "proposalConfig": instance.proposal_config,
+            "runtimeConfig": instance.runtime_config,
+            "n": instance.n,
         }
 
     def _attach_instance_metadata(self, rows: list[dict[str, Any]], instance: ProposalRunInstance) -> None:
@@ -4461,6 +4614,10 @@ class ComparatorService:
         state["status"] = result["status"]
         state["stageLabel"] = comparator_status_message(result["status"])
         state["progress"] = 1.0
+        if isinstance(result.get("runtimeConfig"), dict):
+            state["runtimeConfig"] = result.get("runtimeConfig") or {}
+        if result.get("n") is not None:
+            state["n"] = int(result.get("n"))
         total_repetitions = max(1, int(result.get("repetitionsK") or run.get("config", {}).get("repetitionsK") or 1))
         raw_completed_repetitions = result.get("completedRepetitions")
         if raw_completed_repetitions is None:
@@ -4468,6 +4625,7 @@ class ComparatorService:
         else:
             completed_repetitions = int(raw_completed_repetitions)
         completed_repetitions = max(0, min(total_repetitions, completed_repetitions))
+        state["repetitionsK"] = total_repetitions
         state["totalRepetitions"] = total_repetitions
         state["completedRepetitions"] = completed_repetitions
         state["currentRepetitionIndex"] = total_repetitions
@@ -4618,11 +4776,14 @@ class ComparatorService:
     def _execute_proposal(self, run: dict[str, Any], proposal: ProposalDefinition | ProposalRunInstance) -> dict[str, Any]:
         instance = self._coerce_instance(proposal, run.get("config"))
         base_proposal = instance.proposal
-        repetitions_k = int(run["config"].get("repetitionsK") or 1)
+        repetitions_k = int(instance.repetitions_k or run["config"].get("repetitionsK") or 1)
         base_dir = Path(run["runDir"]) / instance.instance_id
         with self._lock:
             state = run["proposalStates"].get(instance.instance_id)
             if state:
+                state["runtimeConfig"] = instance.runtime_config
+                state["n"] = instance.n
+                state["repetitionsK"] = repetitions_k
                 state["totalRepetitions"] = repetitions_k
                 state["completedRepetitions"] = 0
                 state["currentRepetitionIndex"] = 1 if repetitions_k > 0 else None
@@ -4641,6 +4802,7 @@ class ComparatorService:
                 state = run["proposalStates"].get(instance.instance_id)
                 if state:
                     state["totalRepetitions"] = 1
+                    state["repetitionsK"] = 1
                     state["completedRepetitions"] = int(result["completedRepetitions"])
                     state["currentRepetitionIndex"] = 1
                     state["updatedAt"] = utc_now()
@@ -4664,6 +4826,7 @@ class ComparatorService:
                     state["currentRepetitionIndex"] = repetition_index + 1
                     state["completedRepetitions"] = completed_repetition_count(results)
                     state["totalRepetitions"] = repetitions_k
+                    state["repetitionsK"] = repetitions_k
                     timing = self._iteration_timing(state)
                     timing["activeIterationKey"] = None
                     timing["activeStartedAtEpoch"] = None
@@ -4684,6 +4847,7 @@ class ComparatorService:
                     state["completedRepetitions"] = completed_repetition_count(results)
                     state["currentRepetitionIndex"] = min(len(results) + 1, repetitions_k)
                     state["totalRepetitions"] = repetitions_k
+                    state["repetitionsK"] = repetitions_k
                     state["updatedAt"] = utc_now()
 
         aggregated = aggregate_proposal_repetitions(base_proposal, base_dir, results, repetitions_k, self._result_identity(instance))
@@ -4732,7 +4896,7 @@ class ComparatorService:
                 str(self.root / "baselines" / "bootstrap.py"),
                 base_proposal.entrypoint,
                 "--n",
-                str(run["config"]["n"]),
+                str(instance.n),
                 "--generations",
                 str(run["config"]["generaciones"]),
                 "--model",
@@ -4749,7 +4913,7 @@ class ComparatorService:
             str(self.root / "baselines" / "bootstrap.py"),
             base_proposal.entrypoint,
             "--n",
-            str(run["config"]["n"]),
+            str(instance.n),
             "--generaciones",
             str(run["config"]["generaciones"]),
             "--model",
@@ -4775,7 +4939,7 @@ class ComparatorService:
         manual_paths = {str(path) for path in (cli_values or {})}
         manual_paths.update(self._binary_set_paths_from_args(extra_args or []))
         overrides: list[tuple[str, Any, str]] = [
-            ("experiment.n", int(run["config"]["n"]), "int"),
+            ("experiment.n", int(instance.n), "int"),
             ("experiment.iterations", int(run["config"]["generaciones"]), "int"),
             ("experiment.runs", 1, "int"),
             ("experiment.seed", seed, "int"),
@@ -4793,7 +4957,7 @@ class ComparatorService:
         overrides.extend(binary_portal_ppdb_overrides(self.root, manual_paths))
         for path in BINARY_AUTO_PARALLELISM_PATHS:
             if path not in manual_paths:
-                overrides.append((path, int(run["config"]["n"]), "int"))
+                overrides.append((path, int(instance.n), "int"))
         same_initial_paths = self._same_initial_population_paths_for_command(run, instance, output_base)
         if same_initial_paths:
             overrides.extend([
@@ -5817,6 +5981,7 @@ class ComparatorService:
         state.setdefault("iterationTiming", empty_iteration_timing())
         state.setdefault("completedRepetitions", 0)
         state.setdefault("totalRepetitions", max(1, int((run.get("config") or {}).get("repetitionsK") or 1)))
+        state.setdefault("repetitionsK", state.get("totalRepetitions"))
         state["status"] = status
         state["stageLabel"] = stage_label
         if progress is not None:
@@ -5842,7 +6007,12 @@ class ComparatorService:
         generation_total: int | None = None,
     ) -> int:
         config = run.get("config") or {}
-        repetitions = max(1, int(config.get("repetitionsK") or 1))
+        state_repetitions = state.get("totalRepetitions") or state.get("repetitionsK")
+        config_repetitions = config.get("repetitionsK")
+        if config_repetitions is not None and not config.get("proposalInstances"):
+            repetitions = max(1, int(config_repetitions))
+        else:
+            repetitions = max(1, int(state_repetitions or config_repetitions or 1))
         configured_generations = max(0, int(config.get("generaciones") or 0))
         observed_generations = max(0, int(generation_total or state.get("generationTotal") or 0))
         per_repetition = configured_generations if configured_generations > 0 else observed_generations
@@ -6754,6 +6924,7 @@ class ComparatorService:
         result: dict[str, Any],
         proposal: ProposalDefinition,
     ) -> ProposalRunInstance:
+        runtime_config = result.get("runtimeConfig") if isinstance(result.get("runtimeConfig"), dict) else {}
         return ProposalRunInstance(
             instance_id=str(result.get("instanceId") or result.get("proposalId") or proposal.proposal_id),
             proposal_id=proposal.proposal_id,
@@ -6761,6 +6932,9 @@ class ComparatorService:
             base_display_name=str(result.get("baseDisplayName") or proposal.display_name),
             proposal=proposal,
             proposal_config=result.get("proposalConfig") if isinstance(result.get("proposalConfig"), dict) else {"extraArgs": "", "cliValues": {}},
+            runtime_config=runtime_config,
+            n=int(result.get("n") or runtime_config.get("n") or COMPARATOR_DEFAULTS.get("n") or 1),
+            repetitions_k=int(result.get("repetitionsK") or runtime_config.get("repetitionsK") or COMPARATOR_DEFAULTS.get("repetitionsK") or 1),
             order_index=int(finite_float(result.get("orderIndex"), 0)),
         )
 

@@ -14,6 +14,14 @@ function normalizeProposalConfig(value) {
   };
 }
 
+function normalizeRuntimeConfig(value) {
+  const config = objectValue(value);
+  const normalized = {};
+  if (Number.isFinite(Number(config.n))) normalized.n = Math.trunc(Number(config.n));
+  if (Number.isFinite(Number(config.repetitionsK))) normalized.repetitionsK = Math.trunc(Number(config.repetitionsK));
+  return normalized;
+}
+
 function normalizeHistoricalInstance(value, index) {
   const source = objectValue(value);
   const proposalId = stringValue(source.proposalId || source.instanceId);
@@ -26,6 +34,7 @@ function normalizeHistoricalInstance(value, index) {
     displayName,
     baseDisplayName: stringValue(source.baseDisplayName || displayName),
     proposalConfig: normalizeProposalConfig(source.proposalConfig),
+    runtimeConfig: normalizeRuntimeConfig(source.runtimeConfig),
     orderIndex: Number.isFinite(source.orderIndex) ? source.orderIndex : index,
   };
 }

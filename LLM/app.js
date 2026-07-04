@@ -6189,8 +6189,25 @@ function normalizeComparatorInstance(instance, index = 0) {
       ...(instance.proposalConfig || {}),
       cliValues: { ...((instance.proposalConfig || {}).cliValues || {}) },
     },
+    runtimeConfig: normalizeComparatorRuntimeConfig(instance.runtimeConfig),
     orderIndex: index,
   };
+}
+
+function normalizeComparatorRuntimeConfig(value = {}) {
+  const config = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const normalized = {};
+  if (Number.isFinite(Number(config.n))) normalized.n = Math.trunc(Number(config.n));
+  if (Number.isFinite(Number(config.repetitionsK))) normalized.repetitionsK = Math.trunc(Number(config.repetitionsK));
+  return normalized;
+}
+
+function comparatorRuntimeConfigEntries(instance) {
+  const runtimeConfig = normalizeComparatorRuntimeConfig(instance.runtimeConfig);
+  const entries = [];
+  if (runtimeConfig.n !== undefined) entries.push(`N=${runtimeConfig.n}`);
+  if (runtimeConfig.repetitionsK !== undefined) entries.push(`K rep.=${runtimeConfig.repetitionsK}`);
+  return entries;
 }
 
 function ensureComparatorInstances() {
@@ -6395,7 +6412,7 @@ function renderComparatorInstanceList() {
 function comparatorInstanceConfigEntries(instance) {
   const values = instance.proposalConfig?.cliValues || {};
   let keys = Object.keys(values);
-  const entries = [];
+  const entries = comparatorRuntimeConfigEntries(instance);
   if (instance.proposalId === "binary-mopso-cd" && comparatorUsesNoRoutingPreset(values)) {
     entries.push("Sin enrutamiento");
     keys = keys.filter((key) => !BINARY_ROUTER_HEURISTIC_KEY_SET.has(key));
@@ -7085,6 +7102,7 @@ function comparatorProposalInstancesPayload() {
     proposalId: instance.proposalId,
     displayName: instance.displayName,
     proposalConfig: instance.proposalConfig || { extraArgs: "", cliValues: {} },
+    runtimeConfig: normalizeComparatorRuntimeConfig(instance.runtimeConfig),
     orderIndex: index,
   }));
 }
@@ -7283,6 +7301,32 @@ function applyComparatorCliValues(container, cliValues = {}) {
   });
 }
 
+function comparatorRuntimeDefaultValue(key) {
+  const field = key === "n" ? dom.comparatorN : dom.comparatorRepetitions;
+  const value = Number(field?.value);
+  return Number.isFinite(value) ? Math.trunc(value) : "";
+}
+
+function readOptionalComparatorRuntimeConfig(container) {
+  const runtimeConfig = {};
+  container.querySelectorAll("[data-comparator-runtime-field]").forEach((field) => {
+    const key = field.dataset.comparatorRuntimeField;
+    const rawValue = field.value.trim();
+    if (!key || !rawValue) return;
+    const number = Number(rawValue);
+    if (!Number.isFinite(number)) {
+      throw new Error(`${key} debe ser un numero valido.`);
+    }
+    const min = Number(field.min);
+    const max = Number(field.max);
+    const value = Math.trunc(Math.min(max, Math.max(min, number)));
+    const defaultValue = comparatorRuntimeDefaultValue(key);
+    if (Number.isFinite(Number(defaultValue)) && value === Math.trunc(Number(defaultValue))) return;
+    runtimeConfig[key] = value;
+  });
+  return runtimeConfig;
+}
+
 function openComparatorInstanceModal(proposalId, instanceId = null, duplicate = false) {
   const proposal = comparatorProposalById(proposalId);
   if (!proposal || !proposal.available) return;
@@ -7297,12 +7341,14 @@ function openComparatorInstanceModal(proposalId, instanceId = null, duplicate = 
           extraArgs: "",
           cliValues: { ...((existing.proposalConfig || {}).cliValues || {}) },
         },
+        runtimeConfig: normalizeComparatorRuntimeConfig(existing.runtimeConfig),
       })
     : normalizeComparatorInstance({
         instanceId: comparatorNextInstanceId(proposalId),
         proposalId,
         displayName: comparatorDefaultInstanceName(proposalId),
         proposalConfig: { extraArgs: "", cliValues: {} },
+        runtimeConfig: {},
       });
   comparatorInstanceModalState = {
     mode: existing && !duplicate ? "edit" : "add",
@@ -7322,17 +7368,32 @@ function openComparatorInstanceModal(proposalId, instanceId = null, duplicate = 
   dom.comparatorInstanceModalTitle.textContent = existing && !duplicate
     ? `Editar ${draft.displayName}`
     : `Agregar ${proposal.displayName}`;
-  dom.comparatorInstanceModalSubtitle.textContent = "Los parametros comunes N, G, semilla, K, referencia y modelo quedan fuera de esta configuracion.";
+  dom.comparatorInstanceModalSubtitle.textContent = "N y K repeticiones pueden sobrescribir el default general; G, semilla, referencia y modelo siguen gestionados por el comparador.";
   dom.saveComparatorInstanceModalButton.hidden = false;
   dom.saveComparatorInstanceModalButton.disabled = false;
   dom.saveComparatorInstanceModalButton.textContent = "Guardar configuracion";
   dom.cancelComparatorInstanceModalButton.textContent = "Cancelar";
+  const runtimeConfig = normalizeComparatorRuntimeConfig(draft.runtimeConfig);
+  const defaultN = comparatorRuntimeDefaultValue("n");
+  const defaultRepetitions = comparatorRuntimeDefaultValue("repetitionsK");
   dom.comparatorInstanceModalBody.innerHTML = `
     <label class="cli-field">
       <span>Nombre de instancia</span>
       <input type="text" data-comparator-instance-name value="${escapeHtml(draft.displayName)}" autocomplete="off">
       <small>Este nombre aparece en columnas, filtros, logs y graficos.</small>
     </label>
+    <div class="proposal-cli-fields proposal-runtime-fields" data-instance-runtime-fields>
+      <label class="cli-field">
+        <span>N individuos</span>
+        <input type="number" min="1" max="500" step="1" data-comparator-runtime-field="n" value="${escapeHtml(runtimeConfig.n ?? "")}" placeholder="${escapeHtml(defaultN)}">
+        <small>Vacio usa el default general N=${escapeHtml(defaultN || "--")}.</small>
+      </label>
+      <label class="cli-field">
+        <span>K repeticiones</span>
+        <input type="number" min="1" max="30" step="1" data-comparator-runtime-field="repetitionsK" value="${escapeHtml(runtimeConfig.repetitionsK ?? "")}" placeholder="${escapeHtml(defaultRepetitions)}">
+        <small>Vacio usa el default general K=${escapeHtml(defaultRepetitions || "--")}.</small>
+      </label>
+    </div>
     <div class="proposal-config-runtime">
       <small>${escapeHtml(proposal.repositoryPath || "")}</small>
       <small>Python: ${escapeHtml(proposal.pythonExecutable || "--")}</small>
@@ -7388,6 +7449,15 @@ function saveComparatorInstanceModal() {
     return;
   }
   const fields = dom.comparatorInstanceModalBody.querySelector("[data-instance-cli-fields]");
+  const runtimeFields = dom.comparatorInstanceModalBody.querySelector("[data-instance-runtime-fields]");
+  let runtimeConfig = {};
+  try {
+    runtimeConfig = runtimeFields ? readOptionalComparatorRuntimeConfig(runtimeFields) : {};
+  } catch (error) {
+    dom.comparatorInstanceModalSubtitle.textContent = error.message;
+    runtimeFields?.querySelector("[data-comparator-runtime-field]")?.focus();
+    return;
+  }
   const draft = {
     ...comparatorInstanceModalState.draft,
     displayName,
@@ -7395,6 +7465,7 @@ function saveComparatorInstanceModal() {
       extraArgs: "",
       cliValues: fields ? collectComparatorCliValues(fields) : {},
     },
+    runtimeConfig,
   };
   if (comparatorInstanceModalState.mode === "edit") {
     comparatorInstances = comparatorInstances.map((instance) =>
@@ -7423,7 +7494,10 @@ function removeComparatorProposalInstances(proposalId) {
 function findDuplicateComparatorInstances() {
   const seen = new Map();
   for (const instance of comparatorInstances) {
-    const canonical = JSON.stringify(instance.proposalConfig || { extraArgs: "", cliValues: {} }, (_key, value) => {
+    const canonical = JSON.stringify({
+      proposalConfig: instance.proposalConfig || { extraArgs: "", cliValues: {} },
+      runtimeConfig: normalizeComparatorRuntimeConfig(instance.runtimeConfig),
+    }, (_key, value) => {
       if (value && typeof value === "object" && !Array.isArray(value)) {
         return Object.keys(value).sort().reduce((acc, key) => {
           acc[key] = value[key];
@@ -8042,7 +8116,7 @@ function renderComparatorProgress(progress, config = null) {
     ["Propuesta activa", progress.activeProposalName || "--"],
     ["Modo ejecucion", config?.executionPolicy?.label || config?.executionMode || "--"],
     ["Paralelismo efectivo", config?.executionPolicy ? `${config.executionPolicy.effectiveParallelism} de ${config.executionPolicy.requestedParallelism} solicitado(s)` : "--"],
-    ["K repeticiones", config?.repetitionsK ?? 1],
+    ["K rep. default", config?.repetitionsK ?? 1],
     ["Cola", `${progress.queuedProposals ?? 0}/${progress.totalProposals ?? 0}`],
   ]);
 }
@@ -8142,13 +8216,16 @@ function comparatorProposalSummaryTooltip(label, metrics = {}) {
     ? " En propuestas uniobjetivo se calcula como diagnostico post-hoc; no fue optimizado por el algoritmo."
     : "";
   if (key === "parametros") {
-    return "Parametros comunes enviados por CLI: N es poblacion; G es generaciones o iteraciones.";
+    return "Parametros enviados por CLI: N es poblacion; G es generaciones o iteraciones; K rep. es el numero de repeticiones estocasticas.";
   }
   if (key === "n") {
-    return "Poblacion o cantidad de individuos configurada para todas las propuestas de la corrida.";
+    return "Poblacion o cantidad de individuos efectiva. En defaults generales es el valor base; en una propuesta puede estar sobrescrita por instancia.";
   }
   if (key === "g") {
-    return "Generaciones o iteraciones configuradas para todas las propuestas de la corrida.";
+    return "Generaciones o iteraciones comunes para toda la corrida.";
+  }
+  if (key.startsWith("k rep")) {
+    return "Repeticiones estocasticas configuradas. En defaults generales es el valor base; en una propuesta puede estar sobrescrita por instancia.";
   }
   if (key.startsWith("no dom")) {
     return `Cantidad de soluciones no dominadas: ninguna otra solucion es igual o mejor en todos los objetivos y mejor en al menos uno.${diagnosticSuffix}`;
@@ -8251,19 +8328,34 @@ function formatComparatorArchiveCounter(average, total, repetitionsK = 1) {
   };
 }
 
+function comparatorEffectiveProposalN(proposal, config = null) {
+  const runtimeConfig = normalizeComparatorRuntimeConfig(proposal.runtimeConfig);
+  const value = proposal.n ?? runtimeConfig.n ?? config?.n;
+  return Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : "--";
+}
+
+function comparatorEffectiveProposalRepetitions(proposal, config = null) {
+  const runtimeConfig = normalizeComparatorRuntimeConfig(proposal.runtimeConfig);
+  const progressState = proposal.progressState || {};
+  const value = proposal.repetitionsK ?? progressState.totalRepetitions ?? runtimeConfig.repetitionsK ?? config?.repetitionsK;
+  return Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : "--";
+}
+
 function comparatorGeneralParametersCard(config = null) {
   const article = document.createElement("article");
   article.className = "proposal-card proposal-card-general";
   const n = config?.n ?? "--";
   const generations = config?.generaciones ?? config?.iterations ?? "--";
+  const repetitions = config?.repetitionsK ?? "--";
   article.innerHTML = `
     <div class="proposal-card-header">
-      <strong>Parametros generales</strong>
-      <p>Aplican a todas las propuestas de la corrida.</p>
+      <strong>Defaults generales</strong>
+      <p>N y K repeticiones pueden sobrescribirse por instancia; G se mantiene comun.</p>
     </div>
     <dl class="proposal-summary-list">
       ${comparatorProposalSummaryField("N", escapeHtml(String(n)))}
       ${comparatorProposalSummaryField("G", escapeHtml(String(generations)))}
+      ${comparatorProposalSummaryField("K rep.", escapeHtml(String(repetitions)))}
     </dl>
   `;
   return article;
@@ -8272,7 +8364,7 @@ function comparatorGeneralParametersCard(config = null) {
 function comparatorBinaryArchiveSummaryHtml(proposal, config = null) {
   if (!comparatorIsBinaryProposal(proposal)) return "";
   const metrics = proposal.metrics || {};
-  const repetitionsK = config?.repetitionsK || proposal.progressState?.totalRepetitions || 1;
+  const repetitionsK = comparatorEffectiveProposalRepetitions(proposal, config);
   const updates = formatComparatorArchiveCounter(
     metrics.externalArchiveUpdateCount,
     metrics.externalArchiveUpdateCountTotal,
@@ -8312,6 +8404,8 @@ function renderComparatorCards(proposals, config = null) {
     const progressPercent = Math.round(Math.max(0, Math.min(1, Number(progressState.progress || 0))) * 100);
     const stageLabel = progressState.stageLabel || comparatorStatusLabel(proposal.status);
     const repetitionProgress = comparatorRepetitionProgressLabel(progressState, config);
+    const effectiveN = comparatorEffectiveProposalN(proposal, config);
+    const effectiveRepetitions = comparatorEffectiveProposalRepetitions(proposal, config);
     const git = proposal.gitRevision || {};
     const gitLabel = git.shortCommit
       ? `${git.configuredBranch || git.branch || "--"} @ ${git.shortCommit}${git.dirty ? " (local dirty)" : ""}`
@@ -8331,6 +8425,8 @@ function renderComparatorCards(proposals, config = null) {
         <p title="${escapeHtml(repetitionProgress.title)}">${escapeHtml(repetitionProgress.text)}</p>
       </div>
       <dl class="proposal-summary-list">
+        ${comparatorProposalSummaryField("N", escapeHtml(String(effectiveN)), { metrics })}
+        ${comparatorProposalSummaryField("K rep.", escapeHtml(String(effectiveRepetitions)), { metrics })}
         ${comparatorBinaryArchiveSummaryHtml(proposal, config)}
         ${comparatorProposalSummaryField("Git", copyableTextHtml(gitLabel), { metrics })}
         ${comparatorProposalSummaryField("Salida", copyableTextHtml(metrics.outputDir || proposal.outputDir || "--"), { metrics })}

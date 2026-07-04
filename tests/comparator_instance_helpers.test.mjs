@@ -17,6 +17,10 @@ test("historical comparator instances prefer config proposalInstances over propo
           displayName: "Binary MOPSO-CD - config 4",
           baseDisplayName: "Binary MOPSO-CD",
           orderIndex: 3,
+          runtimeConfig: {
+            n: 16,
+            repetitionsK: 3,
+          },
           proposalConfig: {
             extraArgs: "",
             cliValues: {
@@ -57,7 +61,30 @@ test("historical comparator instances prefer config proposalInstances over propo
     instances[0].proposalConfig.cliValues["router.task_models.synthetic_text_generation"],
     "qwen3:4b-instruct-2507-q4_K_M",
   );
+  assert.deepEqual(instances[0].runtimeConfig, { n: 16, repetitionsK: 3 });
   assert.equal(instances[0].orderIndex, 3);
+});
+
+test("historical comparator instances keep empty runtime config as defaults", () => {
+  const run = {
+    config: {
+      proposalInstances: [
+        {
+          instanceId: "evolmd-a",
+          proposalId: "evolmd",
+          displayName: "EVOLMD A",
+          proposalConfig: {
+            extraArgs: "",
+            cliValues: {},
+          },
+        },
+      ],
+    },
+  };
+
+  const instances = comparatorHistoricalInstancesFromRun(run);
+
+  assert.deepEqual(instances[0].runtimeConfig, {});
 });
 
 test("historical comparator instances preserve multiple instances for the same proposal", () => {

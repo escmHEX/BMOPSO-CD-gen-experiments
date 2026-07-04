@@ -174,12 +174,15 @@ class RepetitionAggregationTests(unittest.TestCase):
         parsed = service._read_config(
             {
                 "referenceText": "reference",
+                "n": 10,
+                "repetitionsK": 2,
                 "proposalInstances": [
                     {
                         "instanceId": "binary-a",
                         "proposalId": "binary-mopso-cd",
                         "displayName": "Binary A",
                         "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        "runtimeConfig": {"n": 14, "repetitionsK": 3},
                     },
                     {
                         "instanceId": "binary-b",
@@ -197,6 +200,72 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual([instance.instance_id for instance in instances], ["binary-a", "binary-b"])
         self.assertEqual(instances[0].proposal_config["cliValues"]["selection.k"], "4")
         self.assertEqual(instances[1].proposal_config["cliValues"]["selection.k"], "5")
+        self.assertEqual(parsed["proposalInstances"][0]["runtimeConfig"], {"n": 14, "repetitionsK": 3})
+        self.assertEqual(parsed["proposalInstances"][1].get("runtimeConfig"), {})
+        self.assertEqual(instances[0].n, 14)
+        self.assertEqual(instances[0].repetitions_k, 3)
+        self.assertEqual(instances[1].n, 10)
+        self.assertEqual(instances[1].repetitions_k, 2)
+
+    def test_comparator_instances_with_different_runtime_config_are_not_duplicates(self):
+        service = ComparatorService(Path("."))
+        parsed = service._read_config(
+            {
+                "referenceText": "reference",
+                "n": 10,
+                "repetitionsK": 2,
+                "proposalInstances": [
+                    {
+                        "instanceId": "binary-a",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary A",
+                        "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        "runtimeConfig": {"n": 12},
+                    },
+                    {
+                        "instanceId": "binary-b",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary B",
+                        "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        "runtimeConfig": {"repetitionsK": 3},
+                    },
+                ],
+            }
+        )
+
+        instances = service._selected_instances(parsed)
+        self.assertEqual([instance.n for instance in instances], [12, 10])
+        self.assertEqual([instance.repetitions_k for instance in instances], [2, 3])
+
+    def test_same_initial_population_rejects_binary_runtime_mismatch(self):
+        service = ComparatorService(Path("."))
+        with self.assertRaisesRegex(ValueError, "sameInitialPopulationForBmopso.*same N and K"):
+            service._read_config(
+                {
+                    "referenceText": "reference",
+                    "n": 10,
+                    "repetitionsK": 2,
+                    "proposalInstances": [
+                        {
+                            "instanceId": "binary-a",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary A",
+                            "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                        },
+                        {
+                            "instanceId": "binary-b",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary B",
+                            "proposalConfig": {"cliValues": {"selection.k": "5"}},
+                            "runtimeConfig": {"n": 12},
+                        },
+                    ],
+                    "sameInitialPopulationForBmopso": {
+                        "enabled": True,
+                        "generatorInstanceId": "binary-a",
+                    },
+                }
+            )
 
     def test_comparator_config_accepts_same_initial_population_generator(self):
         service = ComparatorService(Path("."))
@@ -484,6 +553,65 @@ class RepetitionAggregationTests(unittest.TestCase):
             self.assertEqual(state["totalRepetitions"], 3)
             self.assertEqual(state["currentRepetitionIndex"], 3)
 
+    def test_comparator_uses_instance_specific_repetitions_for_execution(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            config = service._read_config(
+                {
+                    "referenceText": "reference",
+                    "repetitionsK": 1,
+                    "proposalInstances": [
+                        {
+                            "instanceId": "binary-a",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary A",
+                            "proposalConfig": {"cliValues": {"selection.k": "4"}},
+                            "runtimeConfig": {"repetitionsK": 3},
+                        }
+                    ],
+                }
+            )
+            instance = service._selected_instances(config)[0]
+            run = {
+                "runId": "run-1",
+                "runDir": str(root / "runs" / "comparator" / "run-1"),
+                "status": "running",
+                "startedAtEpoch": None,
+                "config": config,
+                "proposalStates": {instance.instance_id: service._initial_proposal_state(instance)},
+                "proposals": [],
+                "progress": {},
+                "costSummary": {},
+                "logs": [],
+            }
+            observed_seeds: list[int | None] = []
+
+            def fake_execute_once(_run, _proposal, output_dir, seed):
+                observed_seeds.append(seed)
+                return {
+                    "proposalId": instance.proposal_id,
+                    "displayName": instance.display_name,
+                    "status": "completed",
+                    "outputDir": str(output_dir),
+                    "rows": [],
+                    "selectedRows": [],
+                    "metrics": {},
+                    "series": [],
+                    "charts": {},
+                    "cost": {},
+                    "error": None,
+                }
+
+            with patch.object(service, "_execute_proposal_once", side_effect=fake_execute_once):
+                result = service._execute_proposal(run, instance)
+
+            state = run["proposalStates"][instance.instance_id]
+            self.assertEqual(len(observed_seeds), 3)
+            self.assertEqual(result["repetitionsK"], 3)
+            self.assertEqual(result["completedRepetitions"], 3)
+            self.assertEqual(state["totalRepetitions"], 3)
+
     def test_record_proposal_result_preserves_zero_completed_repetitions(self):
         service = ComparatorService(Path("."))
         proposal = next(item for item in PROPOSALS if item.proposal_id == "binary-mopso-cd")
@@ -743,6 +871,87 @@ class RepetitionAggregationTests(unittest.TestCase):
             self.assertNotIn("recontinu", log_text.lower())
             self.assertNotIn("binary-3", [entry["proposalId"] for entry in run["logs"]])
             self.assertNotIn("binary-4", [entry["proposalId"] for entry in run["logs"]])
+
+    def test_recontinue_reconstructs_runtime_totals_from_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = ComparatorService(root)
+            config = service._read_config(
+                {
+                    "referenceText": "reference",
+                    "n": 10,
+                    "repetitionsK": 1,
+                    "proposalInstances": [
+                        {
+                            "instanceId": "binary-1",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary 1",
+                            "proposalConfig": {"cliValues": {"selection.k": "1"}},
+                            "runtimeConfig": {"n": 12, "repetitionsK": 3},
+                        },
+                        {
+                            "instanceId": "binary-2",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary 2",
+                            "proposalConfig": {"cliValues": {"selection.k": "2"}},
+                        },
+                    ],
+                }
+            )
+            instances = service._selected_instances(config)
+            run_dir = root / "runs" / "comparator" / "recontinue-runtime-run"
+            (run_dir / "binary-2").mkdir(parents=True)
+            states = {
+                "binary-1": service._initial_proposal_state(instances[0], 1),
+                "binary-2": service._initial_proposal_state(instances[1], 1),
+            }
+            states["binary-1"].update(
+                {
+                    "status": "completed",
+                    "completedRepetitions": 1,
+                    "totalRepetitions": 1,
+                    "repetitionsK": 1,
+                    "runtimeConfig": {},
+                    "n": 10,
+                }
+            )
+            states["binary-2"].update({"status": "failed", "completedRepetitions": 0})
+            run = {
+                "runId": "recontinue-runtime-run",
+                "runDir": str(run_dir),
+                "status": "running",
+                "startedAtEpoch": None,
+                "config": config,
+                "proposalStates": states,
+                "proposals": [
+                    {
+                        "instanceId": "binary-1",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary 1",
+                        "status": "completed",
+                        "completedRepetitions": 1,
+                        "repetitionsK": 1,
+                        "cost": {},
+                        "metrics": {},
+                        "charts": {},
+                        "rows": [],
+                    }
+                ],
+                "progress": {},
+                "costSummary": {},
+                "logs": [],
+            }
+
+            remaining = service._prepare_recontinue_unlocked(run)
+
+            self.assertEqual([instance.instance_id for instance in remaining], ["binary-2"])
+            self.assertEqual(states["binary-1"]["runtimeConfig"], {"n": 12, "repetitionsK": 3})
+            self.assertEqual(states["binary-1"]["n"], 12)
+            self.assertEqual(states["binary-1"]["repetitionsK"], 3)
+            self.assertEqual(states["binary-1"]["totalRepetitions"], 3)
+            self.assertEqual(states["binary-1"]["completedRepetitions"], 3)
+            self.assertEqual(states["binary-1"]["currentRepetitionIndex"], 3)
+            self.assertEqual(run["proposalStates"]["binary-2"]["totalRepetitions"], 1)
 
     def test_recontinue_run_rejects_completed_run_without_touching_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1787,6 +1996,38 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(command[command.index("--prob_mutation") + 1], "0.05")
         self.assertEqual(command[command.index("--bert_model") + 1], "roberta-large")
 
+    def test_non_binary_commands_use_instance_specific_n(self):
+        service = ComparatorService(Path("."))
+        config = service._read_config(
+            {
+                "referenceText": "reference",
+                "n": 10,
+                "proposalInstances": [
+                    {
+                        "instanceId": "evolmd-a",
+                        "proposalId": "evolmd",
+                        "displayName": "EVOLMD A",
+                        "proposalConfig": {"cliValues": {}},
+                        "runtimeConfig": {"n": 15},
+                    },
+                    {
+                        "instanceId": "mesap-a",
+                        "proposalId": "mesap",
+                        "displayName": "MESAP A",
+                        "proposalConfig": {"cliValues": {}},
+                        "runtimeConfig": {"n": 17},
+                    },
+                ],
+            }
+        )
+        evolmd, mesap = service._selected_instances(config)
+
+        evolmd_command = service._build_command({"config": config}, evolmd, Path("."), Path("out-a"), Path("reference.txt"), 777)
+        mesap_command = service._build_command({"config": config}, mesap, Path("."), Path("out-b"), Path("reference.txt"), 778)
+
+        self.assertEqual(evolmd_command[evolmd_command.index("--n") + 1], "15")
+        self.assertEqual(mesap_command[mesap_command.index("--n") + 1], "17")
+
     def test_comparator_rejects_structured_managed_or_unknown_cli_values(self):
         service = ComparatorService(Path("."))
         for flag in ("experiment.seed", "--missing"):
@@ -2228,6 +2469,7 @@ class RepetitionAggregationTests(unittest.TestCase):
         config = service._read_config(
             {
                 "referenceText": "reference",
+                "n": 10,
                 "proposalInstances": [
                     {
                         "instanceId": "binary-a",
@@ -2240,6 +2482,7 @@ class RepetitionAggregationTests(unittest.TestCase):
                                 "mopso.guided_trajectory_relative_margin": "0.40",
                             }
                         },
+                        "runtimeConfig": {"n": 16},
                     },
                     {
                         "instanceId": "binary-b",
@@ -2263,6 +2506,8 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertNotIn("mopso.guided_trajectory_relative_margin", command_set_values(second_command))
         self.assertEqual(command_set_values(first_command)["experiment.seed"], "777")
         self.assertEqual(command_set_values(second_command)["experiment.seed"], "778")
+        self.assertEqual(command_set_values(first_command)["experiment.n"], "16")
+        self.assertEqual(command_set_values(second_command)["experiment.n"], "10")
 
     def test_binary_command_injects_same_initial_population_paths_for_dependent_instance(self):
         with tempfile.TemporaryDirectory() as temp_dir:
