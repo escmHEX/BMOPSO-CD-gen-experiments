@@ -563,29 +563,67 @@ export function comparatorPublicationLegendEntries(series = [], selected = {}) {
 }
 
 const COMPARATOR_PUBLICATION_LEGEND_BASE_WIDTH = 420;
+const COMPARATOR_PUBLICATION_LEGEND_GAP = 20;
+const COMPARATOR_PUBLICATION_LEGEND_RIGHT = 8;
+const COMPARATOR_PUBLICATION_LEGEND_HORIZONTAL_PADDING = 32;
+const COMPARATOR_PUBLICATION_LEGEND_SYMBOL_SPACE = 42;
+const COMPARATOR_PUBLICATION_LEGEND_WIDTH_SAFETY = 8;
+const COMPARATOR_PUBLICATION_LEGEND_RENDER_SAFETY = 12;
 
-export function comparatorPublicationLegendLayout(series = [], selected = {}) {
+function estimatedPublicationLegendTextWidth(text, measureText = null) {
+  if (typeof measureText === "function") {
+    const measured = Number(measureText(String(text || "")));
+    if (Number.isFinite(measured) && measured > 0) return measured;
+  }
+  const chars = Array.from(String(text || ""));
+  const weightedWidth = chars.reduce((width, char) => {
+    if (/\s/.test(char)) return width + 4;
+    if (/[ilI1|.,:;]/.test(char)) return width + 3.8;
+    if (/[mwMW@%]/.test(char)) return width + 10;
+    if (/[A-ZÁÉÍÓÚÑ]/.test(char)) return width + 8;
+    if (/[0-9]/.test(char)) return width + 7.1;
+    if (/[-_=+()[\]{}<>/\\]/.test(char)) return width + 5.2;
+    return width + 6.8;
+  }, 0);
+  return Math.max(weightedWidth, chars.length * 6.6);
+}
+
+export function comparatorPublicationLegendLayout(series = [], selected = {}, options = {}) {
   const entries = comparatorPublicationLegendEntries(series, selected);
-  const longestName = entries.reduce((max, entry) => Math.max(max, entry.name.length), 0);
+  const measureText = typeof options.measureText === "function" ? options.measureText : null;
+  const longestTextWidth = entries.reduce((max, entry) => (
+    Math.max(max, estimatedPublicationLegendTextWidth(entry.name, measureText))
+  ), 0);
   const width = entries.length
-    ? Math.max(260, Math.ceil((longestName * 8.8) + 96))
+    ? Math.max(
+        228,
+        Math.ceil(
+          longestTextWidth
+          + COMPARATOR_PUBLICATION_LEGEND_SYMBOL_SPACE
+          + COMPARATOR_PUBLICATION_LEGEND_WIDTH_SAFETY,
+        ),
+      )
     : 0;
-  const legendRight = 12;
-  const legendGap = 0;
+  const boxWidth = entries.length ? width + COMPARATOR_PUBLICATION_LEGEND_HORIZONTAL_PADDING : 0;
+  const reservedWidth = entries.length ? boxWidth + COMPARATOR_PUBLICATION_LEGEND_RENDER_SAFETY : 0;
+  const legendRight = COMPARATOR_PUBLICATION_LEGEND_RIGHT;
+  const legendGap = COMPARATOR_PUBLICATION_LEGEND_GAP;
   return {
     entries,
     width,
+    boxWidth,
+    reservedWidth,
     legendGap,
     legendRight,
-    gridRight: entries.length ? width + legendRight + legendGap : 24,
+    gridRight: entries.length ? reservedWidth + legendRight + legendGap : 24,
   };
 }
 
-export function comparatorPublicationExportWidth(series = [], selected = {}, baseWidth = 1280) {
+export function comparatorPublicationExportWidth(series = [], selected = {}, baseWidth = 1280, options = {}) {
   const width = Number(baseWidth);
   const safeBaseWidth = Number.isFinite(width) && width > 0 ? width : 1280;
-  const layout = comparatorPublicationLegendLayout(series, selected);
-  return safeBaseWidth + Math.max(0, layout.width - COMPARATOR_PUBLICATION_LEGEND_BASE_WIDTH);
+  const layout = comparatorPublicationLegendLayout(series, selected, options);
+  return safeBaseWidth + Math.max(0, layout.reservedWidth - COMPARATOR_PUBLICATION_LEGEND_BASE_WIDTH);
 }
 
 function cloneComparatorChartOptionValue(value) {
@@ -644,6 +682,28 @@ function positionExportTitle(title, grid, exportWidth) {
     };
   };
   return Array.isArray(title) ? title.map((entry, index) => (index === 0 ? position(entry) : entry)) : position(title);
+}
+
+function positionExportLegend(legend, grid, exportWidth) {
+  const width = Number(exportWidth);
+  if (!Number.isFinite(width) || width <= 0) return legend;
+  const gridEntry = firstComponent(grid);
+  if (!gridEntry || typeof gridEntry !== "object") return legend;
+  const gridRight = Number(gridEntry.right);
+  if (!Number.isFinite(gridRight)) return legend;
+  const legendGap = Number(firstComponent(legend)?.comparatorLegendGap);
+  const left = width - gridRight + (Number.isFinite(legendGap) ? legendGap : COMPARATOR_PUBLICATION_LEGEND_GAP);
+  const position = (entry) => {
+    if (!entry || typeof entry !== "object") return entry;
+    const next = {
+      ...entry,
+      left,
+    };
+    delete next.right;
+    delete next.comparatorLegendGap;
+    return next;
+  };
+  return Array.isArray(legend) ? legend.map(position) : position(legend);
 }
 
 function isWhiteBackground(value) {
@@ -902,6 +962,7 @@ export function comparatorChartExportOption(option = {}, exportLayout = {}) {
     });
   next.legend = cleanExportLegend(next.legend, next.series);
   next.grid = cleanExportGrid(next.grid);
+  next.legend = positionExportLegend(next.legend, next.grid, exportLayout.exportWidth);
   next.title = positionExportTitle(next.title, next.grid, exportLayout.exportWidth);
   return next;
 }

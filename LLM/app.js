@@ -9786,6 +9786,30 @@ function comparatorOptionWithLegendSelection(option, selected = {}) {
   };
 }
 
+let comparatorPublicationLegendMeasureContext = null;
+
+function comparatorPublicationLegendMeasureText(text) {
+  if (typeof document === "undefined") return null;
+  if (!comparatorPublicationLegendMeasureContext) {
+    comparatorPublicationLegendMeasureContext = document.createElement("canvas").getContext("2d");
+  }
+  if (!comparatorPublicationLegendMeasureContext) return null;
+  comparatorPublicationLegendMeasureContext.font = "400 14px sans-serif";
+  return comparatorPublicationLegendMeasureContext.measureText(String(text || "")).width;
+}
+
+function comparatorPublicationLegendLayoutForBrowser(series = [], selected = {}) {
+  return comparatorPublicationLegendLayout(series, selected, {
+    measureText: comparatorPublicationLegendMeasureText,
+  });
+}
+
+function comparatorPublicationExportWidthForBrowser(series = [], selected = {}, baseWidth = COMPARATOR_CHART_EXPORT_WIDTH) {
+  return comparatorPublicationExportWidth(series, selected, baseWidth, {
+    measureText: comparatorPublicationLegendMeasureText,
+  });
+}
+
 function firstComparatorChartComponent(component) {
   return Array.isArray(component) ? component[0] : component;
 }
@@ -9839,7 +9863,7 @@ function downloadComparatorChartImage(chart, chartNode, option, controls = {}) {
     ? controls.exportOptionFactory()
     : option;
   const exportSourceWithSelection = comparatorOptionWithLegendSelection(exportSource, selected);
-  const exportWidth = comparatorPublicationExportWidth(exportSourceWithSelection.series || [], selected, baseExportWidth);
+  const exportWidth = comparatorPublicationExportWidthForBrowser(exportSourceWithSelection.series || [], selected, baseExportWidth);
   const exportOption = comparatorChartExportOption(exportSourceWithSelection, {
     exportWidth,
     exportHeight,
@@ -9892,8 +9916,9 @@ function comparatorPublicationLegendOption(series = [], selected = {}, options =
   const {
     entries,
     width,
+    legendGap,
     legendRight,
-  } = comparatorPublicationLegendLayout(series, selected);
+  } = comparatorPublicationLegendLayoutForBrowser(series, selected);
   const top = Number.isFinite(Number(options.top)) ? Number(options.top) : 84;
   return {
     show: entries.length > 0,
@@ -9911,6 +9936,7 @@ function comparatorPublicationLegendOption(series = [], selected = {}, options =
     itemWidth: 30,
     itemHeight: 12,
     align: "left",
+    comparatorLegendGap: legendGap,
     textStyle: { color: "#111111", fontSize: 14, fontWeight: 400 },
     data: entries.map((entry) => ({
       name: entry.name,
@@ -10423,7 +10449,7 @@ function comparatorInteractiveLineOption({
       referenceLines,
     );
   }
-  const legendLayout = comparatorPublicationLegendLayout(activeSeries);
+  const legendLayout = comparatorPublicationLegendLayoutForBrowser(activeSeries);
   return {
     backgroundColor: "#ffffff",
     title: {
@@ -11034,7 +11060,7 @@ function baseScatterOption(title, series, options = {}) {
       labelFormatter: comparatorChartAxisTickFormatter,
     } : null,
   ].filter(Boolean);
-  const legendLayout = comparatorPublicationLegendLayout(renderedSeries);
+  const legendLayout = comparatorPublicationLegendLayoutForBrowser(renderedSeries);
   return {
     backgroundColor: "#ffffff",
     title: {

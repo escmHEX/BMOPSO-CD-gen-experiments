@@ -235,9 +235,11 @@ test("publication legend layout reserves an external legend box", () => {
   assert.equal(layout.entries[0].icon, "path://M0,5L28,5L28,7L0,7Z");
   assert.equal(layout.entries[1].icon, COMPARATOR_SELECTED_STAR_SYMBOL);
   assert.ok(layout.width >= 240);
-  assert.equal(layout.legendGap, 0);
-  assert.equal(layout.legendRight, 12);
-  assert.equal(layout.gridRight, layout.width + layout.legendRight);
+  assert.equal(layout.boxWidth, layout.width + 32);
+  assert.equal(layout.reservedWidth, layout.boxWidth + 12);
+  assert.equal(layout.legendGap, 20);
+  assert.equal(layout.legendRight, 8);
+  assert.equal(layout.gridRight, layout.reservedWidth + layout.legendGap + layout.legendRight);
 });
 
 test("publication legend layout grows the exported image for long labels", () => {
@@ -249,9 +251,28 @@ test("publication legend layout grows the exported image for long labels", () =>
     { name: longName, type: "line", lineStyle: { color: "#2A8C00" } },
   ], {}, 1280);
 
-  assert.ok(layout.width > 420);
-  assert.equal(layout.gridRight, layout.width + layout.legendRight);
-  assert.equal(exportWidth, 1280 + (layout.width - 420));
+  assert.ok(layout.reservedWidth > 420);
+  assert.ok(layout.reservedWidth < 640);
+  assert.equal(layout.gridRight, layout.reservedWidth + layout.legendGap + layout.legendRight);
+  assert.equal(exportWidth, 1280 + (layout.reservedWidth - 420));
+});
+
+test("publication legend layout accepts measured text widths", () => {
+  const series = [
+    { name: "Etiqueta medida", type: "line", lineStyle: { color: "#2A8C00" } },
+  ];
+  const layout = comparatorPublicationLegendLayout(series, {}, {
+    measureText: (text) => (text === "Etiqueta medida" ? 512 : 0),
+  });
+  const exportWidth = comparatorPublicationExportWidth(series, {}, 1280, {
+    measureText: (text) => (text === "Etiqueta medida" ? 512 : 0),
+  });
+
+  assert.equal(layout.width, 562);
+  assert.equal(layout.boxWidth, 594);
+  assert.equal(layout.reservedWidth, 606);
+  assert.equal(layout.gridRight, 634);
+  assert.equal(exportWidth, 1466);
 });
 
 test("axis tick formatter keeps at most two decimals", () => {
@@ -425,6 +446,28 @@ test("chart export option centers title against the reserved plot grid when expo
   assert.equal(exported.title.left, 528);
   assert.equal(exported.title.top, 34);
   assert.equal(exported.title.textAlign, "center");
+});
+
+test("chart export option anchors publication legend next to the plot grid", () => {
+  const exported = comparatorChartExportOption({
+    legend: {
+      show: true,
+      right: 12,
+      comparatorLegendGap: 20,
+      width: 620,
+      data: [{ name: "Serie con nombre largo" }],
+    },
+    grid: { left: 62, right: 692, top: 84 },
+    series: [{
+      name: "Serie con nombre largo",
+      type: "line",
+      data: [[0, 0.2], [1, 0.3]],
+    }],
+  }, { exportWidth: 1500 });
+
+  assert.equal(exported.legend.left, 828);
+  assert.equal(exported.legend.right, undefined);
+  assert.equal(exported.legend.comparatorLegendGap, undefined);
 });
 
 test("chart export option preserves non-white plot backgrounds for Pareto", () => {
