@@ -35,6 +35,7 @@ import {
   comparatorMetricReferenceLinePatch,
   comparatorDefaultChartLabels,
   comparatorMergeChartLabels,
+  comparatorPublicationExportWidth,
   comparatorPublicationLegendEntries,
   comparatorPublicationLegendLayout,
   comparatorChartExportOption,
@@ -56,6 +57,7 @@ import {
   comparatorSelectedFrontPointsForIndividuals,
   comparatorSeriesWithFinalMetricReplacement,
   comparatorSeriesIterationExtent,
+  comparatorVisibleFrontCounts,
   comparatorUnaryEntropy,
   comparatorVisibleFrontPointCount,
   comparatorVisibleFrontChartPoints,
@@ -236,6 +238,20 @@ test("publication legend layout reserves an external legend box", () => {
   assert.equal(layout.legendGap, 0);
   assert.equal(layout.legendRight, 12);
   assert.equal(layout.gridRight, layout.width + layout.legendRight);
+});
+
+test("publication legend layout grows the exported image for long labels", () => {
+  const longName = "Binary MOPSO-CD - def (c1=c2,amult=0.7,q=5,a=0.5,w,p dinamicos)";
+  const layout = comparatorPublicationLegendLayout([
+    { name: longName, type: "line", lineStyle: { color: "#2A8C00" } },
+  ]);
+  const exportWidth = comparatorPublicationExportWidth([
+    { name: longName, type: "line", lineStyle: { color: "#2A8C00" } },
+  ], {}, 1280);
+
+  assert.ok(layout.width > 420);
+  assert.equal(layout.gridRight, layout.width + layout.legendRight);
+  assert.equal(exportWidth, 1280 + (layout.width - 420));
 });
 
 test("axis tick formatter keeps at most two decimals", () => {
@@ -749,6 +765,23 @@ test("selected front points inherit the matching individual interaction identity
     comparatorPointInteractionKey(normalizedSelected, 0, "pareto-points"),
     comparatorPointInteractionKey(individuals[0], 0, "pareto-points"),
   );
+});
+
+test("visible front counts include active non-dominated and selected points", () => {
+  const namespace = "pareto-points";
+  const charts = {
+    nonDominated: [
+      { x: 0.8, y: 0.4, proposalId: "proposal-a", sourceIndex: 1, label: "front a" },
+      { x: 0.7, y: 0.5, proposalId: "proposal-a", sourceIndex: 2, label: "front b" },
+    ],
+    selected: [
+      { x: 0.8, y: 0.4, proposalId: "proposal-a", label: "front a" },
+    ],
+  };
+  const excludedKey = comparatorPointInteractionKey(charts.nonDominated[0], 0, namespace);
+
+  assert.deepEqual(comparatorVisibleFrontCounts(charts, new Set(), namespace), { front: 2, selected: 1 });
+  assert.deepEqual(comparatorVisibleFrontCounts(charts, new Set([excludedKey]), namespace), { front: 1, selected: 0 });
 });
 
 test("point chart view proposal selects a single repetition without merging K", () => {

@@ -41,6 +41,7 @@ import {
   comparatorSelectedFrontPointsForIndividuals,
   comparatorChartExportOption,
   comparatorChartAxisTickFormatter,
+  comparatorPublicationExportWidth,
   comparatorPublicationLegendLayout,
   comparatorPublicationLegendEntries,
   COMPARATOR_TRANSPARENT_BACKGROUND,
@@ -48,6 +49,7 @@ import {
   comparatorSeriesWithFinalMetricReplacement,
   comparatorSeriesIterationExtent,
   comparatorVisibleFrontChartPoints,
+  comparatorVisibleFrontCounts,
   comparatorVisibleFrontPointCount,
 } from "./comparator_chart_helpers.mjs";
 import {
@@ -9830,13 +9832,15 @@ function downloadComparatorChartImage(chart, chartNode, option, controls = {}) {
   const currentOption = chart.getOption?.() || {};
   const originalWidth = Number(chart.getWidth?.());
   const originalHeight = Number(chart.getHeight?.());
-  const exportWidth = Number(controls.exportWidth) || COMPARATOR_CHART_EXPORT_WIDTH;
+  const baseExportWidth = Number(controls.exportWidth) || COMPARATOR_CHART_EXPORT_WIDTH;
   const exportHeight = Number(controls.exportHeight) || COMPARATOR_CHART_EXPORT_HEIGHT;
   const selected = comparatorLegendSelection(chart);
   const exportSource = typeof controls.exportOptionFactory === "function"
     ? controls.exportOptionFactory()
     : option;
-  const exportOption = comparatorChartExportOption(comparatorOptionWithLegendSelection(exportSource, selected), {
+  const exportSourceWithSelection = comparatorOptionWithLegendSelection(exportSource, selected);
+  const exportWidth = comparatorPublicationExportWidth(exportSourceWithSelection.series || [], selected, baseExportWidth);
+  const exportOption = comparatorChartExportOption(exportSourceWithSelection, {
     exportWidth,
     exportHeight,
   });
@@ -10136,6 +10140,12 @@ function installComparatorLineClickToggle(chart) {
   });
 }
 
+function comparatorParetoStatusLabel(baseLabel, counts) {
+  const frontCount = Number.isFinite(Number(counts?.front)) ? Number(counts.front) : 0;
+  const selectedCount = Number.isFinite(Number(counts?.selected)) ? Number(counts.selected) : 0;
+  return `${baseLabel} (${frontCount} no dominadas; ${selectedCount} seleccionadas)`;
+}
+
 function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyles, runId = "") {
   if (!proposals.length) {
     dom.comparatorParetoCharts.innerHTML = '<article class="panel"><p class="muted-text">Sin propuestas seleccionadas para mostrar frentes de Pareto.</p></article>';
@@ -10151,13 +10161,19 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
         ? `Rep ${proposal.pointChartRepetition.repetitionIndex}`
         : "Frente final";
       const statusLabel = proposal.pointChartUnavailable ? "No disponible" : repetition;
+      const initialCounts = comparatorVisibleFrontCounts(
+        proposal.charts || {},
+        new Set(),
+        COMPARATOR_FRONT_POINT_NAMESPACE,
+      );
       article.innerHTML = `
         <div class="panel-title">
           <h2>${escapeHtml(proposal.displayName)}</h2>
-          <span>${escapeHtml(statusLabel)}</span>
+          <span data-pareto-front-status>${escapeHtml(comparatorParetoStatusLabel(statusLabel, initialCounts))}</span>
         </div>
         <div class="chart-surface" data-normalized-chart></div>
       `;
+      const statusNode = article.querySelector("[data-pareto-front-status]");
       const normalizedChartNode = article.querySelector("[data-normalized-chart]");
       window.queueMicrotask(() => {
         const normalizedChart = window.echarts.init(normalizedChartNode);
@@ -10171,6 +10187,13 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
         const excludedKeys = comparatorFrontExcludedKeysForScope(scopeKey);
         const diagnosticsByKey = comparatorFrontDiagnosticsForScope(scopeKey);
         const diagnosticLoadToken = comparatorFrontDiagnosticLoadToken;
+        const updateStatusLabel = () => {
+          if (!statusNode) return;
+          statusNode.textContent = comparatorParetoStatusLabel(
+            statusLabel,
+            comparatorVisibleFrontCounts(proposal.charts || {}, excludedKeys, COMPARATOR_FRONT_POINT_NAMESPACE),
+          );
+        };
         const buildOption = (optionOverrides = {}) => paretoChartOption(
           comparatorChartLabel("pareto").title,
           proposal.charts || {},
@@ -10198,7 +10221,9 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
         });
         const option = buildOption();
         setComparatorChartOption(normalizedChart, normalizedChartNode, option, null, controlsFactory());
+        updateStatusLabel();
         const installPointResetTool = installComparatorPointToggle(normalizedChart, normalizedChartNode, buildOption, excludedKeys, () => {
+          updateStatusLabel();
           refreshComparatorAdjustedComparatorOutputs();
         }, controlsFactory);
         const requestPoints = comparatorFrontDiagnosticRequestPoints(
@@ -10215,6 +10240,7 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
             const selected = comparatorLegendSelection(normalizedChart);
             setComparatorChartOption(normalizedChart, normalizedChartNode, buildOption(), selected, controlsFactory());
             installPointResetTool();
+            updateStatusLabel();
             refreshComparatorAdjustedComparatorOutputs();
           })
           .catch(() => {});

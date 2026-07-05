@@ -243,6 +243,19 @@ export function comparatorVisibleFrontPointCount(proposal = {}, selectedRepetiti
   return comparatorVisibleFrontChartPoints(viewProposal.charts, namespace).individuals.length;
 }
 
+export function comparatorVisibleFrontCounts(charts = {}, excludedKeys = new Set(), namespace = "pareto-points") {
+  const visibleFront = comparatorVisibleFrontChartPoints(charts, namespace);
+  const selectedFrontPoints = comparatorSelectedFrontPointsForIndividuals(
+    visibleFront.individuals,
+    visibleFront.selected,
+    namespace,
+  );
+  return {
+    front: comparatorPartitionPointsByExclusion(visibleFront.individuals, excludedKeys, namespace).active.length,
+    selected: comparatorPartitionPointsByExclusion(selectedFrontPoints, excludedKeys, namespace).active.length,
+  };
+}
+
 export function comparatorCanRecontinueRun(run) {
   return Boolean(run?.runId && run.status !== "completed");
 }
@@ -549,11 +562,13 @@ export function comparatorPublicationLegendEntries(series = [], selected = {}) {
   }).filter(Boolean);
 }
 
+const COMPARATOR_PUBLICATION_LEGEND_BASE_WIDTH = 420;
+
 export function comparatorPublicationLegendLayout(series = [], selected = {}) {
   const entries = comparatorPublicationLegendEntries(series, selected);
   const longestName = entries.reduce((max, entry) => Math.max(max, entry.name.length), 0);
   const width = entries.length
-    ? Math.min(420, Math.max(260, Math.ceil((longestName * 8.2) + 84)))
+    ? Math.max(260, Math.ceil((longestName * 8.8) + 96))
     : 0;
   const legendRight = 12;
   const legendGap = 0;
@@ -564,6 +579,13 @@ export function comparatorPublicationLegendLayout(series = [], selected = {}) {
     legendRight,
     gridRight: entries.length ? width + legendRight + legendGap : 24,
   };
+}
+
+export function comparatorPublicationExportWidth(series = [], selected = {}, baseWidth = 1280) {
+  const width = Number(baseWidth);
+  const safeBaseWidth = Number.isFinite(width) && width > 0 ? width : 1280;
+  const layout = comparatorPublicationLegendLayout(series, selected);
+  return safeBaseWidth + Math.max(0, layout.width - COMPARATOR_PUBLICATION_LEGEND_BASE_WIDTH);
 }
 
 function cloneComparatorChartOptionValue(value) {
