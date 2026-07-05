@@ -7174,6 +7174,7 @@ class ComparatorService:
         self._mark_selected_rows(rows, selected_rows)
         charts = build_charts_from_rows(rows, selected_rows, series)
         self._retag_internal_bmopso_charts(charts)
+        iteration_fronts = self._read_binary_internal_iteration_fronts(proposal, instance, output_dir, series)
         hypervolume = latest_finite_series_value(series, "hypervolume")
         return {
             "available": True,
@@ -7190,6 +7191,7 @@ class ComparatorService:
             },
             "series": series,
             "charts": charts,
+            "iterationFronts": iteration_fronts,
         }
 
     def _internal_bmopso_instance(
@@ -7246,6 +7248,10 @@ class ComparatorService:
             if isinstance(item, dict)
         ]
         self._attach_instance_metadata(rows, instance)
+        self._rank_binary_internal_rows(rows)
+        return rows
+
+    def _rank_binary_internal_rows(self, rows: list[dict[str, Any]]) -> None:
         mark_non_dominated(rows)
         for row in rows:
             row["postHocNonDominated"] = False
@@ -7258,7 +7264,6 @@ class ComparatorService:
         )
         for rank, row in enumerate(rows, start=1):
             row["rank"] = rank
-        return rows
 
     def _read_binary_internal_selected_rows(
         self,
@@ -7281,6 +7286,71 @@ class ComparatorService:
                 if isinstance(point, dict):
                     point["coordinateSpace"] = BINARY_INTERNAL_COORDINATE_SPACE
 
+    def _read_binary_internal_iteration_fronts(
+        self,
+        proposal: ProposalDefinition,
+        instance: ProposalRunInstance,
+        output_dir: Path,
+        series: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        path = output_dir / "archive_history.jsonl"
+        if not path.exists():
+            return []
+        series_by_generation = {
+            generation: point
+            for point in series
+            for generation in [finite_int_or_none(point.get("generation"))]
+            if generation is not None and generation >= 0
+        }
+        fronts_by_generation: dict[int, dict[str, Any]] = {}
+        with path.open("r", encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                generation = finite_int_or_none(payload.get("generation"))
+                if generation is None or generation < 0:
+                    continue
+                archive = payload.get("archive") if isinstance(payload.get("archive"), list) else []
+                if not archive:
+                    continue
+                rows = [
+                    self._normalize_binary_row(proposal, item, index)
+                    for index, item in enumerate(archive, start=1)
+                    if isinstance(item, dict)
+                ]
+                if not rows:
+                    continue
+                self._attach_instance_metadata(rows, instance)
+                self._rank_binary_internal_rows(rows)
+                charts = build_charts_from_rows(rows, [], [])
+                self._retag_internal_bmopso_charts(charts)
+                series_point = series_by_generation.get(generation, {})
+                hypervolume = finite_float(payload.get("hypervolume"), None)
+                if hypervolume is None:
+                    hypervolume = finite_float(series_point.get("hypervolume"), None)
+                archive_size = finite_int_or_none(payload.get("archiveSize"))
+                if archive_size is None:
+                    archive_size = finite_int_or_none(payload.get("archive_size"))
+                if archive_size is None:
+                    archive_size = len(rows)
+                fronts_by_generation[generation] = {
+                    "generation": generation,
+                    "source": "archive_history",
+                    "metrics": {
+                        "hypervolume": hypervolume,
+                        "hypervolumeLabel": f"{hypervolume:.6f}" if hypervolume is not None else "No aplica",
+                        "archiveSize": archive_size,
+                    },
+                    "charts": charts,
+                }
+        return [fronts_by_generation[generation] for generation in sorted(fronts_by_generation)]
+
     def _aggregate_internal_bmopso_analyses(
         self,
         result: dict[str, Any],
@@ -7298,6 +7368,7 @@ class ComparatorService:
             "series": series,
         }
         hypervolume = latest_finite_series_value(series, "hypervolume")
+        iteration_fronts = self._aggregate_internal_bmopso_iteration_fronts(analyses, series)
         return {
             "available": True,
             "instanceId": str(result.get("instanceId") or result.get("proposalId") or BINARY_PROPOSAL_ID),
@@ -7311,6 +7382,7 @@ class ComparatorService:
             },
             "series": series,
             "charts": charts,
+            "iterationFronts": iteration_fronts,
         }
 
     def _aggregate_internal_bmopso_series(self, analyses: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -7339,6 +7411,63 @@ class ComparatorService:
                 item["nonDominatedRows"] = sum(bucket["nonDominatedRows"]) / len(bucket["nonDominatedRows"])
             series.append(item)
         return series
+
+    def _aggregate_internal_bmopso_iteration_fronts(
+        self,
+        analyses: list[dict[str, Any]],
+        series: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        series_by_generation = {
+            generation: point
+            for point in series
+            for generation in [finite_int_or_none(point.get("generation"))]
+            if generation is not None and generation >= 0
+        }
+        buckets: dict[int, list[dict[str, Any]]] = {}
+        for analysis in analyses:
+            for front in analysis.get("iterationFronts") or []:
+                if not isinstance(front, dict):
+                    continue
+                generation = finite_int_or_none(front.get("generation"))
+                if generation is None or generation < 0:
+                    continue
+                buckets.setdefault(generation, []).append(front)
+        aggregated: list[dict[str, Any]] = []
+        for generation in sorted(buckets):
+            fronts = buckets[generation]
+            pareto_points = [
+                point
+                for front in fronts
+                for point in (front.get("charts") or {}).get("pareto", [])
+                if isinstance(point, dict)
+            ]
+            series_point = series_by_generation.get(generation, {})
+            hypervolume = finite_float(series_point.get("hypervolume"), None)
+            if hypervolume is None:
+                hypervolume_values: list[float] = []
+                for front in fronts:
+                    value = finite_float((front.get("metrics") or {}).get("hypervolume"), None)
+                    if value is not None:
+                        hypervolume_values.append(value)
+                hypervolume = sum(hypervolume_values) / len(hypervolume_values) if hypervolume_values else None
+            aggregated.append(
+                {
+                    "generation": generation,
+                    "source": "archive_history",
+                    "metrics": {
+                        "hypervolume": hypervolume,
+                        "hypervolumeLabel": f"{hypervolume:.6f}" if hypervolume is not None else "No aplica",
+                        "archiveSize": len(pareto_points),
+                    },
+                    "charts": {
+                        "pareto": pareto_points,
+                        "selected": [],
+                        "nonDominated": self._internal_bmopso_non_dominated_points(pareto_points),
+                        "series": [],
+                    },
+                }
+            )
+        return aggregated
 
     def _internal_bmopso_non_dominated_points(self, points: list[dict[str, Any]]) -> list[dict[str, Any]]:
         valid_points = [

@@ -3226,6 +3226,102 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(len(analysis["charts"]["selected"]), 1)
         self.assertEqual(analysis["charts"]["pareto"][0]["coordinateSpace"], "binary_native_normalized")
 
+    def test_get_run_internal_analysis_includes_archive_iteration_fronts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_id = "binary-internal-history"
+            run_dir = root / "runs" / "comparator" / run_id
+            output_dir = run_dir / "binary-mopso-cd" / "exec"
+            output_dir.mkdir(parents=True)
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "\n".join(
+                    [
+                        "generation,hypervolume,archive_size",
+                        "1,0.11,2",
+                        "2,0.22,3",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            archive_entries = [
+                {
+                    "generation": 2,
+                    "archive": [
+                        {
+                            "generated_text": "Generated C",
+                            "prompt": "Prompt C",
+                            "objectives": {"f1": 0.8, "f2": 0.8},
+                        },
+                        {
+                            "generated_text": "Generated D",
+                            "prompt": "Prompt D",
+                            "objectives": {"f1": 0.1, "f2": 0.1},
+                        },
+                    ],
+                },
+                {
+                    "generation": 1,
+                    "archive": [
+                        {
+                            "generated_text": "Generated A",
+                            "prompt": "Prompt A",
+                            "objectives": {"f1": 0.5, "f2": 0.4},
+                        },
+                        {
+                            "generated_text": "Generated B",
+                            "prompt": "Prompt B",
+                            "objectives": {"f1": 0.2, "f2": 0.7},
+                        },
+                    ],
+                },
+            ]
+            (output_dir / "archive_history.jsonl").write_text(
+                "\n".join(json.dumps(item) for item in archive_entries),
+                encoding="utf-8",
+            )
+            (output_dir / "pareto_front.json").write_text(
+                json.dumps(
+                    [
+                        {"generated_text": "Final A", "prompt": "Prompt A", "objectives": {"f1": 0.0, "f2": 1.0}},
+                        {"generated_text": "Final B", "prompt": "Prompt B", "objectives": {"f1": 0.4, "f2": 0.6}},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "summary.json").write_text(
+                json.dumps(
+                    {
+                        "runId": run_id,
+                        "status": "completed",
+                        "runDir": str(run_dir),
+                        "metricSchemaVersion": 4,
+                        "metricCoordinateSpace": "comparable_normalized",
+                        "proposals": [
+                            {
+                                "instanceId": "binary-a",
+                                "proposalId": "binary-mopso-cd",
+                                "displayName": "Binary A",
+                                "status": "completed",
+                                "outputDir": str(output_dir),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(root)
+
+            analysis = service.get_run(run_id)["proposals"][0]["internalBmopsoAnalysis"]
+
+        self.assertEqual(len(analysis["charts"]["pareto"]), 2)
+        self.assertEqual([front["generation"] for front in analysis["iterationFronts"]], [1, 2])
+        self.assertEqual([front["metrics"]["archiveSize"] for front in analysis["iterationFronts"]], [2, 2])
+        self.assertEqual([front["metrics"]["hypervolumeLabel"] for front in analysis["iterationFronts"]], ["0.110000", "0.220000"])
+        self.assertEqual([len(front["charts"]["pareto"]) for front in analysis["iterationFronts"]], [2, 2])
+        self.assertEqual([len(front["charts"]["nonDominated"]) for front in analysis["iterationFronts"]], [2, 1])
+        self.assertEqual(analysis["iterationFronts"][0]["charts"]["selected"], [])
+        self.assertEqual(analysis["iterationFronts"][0]["charts"]["pareto"][0]["coordinateSpace"], "binary_native_normalized")
+
     def test_get_run_enriches_each_binary_instance_with_internal_analysis(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -3330,6 +3426,54 @@ class RepetitionAggregationTests(unittest.TestCase):
 
         self.assertEqual(len(analysis["charts"]["pareto"]), 2)
         self.assertEqual(analysis["charts"]["selected"], [])
+
+    def test_get_run_internal_analysis_keeps_final_front_without_archive_history(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_id = "binary-no-internal-history"
+            run_dir = root / "runs" / "comparator" / run_id
+            output_dir = run_dir / "binary" / "exec"
+            output_dir.mkdir(parents=True)
+            (output_dir / "evolucion_metricas.csv").write_text(
+                "generation,hypervolume,archive_size\n1,0.33,2\n",
+                encoding="utf-8",
+            )
+            (output_dir / "pareto_front.json").write_text(
+                json.dumps(
+                    [
+                        {"generated_text": "Generated A", "prompt": "Prompt A", "objectives": {"f1": 0.0, "f2": 1.0}},
+                        {"generated_text": "Generated B", "prompt": "Prompt B", "objectives": {"f1": 0.2, "f2": 0.8}},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "summary.json").write_text(
+                json.dumps(
+                    {
+                        "runId": run_id,
+                        "status": "completed",
+                        "runDir": str(run_dir),
+                        "metricSchemaVersion": 4,
+                        "metricCoordinateSpace": "comparable_normalized",
+                        "proposals": [
+                            {
+                                "instanceId": "binary-a",
+                                "proposalId": "binary-mopso-cd",
+                                "displayName": "Binary A",
+                                "status": "completed",
+                                "outputDir": str(output_dir),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            service = ComparatorService(root)
+
+            analysis = service.get_run(run_id)["proposals"][0]["internalBmopsoAnalysis"]
+
+        self.assertEqual(len(analysis["charts"]["pareto"]), 2)
+        self.assertEqual(analysis["iterationFronts"], [])
 
     def test_get_run_skips_binary_internal_analysis_without_required_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4944,6 +5088,22 @@ class RepetitionAggregationTests(unittest.TestCase):
                     "selected": [],
                     "nonDominated": [{"x": repetition_index / 10, "y": 0.5}],
                 },
+                "iterationFronts": [
+                    {
+                        "generation": 1,
+                        "source": "archive_history",
+                        "metrics": {
+                            "hypervolume": repetition_index / 10,
+                            "hypervolumeLabel": f"{repetition_index / 10:.6f}",
+                            "archiveSize": 1,
+                        },
+                        "charts": {
+                            "pareto": [{"x": repetition_index / 10, "y": 0.5}],
+                            "selected": [],
+                            "nonDominated": [{"x": repetition_index / 10, "y": 0.5}],
+                        },
+                    }
+                ],
             }
 
         run = {
@@ -4978,6 +5138,10 @@ class RepetitionAggregationTests(unittest.TestCase):
         self.assertEqual(
             [item["internalBmopsoAnalysis"]["metrics"]["hypervolumeLabel"] for item in repetitions],
             ["0.100000", "0.200000"],
+        )
+        self.assertEqual(
+            [item["internalBmopsoAnalysis"]["iterationFronts"][0]["generation"] for item in repetitions],
+            [1, 1],
         )
 
     def test_embedding_projection_returns_none_for_missing_run(self):

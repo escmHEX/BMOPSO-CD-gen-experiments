@@ -145,6 +145,18 @@ class ComparatorFrontendDownloadTests(unittest.TestCase):
         self.assertNotIn('publicationMode: true,\n          chartKey: "pareto"', app)
         self.assertNotIn('publicationMode: true,\n      chartKey: "internalBmopsoPareto"', app)
 
+    def test_internal_bmopso_iteration_front_selector_is_wired(self):
+        app = (self.root / "LLM" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('comparatorInternalBmopsoFrontOptions', app)
+        self.assertIn('data-bmopso-internal-front-iteration', app)
+        self.assertIn('new Option(option.label, option.key, option.key === "final", option.key === "final")', app)
+        self.assertIn('let selectedFrontKey = "final"', app)
+        self.assertIn('activeInternalFrontAnalysis', app)
+        self.assertIn('iterationFronts: (item.analysis.iterationFronts || [])', app)
+        self.assertIn('exportOptionFactory: () => buildFrontOption({ exportMode: true, publicationMode: true })', app)
+        self.assertIn('frontSelect.addEventListener("change"', app)
+
 
 if __name__ == "__main__":
     unittest.main()

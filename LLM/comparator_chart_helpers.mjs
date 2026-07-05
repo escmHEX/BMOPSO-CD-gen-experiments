@@ -153,6 +153,50 @@ function normalMetricsPayload(metrics) {
   return metrics && typeof metrics === "object" ? metrics : {};
 }
 
+function finiteGenerationIndex(value) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric >= 0 ? numeric : null;
+}
+
+export function comparatorInternalBmopsoFrontOptions(analysis = {}) {
+  const baseAnalysis = analysis && typeof analysis === "object" ? analysis : {};
+  const finalAnalysis = {
+    ...baseAnalysis,
+    charts: normalChartPayload(baseAnalysis.charts),
+    metrics: normalMetricsPayload(baseAnalysis.metrics),
+  };
+  const options = [{
+    key: "final",
+    label: "Final",
+    generation: null,
+    analysis: finalAnalysis,
+  }];
+  const iterationFronts = Array.isArray(baseAnalysis.iterationFronts) ? baseAnalysis.iterationFronts : [];
+  iterationFronts
+    .filter((front) => front && typeof front === "object" && finiteGenerationIndex(front.generation) !== null)
+    .sort((left, right) => finiteGenerationIndex(left.generation) - finiteGenerationIndex(right.generation))
+    .forEach((front) => {
+      const generation = finiteGenerationIndex(front.generation);
+      const charts = normalChartPayload(front.charts);
+      options.push({
+        key: `generation:${generation}`,
+        label: `Iteración ${generation}`,
+        generation,
+        analysis: {
+          ...baseAnalysis,
+          source: front.source || baseAnalysis.source,
+          metrics: normalMetricsPayload(front.metrics),
+          charts: {
+            ...charts,
+            selected: [],
+          },
+          iterationFronts: [],
+        },
+      });
+    });
+  return options;
+}
+
 function normalPointChartRepetition(item = {}, fallbackIndex = null) {
   const repetitionIndex = finiteRepetitionIndex(item.repetitionIndex) ?? finiteRepetitionIndex(fallbackIndex);
   const payload = {

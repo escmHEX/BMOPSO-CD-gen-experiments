@@ -15,6 +15,7 @@ import {
   comparatorGlobalNonDominatedFront,
   comparatorHasBmopsoInternalAnalysis,
   comparatorHypervolumeArea,
+  comparatorInternalBmopsoFrontOptions,
   comparatorIsBinaryProposal,
   comparatorIsGloballyNonDominated,
   comparatorIterationAxisWindow,
@@ -9386,6 +9387,13 @@ function comparatorInternalBmopsoSignatureForRun(run, analyses) {
       pareto: (((item.analysis.charts || {}).pareto) || []).map((point) => [point.x, point.y, point.rank]),
       selected: (((item.analysis.charts || {}).selected) || []).map((point) => [point.x, point.y, point.rank]),
       nonDominated: (((item.analysis.charts || {}).nonDominated) || []).map((point) => [point.x, point.y, point.rank]),
+      iterationFronts: (item.analysis.iterationFronts || []).map((front) => [
+        front.generation,
+        front.metrics?.hypervolume,
+        front.metrics?.archiveSize,
+        (((front.charts || {}).pareto) || []).map((point) => [point.x, point.y, point.rank]),
+        (((front.charts || {}).nonDominated) || []).map((point) => [point.x, point.y, point.rank]),
+      ]),
       hv: item.analysis.metrics?.hypervolume,
     })),
   });
@@ -9407,8 +9415,11 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
     <div class="grid two-columns">
       <article class="panel">
         <div class="panel-title">
-          <h2>Frente final con HV interno</h2>
-          <span>${escapeHtml(item.analysis.metrics?.hypervolumeLabel || "No aplica")}</span>
+          <h2>Frente interno BMOPSO</h2>
+          <label class="inline-select-field" data-bmopso-internal-front-iteration-field>
+            <span>Iteración</span>
+            <select data-bmopso-internal-front-iteration></select>
+          </label>
         </div>
         <div class="chart-surface" data-bmopso-internal-front></div>
       </article>
@@ -9422,6 +9433,8 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
     </div>
   `;
   const frontNode = section.querySelector("[data-bmopso-internal-front]");
+  const frontSelect = section.querySelector("[data-bmopso-internal-front-iteration]");
+  const frontSelectField = section.querySelector("[data-bmopso-internal-front-iteration-field]");
   const hvNode = section.querySelector("[data-bmopso-internal-hv]");
   window.queueMicrotask(() => {
     const frontChart = window.echarts.init(frontNode);
@@ -9429,10 +9442,23 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
     const frontExcludedKeys = new Set();
     const diagnosticsByKey = new Map();
     const diagnosticLoadToken = comparatorFrontDiagnosticLoadToken;
+    let internalFrontDiagnosticSequence = 0;
     const internalScopeKey = `${runId || "run"}::${item.instanceId || item.displayName || index}::bmopso-internal`;
+    const frontOptions = comparatorInternalBmopsoFrontOptions(item.analysis);
+    let selectedFrontKey = "final";
+    if (frontSelect) {
+      frontSelect.replaceChildren(
+        ...frontOptions.map((option) => new Option(option.label, option.key, option.key === "final", option.key === "final")),
+      );
+      if (frontSelectField) {
+        frontSelectField.hidden = frontOptions.length <= 1;
+      }
+    }
+    const activeInternalFrontAnalysis = () =>
+      frontOptions.find((option) => option.key === selectedFrontKey)?.analysis || frontOptions[0]?.analysis || item.analysis;
     const buildFrontOption = (optionOverrides = {}) => internalBmopsoParetoChartOption(
       comparatorChartLabel("internalBmopsoPareto").title,
-      item.analysis,
+      activeInternalFrontAnalysis(),
       style.color,
       {
         excludedKeys: frontExcludedKeys,
@@ -9456,20 +9482,40 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
     const frontOption = buildFrontOption();
     setComparatorChartOption(frontChart, frontNode, frontOption, null, frontControlsFactory());
     installComparatorPointToggle(frontChart, frontNode, buildFrontOption, frontExcludedKeys, null, frontControlsFactory);
-    const requestPoints = comparatorFrontDiagnosticRequestPoints(
-      (((item.analysis.charts || {}).pareto) || []).map((point) => comparatorChartPointFromRaw(point)),
-      "bmopso-points",
-    );
-    loadComparatorFrontPointDiagnostics(runId, requestPoints)
-      .then((diagnostics) => {
-        if (diagnosticLoadToken !== comparatorFrontDiagnosticLoadToken) return;
-        if (window.echarts?.getInstanceByDom(frontNode) !== frontChart) return;
+    const loadActiveInternalFrontDiagnostics = () => {
+      const requestSequence = internalFrontDiagnosticSequence + 1;
+      internalFrontDiagnosticSequence = requestSequence;
+      const requestPoints = comparatorFrontDiagnosticRequestPoints(
+        ((((activeInternalFrontAnalysis().charts || {}).pareto) || [])).map((point) => comparatorChartPointFromRaw(point)),
+        "bmopso-points",
+      );
+      if (!requestPoints.length) {
         diagnosticsByKey.clear();
-        diagnostics.forEach((value, key) => diagnosticsByKey.set(key, value));
+        return;
+      }
+      loadComparatorFrontPointDiagnostics(runId, requestPoints)
+        .then((diagnostics) => {
+          if (diagnosticLoadToken !== comparatorFrontDiagnosticLoadToken) return;
+          if (requestSequence !== internalFrontDiagnosticSequence) return;
+          if (window.echarts?.getInstanceByDom(frontNode) !== frontChart) return;
+          diagnosticsByKey.clear();
+          diagnostics.forEach((value, key) => diagnosticsByKey.set(key, value));
+          const selected = comparatorLegendSelection(frontChart);
+          setComparatorChartOption(frontChart, frontNode, buildFrontOption(), selected, frontControlsFactory());
+        })
+        .catch(() => {});
+    };
+    loadActiveInternalFrontDiagnostics();
+    if (frontSelect) {
+      frontSelect.addEventListener("change", () => {
+        selectedFrontKey = frontSelect.value || "final";
+        frontExcludedKeys.clear();
+        diagnosticsByKey.clear();
         const selected = comparatorLegendSelection(frontChart);
         setComparatorChartOption(frontChart, frontNode, buildFrontOption(), selected, frontControlsFactory());
-      })
-      .catch(() => {});
+        loadActiveInternalFrontDiagnostics();
+      });
+    }
 
     const hvChart = window.echarts.init(hvNode);
     comparatorInternalBmopsoCharts.push(hvChart);

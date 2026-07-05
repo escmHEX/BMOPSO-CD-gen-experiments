@@ -10,6 +10,7 @@ import {
   comparatorBestCostProposalIds,
   comparatorBestMetricProposalIds,
   comparatorHasBmopsoInternalAnalysis,
+  comparatorInternalBmopsoFrontOptions,
   comparatorCanRecontinueRun,
   comparatorCountByProposal,
   comparatorContributionByProposal,
@@ -1433,6 +1434,30 @@ test("BMOPSO internal analyses preserve multiple instances", () => {
   assert.deepEqual(analyses.map((item) => item.instanceId), ["binary-a", "binary-b"]);
   assert.deepEqual(analyses.map((item) => item.displayName), ["Binary A", "Binary B"]);
   assert.deepEqual(analyses.map((item) => item.analysis.metrics.hypervolumeLabel), ["0.310000", "0.470000"]);
+});
+
+test("BMOPSO internal front options keep final first and sort iteration fronts", () => {
+  const options = comparatorInternalBmopsoFrontOptions({
+    charts: { pareto: [{ x: 0.1, y: 0.2 }], selected: [{ x: 0.1, y: 0.2 }], nonDominated: [] },
+    metrics: { hypervolumeLabel: "0.500000" },
+    iterationFronts: [
+      {
+        generation: 10,
+        charts: { pareto: [{ x: 0.4, y: 0.5 }], nonDominated: [{ x: 0.4, y: 0.5 }] },
+        metrics: { hypervolumeLabel: "0.400000" },
+      },
+      {
+        generation: 2,
+        charts: { pareto: [{ x: 0.2, y: 0.3 }], nonDominated: [{ x: 0.2, y: 0.3 }] },
+        metrics: { hypervolumeLabel: "0.200000" },
+      },
+    ],
+  });
+
+  assert.deepEqual(options.map((item) => item.key), ["final", "generation:2", "generation:10"]);
+  assert.deepEqual(options.map((item) => item.label), ["Final", "Iteración 2", "Iteración 10"]);
+  assert.equal(options[0].analysis.charts.selected.length, 1);
+  assert.deepEqual(options[1].analysis.charts.selected, []);
 });
 
 test("cost winners are disabled in exploratory mode", () => {
