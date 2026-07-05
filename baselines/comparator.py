@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -96,6 +97,8 @@ def resolve_comparator_config_path(config_dir: Path | None = None) -> Path:
 
 
 COMPARATOR_CONFIG_PATH = resolve_comparator_config_path()
+COMPARATOR_INSTANCE_LABELS_FILENAME = "instance_labels.json"
+COMPARATOR_INSTANCE_LABEL_MAX_LENGTH = 240
 
 
 def load_comparator_config() -> dict[str, Any]:
@@ -996,6 +999,27 @@ def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as file:
         json.dump(payload, file, ensure_ascii=False, indent=2)
+
+
+def write_json_atomic(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2)
+    last_error: OSError | None = None
+    for attempt in range(6):
+        temp_path = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+        try:
+            temp_path.write_text(encoded, encoding="utf-8")
+            temp_path.replace(path)
+            return
+        except OSError as error:
+            last_error = error
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            time.sleep(0.05 * (attempt + 1))
+    if last_error is not None:
+        raise last_error
 
 
 def read_json_or_default(path: Path, default: Any) -> Any:
@@ -2438,6 +2462,139 @@ class ComparatorService:
 
     def save_charting_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._charting_config_store.save(payload)
+
+    def save_instance_labels(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        run_dir = self.resolve_run_directory(run_id)
+        if run_dir is None:
+            return None
+
+        with self._lock:
+            active_run = self._runs.get(run_id)
+            source_run = active_run if active_run is not None else read_json(run_dir / "summary.json")
+            valid_instance_ids = self._instance_label_target_ids(source_run)
+            next_labels = self._validated_instance_labels(payload.get("labels"), valid_instance_ids)
+            current_labels = self._read_instance_labels(run_dir)
+            current_labels.update(next_labels)
+            self._write_instance_labels(run_dir, current_labels)
+            run = self.get_run(run_id)
+            if run is None:
+                return None
+            return {
+                "labels": current_labels,
+                "run": run,
+            }
+
+    def _instance_labels_path(self, run_dir: Path) -> Path:
+        return run_dir / COMPARATOR_INSTANCE_LABELS_FILENAME
+
+    def _read_instance_labels(self, run_dir: Path) -> dict[str, str]:
+        path = self._instance_labels_path(run_dir)
+        if not path.exists():
+            return {}
+        try:
+            payload = read_json(path)
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"No se pudieron leer los nombres persistidos de instancias: {error}") from error
+        source = payload.get("labels") if isinstance(payload, dict) else None
+        if not isinstance(source, dict):
+            return {}
+        labels: dict[str, str] = {}
+        for raw_key, raw_value in source.items():
+            key = str(raw_key or "").strip()
+            value = str(raw_value or "").strip()
+            if key and value:
+                labels[key] = value
+        return labels
+
+    def _write_instance_labels(self, run_dir: Path, labels: dict[str, str]) -> None:
+        write_json_atomic(self._instance_labels_path(run_dir), {"labels": dict(sorted(labels.items()))})
+
+    def _validated_instance_labels(self, raw_labels: Any, valid_instance_ids: set[str]) -> dict[str, str]:
+        if not isinstance(raw_labels, dict) or not raw_labels:
+            raise ValueError("labels debe ser un objeto no vacio.")
+        labels: dict[str, str] = {}
+        unknown_ids: list[str] = []
+        for raw_key, raw_value in raw_labels.items():
+            instance_id = str(raw_key or "").strip()
+            if not instance_id:
+                raise ValueError("Cada clave de labels debe identificar una instancia.")
+            if instance_id not in valid_instance_ids:
+                unknown_ids.append(instance_id)
+                continue
+            display_name = str(raw_value or "").strip()
+            if not display_name:
+                raise ValueError(f"labels.{instance_id} no puede estar vacio.")
+            if len(display_name) > COMPARATOR_INSTANCE_LABEL_MAX_LENGTH:
+                raise ValueError(
+                    f"labels.{instance_id} no puede superar {COMPARATOR_INSTANCE_LABEL_MAX_LENGTH} caracteres."
+                )
+            if any(ord(char) < 32 for char in display_name):
+                raise ValueError(f"labels.{instance_id} no puede incluir caracteres de control.")
+            labels[instance_id] = display_name
+        if unknown_ids:
+            raise ValueError(f"labels referencia instancias desconocidas: {', '.join(unknown_ids)}.")
+        if not labels:
+            raise ValueError("labels debe incluir al menos una instancia valida.")
+        return labels
+
+    def _instance_label_target_ids(self, run: dict[str, Any]) -> set[str]:
+        ids: set[str] = set()
+
+        def collect(value: Any) -> None:
+            if isinstance(value, dict):
+                instance_id = str(value.get("instanceId") or "").strip()
+                proposal_id = str(value.get("proposalId") or "").strip()
+                if instance_id:
+                    ids.add(instance_id)
+                elif proposal_id:
+                    ids.add(proposal_id)
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        collect((run.get("config") or {}).get("proposalInstances") or [])
+        collect(run.get("proposalStates") or {})
+        collect(run.get("proposals") or [])
+        return ids
+
+    def _run_directory_from_payload(self, run: dict[str, Any]) -> Path | None:
+        run_id = str(run.get("runId") or "").strip()
+        if run_id:
+            return self.resolve_run_directory(run_id)
+        run_dir = str(run.get("runDir") or "").strip()
+        if not run_dir:
+            return None
+        path = Path(run_dir)
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(self.runs_root.resolve())
+        except (OSError, ValueError):
+            return None
+        return resolved if resolved.is_dir() else None
+
+    def _with_instance_labels(self, run: dict[str, Any]) -> dict[str, Any]:
+        run_dir = self._run_directory_from_payload(run)
+        labels = self._read_instance_labels(run_dir) if run_dir is not None else {}
+        if not labels:
+            return dict(run)
+        public = self._apply_instance_labels(copy.deepcopy(run), labels)
+        public["instanceLabels"] = labels
+        return public
+
+    def _apply_instance_labels(self, value: Any, labels: dict[str, str]) -> Any:
+        if isinstance(value, dict):
+            updated = {key: self._apply_instance_labels(child, labels) for key, child in value.items()}
+            instance_id = str(updated.get("instanceId") or "").strip()
+            if not instance_id:
+                instance_id = str(updated.get("proposalId") or "").strip()
+            if instance_id in labels:
+                updated["displayName"] = labels[instance_id]
+            return updated
+        if isinstance(value, list):
+            return [self._apply_instance_labels(item, labels) for item in value]
+        return value
 
     def _initial_proposal_state(
         self,
@@ -6926,7 +7083,7 @@ class ComparatorService:
         return self._with_metric_recompute_status(public)
 
     def _with_metric_recompute_status(self, run: dict[str, Any]) -> dict[str, Any]:
-        public = self._with_internal_bmopso_analysis(dict(run))
+        public = self._with_internal_bmopso_analysis(self._with_instance_labels(run))
         public["metricRecomputeStatus"] = self._metric_recompute_status(public)
         return public
 

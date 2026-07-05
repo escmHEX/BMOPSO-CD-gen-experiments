@@ -227,6 +227,137 @@ class ToolPortalRestartTests(unittest.TestCase):
             self.assertEqual(sent[0][0], 400)
             self.assertIn("title", sent[0][1]["error"])
 
+    def test_comparator_instance_labels_post_persists_and_get_applies_to_run_payload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_dir = root / "runs" / "comparator" / "run-1"
+            run_dir.mkdir(parents=True)
+            summary = {
+                "runId": "run-1",
+                "status": "completed",
+                "runDir": str(run_dir),
+                "config": {
+                    "proposalInstances": [
+                        {
+                            "instanceId": "binary-a",
+                            "proposalId": "binary-mopso-cd",
+                            "displayName": "Binary MOPSO-CD - old",
+                        }
+                    ]
+                },
+                "proposalStates": {
+                    "binary-a": {
+                        "instanceId": "binary-a",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary MOPSO-CD - old",
+                    }
+                },
+                "proposals": [
+                    {
+                        "instanceId": "binary-a",
+                        "proposalId": "binary-mopso-cd",
+                        "displayName": "Binary MOPSO-CD - old",
+                        "status": "completed",
+                        "rows": [
+                            {
+                                "instanceId": "binary-a",
+                                "displayName": "Binary MOPSO-CD - old",
+                            }
+                        ],
+                        "charts": {
+                            "pareto": [
+                                {
+                                    "instanceId": "binary-a",
+                                    "displayName": "Binary MOPSO-CD - old",
+                                    "x": 0.8,
+                                    "y": 0.4,
+                                }
+                            ]
+                        },
+                    }
+                ],
+            }
+            (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+            service = comparator_module.ComparatorService(root)
+            sent: list[tuple[int, dict]] = []
+
+            post_handler = SimpleNamespace(
+                path="/api/comparator/runs/run-1/instance-labels",
+                comparator_path_parts=lambda: ["runs", "run-1", "instance-labels"],
+                comparator_service=service,
+                read_json_body=lambda: {
+                    "labels": {
+                        "binary-a": "Binary MOPSO-CD - tesis",
+                    }
+                },
+                send_json=lambda status, payload: sent.append((status, payload)),
+            )
+            server.ToolPortalHandler.handle_comparator_post(post_handler)
+
+            self.assertEqual(sent[0][0], 200)
+            labels_path = run_dir / "instance_labels.json"
+            self.assertEqual(
+                json.loads(labels_path.read_text(encoding="utf-8")),
+                {"labels": {"binary-a": "Binary MOPSO-CD - tesis"}},
+            )
+            updated_run = sent[0][1]["run"]
+            self.assertEqual(updated_run["config"]["proposalInstances"][0]["displayName"], "Binary MOPSO-CD - tesis")
+            self.assertEqual(updated_run["proposalStates"]["binary-a"]["displayName"], "Binary MOPSO-CD - tesis")
+            self.assertEqual(updated_run["proposals"][0]["displayName"], "Binary MOPSO-CD - tesis")
+            self.assertEqual(updated_run["proposals"][0]["rows"][0]["displayName"], "Binary MOPSO-CD - tesis")
+            self.assertEqual(updated_run["proposals"][0]["charts"]["pareto"][0]["displayName"], "Binary MOPSO-CD - tesis")
+
+            get_handler = SimpleNamespace(
+                path="/api/comparator/runs/run-1",
+                comparator_path_parts=lambda: ["runs", "run-1"],
+                comparator_service=service,
+                send_json=lambda status, payload: sent.append((status, payload)),
+            )
+            server.ToolPortalHandler.handle_comparator_get(get_handler)
+
+            self.assertEqual(sent[1][0], 200)
+            self.assertEqual(sent[1][1]["proposals"][0]["displayName"], "Binary MOPSO-CD - tesis")
+            self.assertEqual(sent[1][1]["instanceLabels"]["binary-a"], "Binary MOPSO-CD - tesis")
+
+    def test_comparator_instance_labels_post_rejects_unknown_instance(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_dir = root / "runs" / "comparator" / "run-1"
+            run_dir.mkdir(parents=True)
+            (run_dir / "summary.json").write_text(
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "status": "completed",
+                        "runDir": str(run_dir),
+                        "config": {
+                            "proposalInstances": [
+                                {
+                                    "instanceId": "binary-a",
+                                    "proposalId": "binary-mopso-cd",
+                                    "displayName": "Binary A",
+                                }
+                            ]
+                        },
+                        "proposals": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            sent: list[tuple[int, dict]] = []
+            fake_handler = SimpleNamespace(
+                path="/api/comparator/runs/run-1/instance-labels",
+                comparator_path_parts=lambda: ["runs", "run-1", "instance-labels"],
+                comparator_service=comparator_module.ComparatorService(root),
+                read_json_body=lambda: {"labels": {"missing": "No existe"}},
+                send_json=lambda status, payload: sent.append((status, payload)),
+            )
+
+            server.ToolPortalHandler.handle_comparator_post(fake_handler)
+
+            self.assertEqual(sent[0][0], 400)
+            self.assertIn("missing", sent[0][1]["error"])
+
     def test_comparator_run_download_get_returns_zip_response(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

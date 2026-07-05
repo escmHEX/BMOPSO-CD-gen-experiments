@@ -80,6 +80,20 @@ class ComparatorFrontendDownloadTests(unittest.TestCase):
         self.assertNotIn('publicationMode: true,\n          chartKey: "embeddingProjection"', app)
         self.assertNotIn('publicationMode: true,\n      chartKey: "embeddingOverlay"', app)
 
+    def test_comparator_instance_label_modal_and_route_are_wired(self):
+        html = (self.root / "LLM" / "index.html").read_text(encoding="utf-8")
+        app = (self.root / "LLM" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="editComparatorInstanceLabelsButton"', html)
+        self.assertIn('id="comparatorInstanceLabelsModal"', html)
+        self.assertIn('id="comparatorInstanceLabelsModalBody"', html)
+        self.assertIn('editComparatorInstanceLabelsButton: document.querySelector("#editComparatorInstanceLabelsButton")', app)
+        self.assertIn('comparatorInstanceLabelsModal: document.querySelector("#comparatorInstanceLabelsModal")', app)
+        self.assertIn('openComparatorInstanceLabelsModal', app)
+        self.assertIn('saveComparatorInstanceLabels', app)
+        self.assertIn('/instance-labels', app)
+        self.assertIn('dom.editComparatorInstanceLabelsButton?.addEventListener("click", openComparatorInstanceLabelsModal)', app)
+
     def test_pareto_hypervolume_toggle_and_publication_styles_are_wired(self):
         app = (self.root / "LLM" / "app.js").read_text(encoding="utf-8")
 

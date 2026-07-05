@@ -80,7 +80,12 @@ export function comparatorHistoricalInstancesFromRun(run) {
   const source = configuredInstances.length
     ? configuredInstances
     : (Array.isArray(run?.proposals) ? run.proposals : []);
+  const labels = objectValue(run?.instanceLabels);
   return source
     .map((item, index) => normalizeHistoricalInstance(item, index))
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((instance) => {
+      const label = stringValue(labels[instance.instanceId]);
+      return label ? { ...instance, displayName: label } : instance;
+    });
 }

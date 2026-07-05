@@ -2163,6 +2163,23 @@ Context:
             </section>
           </div>
 
+          <div id="comparatorInstanceLabelsModal" class="modal-backdrop" hidden>
+            <section class="diagnostic-modal comparator-instance-labels-modal" role="dialog" aria-modal="true" aria-labelledby="comparatorInstanceLabelsModalTitle">
+              <div class="modal-header">
+                <div>
+                  <span class="eyebrow">Corrida comparada</span>
+                  <h2 id="comparatorInstanceLabelsModalTitle">Renombrar instancias</h2>
+                  <p id="comparatorInstanceLabelsModalSubtitle">Estos nombres quedan guardados para esta corrida.</p>
+                </div>
+                <button id="cancelComparatorInstanceLabelsButton" class="secondary" type="button">Cancelar</button>
+              </div>
+              <div id="comparatorInstanceLabelsModalBody" class="modal-body"></div>
+              <div class="modal-actions">
+                <button id="saveComparatorInstanceLabelsButton" type="button">Guardar nombres</button>
+              </div>
+            </section>
+          </div>
+
           <section class="metrics-grid" aria-label="Resumen del comparador">
             <article class="metric">
               <span>Estado</span>
@@ -2240,6 +2257,7 @@ Context:
             <button class="secondary comparator-tab" type="button" data-comparator-tab="table" aria-selected="false">Tabla</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="costs" aria-selected="false">Métricas</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="logs" aria-selected="false">Logs</button>
+            <button id="editComparatorInstanceLabelsButton" class="secondary" type="button" disabled>Renombrar instancias</button>
             <button id="downloadComparatorRunDataButton" class="secondary" type="button" disabled>Descargar datos</button>
             <label id="comparatorPointRepetitionField" class="inline-select-field" hidden>
               <span>Repetición</span>

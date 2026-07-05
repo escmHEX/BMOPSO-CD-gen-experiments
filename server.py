@@ -922,6 +922,14 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, {"charting": charting})
                 return
 
+            if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "instance-labels":
+                payload = self.comparator_service.save_instance_labels(path_parts[1], self.read_json_body())
+                if not payload:
+                    self.send_json(404, {"error": "Run not found."})
+                    return
+                self.send_json(200, payload)
+                return
+
             if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "cancel":
                 self.read_request_body()
                 run = self.comparator_service.cancel_run(path_parts[1])

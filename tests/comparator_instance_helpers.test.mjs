@@ -159,6 +159,29 @@ test("historical comparator instances fall back to proposal results for legacy r
   assert.deepEqual(instances[1].proposalConfig, { extraArgs: "", cliValues: {} });
 });
 
+test("historical comparator instances apply persistent labels by instance id", () => {
+  const run = {
+    instanceLabels: {
+      "binary-a": "Binary MOPSO-CD - tesis",
+    },
+    config: {
+      proposalInstances: [
+        {
+          instanceId: "binary-a",
+          proposalId: "binary-mopso-cd",
+          displayName: "Binary MOPSO-CD - old",
+          baseDisplayName: "Binary MOPSO-CD",
+        },
+      ],
+    },
+  };
+
+  const instances = comparatorHistoricalInstancesFromRun(run);
+
+  assert.equal(instances[0].displayName, "Binary MOPSO-CD - tesis");
+  assert.equal(instances[0].baseDisplayName, "Binary MOPSO-CD");
+});
+
 test("same initial population generator candidates are limited to Binary instances", () => {
   const instances = [
     { instanceId: "binary-a", proposalId: "binary-mopso-cd", displayName: "Binary A" },

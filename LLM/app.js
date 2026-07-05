@@ -434,7 +434,9 @@ let comparatorOllamaModelCapabilities = {};
 let comparatorInstancesInitialized = false;
 let comparatorInstancesReadOnly = false;
 let comparatorInstancesSourceRunId = null;
+let comparatorInstancesSourceSignature = "";
 let comparatorInstanceModalState = null;
+let comparatorInstanceLabelsModalState = null;
 let comparatorCharts = [];
 let comparatorChartStyles = new Map();
 let comparatorChartLegendState = new WeakMap();
@@ -799,6 +801,12 @@ const dom = {
   comparatorInstanceModalBody: document.querySelector("#comparatorInstanceModalBody"),
   saveComparatorInstanceModalButton: document.querySelector("#saveComparatorInstanceModalButton"),
   cancelComparatorInstanceModalButton: document.querySelector("#cancelComparatorInstanceModalButton"),
+  comparatorInstanceLabelsModal: document.querySelector("#comparatorInstanceLabelsModal"),
+  comparatorInstanceLabelsModalTitle: document.querySelector("#comparatorInstanceLabelsModalTitle"),
+  comparatorInstanceLabelsModalSubtitle: document.querySelector("#comparatorInstanceLabelsModalSubtitle"),
+  comparatorInstanceLabelsModalBody: document.querySelector("#comparatorInstanceLabelsModalBody"),
+  saveComparatorInstanceLabelsButton: document.querySelector("#saveComparatorInstanceLabelsButton"),
+  cancelComparatorInstanceLabelsButton: document.querySelector("#cancelComparatorInstanceLabelsButton"),
   comparatorChartLabelsModal: document.querySelector("#comparatorChartLabelsModal"),
   comparatorChartLabelsModalTitle: document.querySelector("#comparatorChartLabelsModalTitle"),
   comparatorChartLabelsModalSubtitle: document.querySelector("#comparatorChartLabelsModalSubtitle"),
@@ -812,6 +820,7 @@ const dom = {
   runComparatorButton: document.querySelector("#runComparatorButton"),
   cancelComparatorButton: document.querySelector("#cancelComparatorButton"),
   recomputeComparatorMetricsButton: document.querySelector("#recomputeComparatorMetricsButton"),
+  editComparatorInstanceLabelsButton: document.querySelector("#editComparatorInstanceLabelsButton"),
   downloadComparatorRunDataButton: document.querySelector("#downloadComparatorRunDataButton"),
   clearComparatorButton: document.querySelector("#clearComparatorButton"),
   recontinueComparatorButton: document.querySelector("#recontinueComparatorButton"),
@@ -5496,6 +5505,7 @@ function setComparatorRunning(isRunning, cancelRequested = false) {
     dom.resumeComparatorButton.disabled = isRunning;
   }
   syncComparatorDownloadButton();
+  syncComparatorInstanceLabelsButton();
   syncComparatorRecontinueButton();
   [
     dom.comparatorReferencePreset,
@@ -5591,6 +5601,7 @@ function storeComparatorRunId(runId) {
     // Local storage is optional; the visible input still supports manual reattach.
   }
   syncComparatorDownloadButton();
+  syncComparatorInstanceLabelsButton();
   syncComparatorRecontinueButton();
 }
 
@@ -5604,6 +5615,7 @@ function clearStoredComparatorRunId() {
     // Nothing to clear when local storage is unavailable.
   }
   syncComparatorDownloadButton();
+  syncComparatorInstanceLabelsButton(null);
   syncComparatorRecontinueButton(null);
 }
 
@@ -5614,6 +5626,15 @@ function comparatorDownloadRunId() {
 function syncComparatorDownloadButton() {
   if (!dom.downloadComparatorRunDataButton) return;
   dom.downloadComparatorRunDataButton.disabled = !comparatorDownloadRunId();
+}
+
+function syncComparatorInstanceLabelsButton(run = latestComparatorRun) {
+  if (!dom.editComparatorInstanceLabelsButton) return;
+  const instances = run?.runId ? comparatorHistoricalInstancesFromRun(run) : [];
+  dom.editComparatorInstanceLabelsButton.disabled = !run?.runId || instances.length === 0;
+  dom.editComparatorInstanceLabelsButton.title = run?.runId
+    ? "Cambia los nombres visibles de las instancias para esta corrida."
+    : "Carga una corrida antes de renombrar instancias.";
 }
 
 function syncComparatorRecontinueButton(run = latestComparatorRun) {
@@ -6210,6 +6231,7 @@ function exitComparatorHistoricalInstanceMode(options = {}) {
   const wasReadOnly = comparatorInstancesReadOnly;
   comparatorInstancesReadOnly = false;
   comparatorInstancesSourceRunId = null;
+  comparatorInstancesSourceSignature = "";
   if (resetToDefaults && wasReadOnly) {
     resetComparatorInstancesToDefaults();
   }
@@ -6281,15 +6303,32 @@ function syncComparatorSameInitialPopulationState(source = null) {
   return comparatorSameInitialPopulationForBmopso;
 }
 
+function comparatorHistoricalInstancesSignature(instances = []) {
+  return JSON.stringify((instances || []).map((instance) => ({
+    instanceId: instance.instanceId,
+    proposalId: instance.proposalId,
+    displayName: instance.displayName,
+    orderIndex: instance.orderIndex,
+  })));
+}
+
 function hydrateComparatorInstancesFromRun(run) {
   const instances = comparatorHistoricalInstancesFromRun(run);
   if (!instances.length) return;
   const runId = String(run?.runId || "");
-  if (comparatorInstancesReadOnly && comparatorInstancesSourceRunId === runId) return;
+  const signature = comparatorHistoricalInstancesSignature(instances);
+  if (
+    comparatorInstancesReadOnly
+    && comparatorInstancesSourceRunId === runId
+    && comparatorInstancesSourceSignature === signature
+  ) {
+    return;
+  }
   comparatorInstances = instances;
   comparatorInstancesInitialized = true;
   comparatorInstancesReadOnly = true;
   comparatorInstancesSourceRunId = runId;
+  comparatorInstancesSourceSignature = signature;
   syncComparatorSameInitialPopulationState(run?.config?.sameInitialPopulationForBmopso || null);
   renderComparatorProposalControls(comparatorProposals);
 }
@@ -7571,6 +7610,114 @@ async function saveComparatorChartLabels() {
   }
 }
 
+function openComparatorInstanceLabelsModal() {
+  if (!dom.comparatorInstanceLabelsModal) return;
+  const run = latestComparatorRun;
+  const runId = String(run?.runId || "").trim();
+  const instances = comparatorHistoricalInstancesFromRun(run);
+  if (!runId || !instances.length) {
+    setStatus(
+      dom.comparatorStatusTone,
+      dom.comparatorStatusTitle,
+      dom.comparatorStatusDetail,
+      "Corrida requerida",
+      "Carga una corrida del comparador antes de renombrar instancias.",
+      "error",
+    );
+    return;
+  }
+  comparatorInstanceLabelsModalState = {
+    runId,
+    instanceIds: instances.map((instance) => instance.instanceId),
+  };
+  dom.comparatorInstanceLabelsModalTitle.textContent = "Renombrar instancias";
+  dom.comparatorInstanceLabelsModalSubtitle.textContent = `Los nombres quedarán guardados para ${runId}.`;
+  dom.saveComparatorInstanceLabelsButton.disabled = false;
+  dom.saveComparatorInstanceLabelsButton.textContent = "Guardar nombres";
+  dom.comparatorInstanceLabelsModalBody.innerHTML = `
+    <div class="comparator-instance-label-fields">
+      ${instances.map((instance) => `
+        <label class="cli-field">
+          <span>${escapeHtml(instance.baseDisplayName || instance.proposalId || instance.instanceId)}</span>
+          <input
+            type="text"
+            maxlength="240"
+            data-comparator-instance-label="${escapeHtml(instance.instanceId)}"
+            value="${escapeHtml(instance.displayName || instance.instanceId)}"
+            autocomplete="off"
+          >
+          <small>${escapeHtml(instance.instanceId)}</small>
+        </label>
+      `).join("")}
+    </div>
+  `;
+  dom.comparatorInstanceLabelsModal.hidden = false;
+  dom.comparatorInstanceLabelsModalBody.querySelector("[data-comparator-instance-label]")?.focus();
+}
+
+function closeComparatorInstanceLabelsModal() {
+  comparatorInstanceLabelsModalState = null;
+  if (!dom.comparatorInstanceLabelsModal) return;
+  dom.comparatorInstanceLabelsModal.hidden = true;
+  dom.comparatorInstanceLabelsModalSubtitle.textContent = "Estos nombres quedan guardados para esta corrida.";
+  dom.comparatorInstanceLabelsModalBody.replaceChildren();
+  dom.saveComparatorInstanceLabelsButton.disabled = false;
+  dom.saveComparatorInstanceLabelsButton.textContent = "Guardar nombres";
+}
+
+function comparatorInstanceLabelInputValues() {
+  const labels = {};
+  dom.comparatorInstanceLabelsModalBody
+    ?.querySelectorAll("[data-comparator-instance-label]")
+    .forEach((input) => {
+      const instanceId = String(input.dataset.comparatorInstanceLabel || "").trim();
+      if (instanceId) labels[instanceId] = String(input.value || "").trim();
+    });
+  return labels;
+}
+
+async function saveComparatorInstanceLabels() {
+  const runId = comparatorInstanceLabelsModalState?.runId;
+  if (!runId) return;
+  const labels = comparatorInstanceLabelInputValues();
+  const empty = Object.entries(labels).find(([, value]) => !value);
+  if (empty) {
+    dom.comparatorInstanceLabelsModalSubtitle.textContent = "Todos los nombres son obligatorios.";
+    dom.comparatorInstanceLabelsModalBody
+      ?.querySelector(`[data-comparator-instance-label="${CSS.escape(empty[0])}"]`)
+      ?.focus();
+    return;
+  }
+  dom.saveComparatorInstanceLabelsButton.disabled = true;
+  dom.saveComparatorInstanceLabelsButton.textContent = "Guardando...";
+  try {
+    const payload = await requestComparatorJson(`/runs/${encodeURIComponent(runId)}/instance-labels`, {
+      method: "POST",
+      body: JSON.stringify({ labels }),
+    });
+    const run = payload.run || null;
+    if (run) {
+      currentComparatorRunId = run.runId;
+      comparatorChartSignature = "";
+      comparatorProjectionSignature = "";
+      comparatorInternalBmopsoSignature = "";
+      renderComparatorRun(run);
+    }
+    closeComparatorInstanceLabelsModal();
+    setStatus(
+      dom.comparatorStatusTone,
+      dom.comparatorStatusTitle,
+      dom.comparatorStatusDetail,
+      "Nombres guardados",
+      "Las instancias de la corrida quedaron renombradas de forma persistente.",
+    );
+  } catch (error) {
+    dom.comparatorInstanceLabelsModalSubtitle.textContent = `No se pudo guardar: ${error.message}`;
+    dom.saveComparatorInstanceLabelsButton.disabled = false;
+    dom.saveComparatorInstanceLabelsButton.textContent = "Guardar nombres";
+  }
+}
+
 function saveComparatorInstanceModal() {
   if (!comparatorInstanceModalState || comparatorInstanceModalState.mode === "message") return;
   const nameInput = dom.comparatorInstanceModalBody.querySelector("[data-comparator-instance-name]");
@@ -8302,6 +8449,7 @@ function renderComparatorRun(run) {
   dom.comparatorConnectionDot.classList.toggle("is-error", run.status === "failed");
   syncComparatorRecomputeButton(run);
   syncComparatorRecontinueButton(run);
+  syncComparatorInstanceLabelsButton(run);
 
   renderComparatorProgress(run.progress || null, run.config || null);
   renderComparatorCostSummary(run.costSummary || null);
@@ -12033,6 +12181,7 @@ dom.turbulenceCandidateModalBody.addEventListener("click", async (event) => {
 dom.runComparatorButton.addEventListener("click", runComparator);
 dom.cancelComparatorButton.addEventListener("click", cancelComparatorRun);
 dom.recomputeComparatorMetricsButton?.addEventListener("click", recomputeComparatorMetrics);
+dom.editComparatorInstanceLabelsButton?.addEventListener("click", openComparatorInstanceLabelsModal);
 dom.downloadComparatorRunDataButton?.addEventListener("click", downloadComparatorRunData);
 dom.clearComparatorButton.addEventListener("click", resetComparatorUi);
 dom.recontinueComparatorButton?.addEventListener("click", recontinueComparatorRun);
@@ -12148,6 +12297,13 @@ dom.cancelComparatorChartLabelsButton?.addEventListener("click", closeComparator
 dom.comparatorChartLabelsModal?.addEventListener("click", (event) => {
   if (event.target === dom.comparatorChartLabelsModal) {
     closeComparatorChartLabelsModal();
+  }
+});
+dom.saveComparatorInstanceLabelsButton?.addEventListener("click", saveComparatorInstanceLabels);
+dom.cancelComparatorInstanceLabelsButton?.addEventListener("click", closeComparatorInstanceLabelsModal);
+dom.comparatorInstanceLabelsModal?.addEventListener("click", (event) => {
+  if (event.target === dom.comparatorInstanceLabelsModal) {
+    closeComparatorInstanceLabelsModal();
   }
 });
 document.querySelectorAll(".comparator-tab").forEach((button) => {

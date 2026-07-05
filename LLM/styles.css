@@ -918,6 +918,15 @@ label span,
   gap: 12px;
 }
 
+.comparator-instance-labels-modal {
+  width: min(760px, 96vw);
+}
+
+.comparator-instance-label-fields {
+  display: grid;
+  gap: 12px;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
