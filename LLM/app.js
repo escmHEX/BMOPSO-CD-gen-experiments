@@ -57,6 +57,10 @@ import {
   comparatorSameInitialPopulationForBmopsoPayload,
 } from "./comparator_instance_helpers.mjs";
 import {
+  comparatorGpt55CommercialExecutionCost,
+  formatComparatorGpt55CommercialExecutionCost,
+} from "./comparator_cost_helpers.mjs";
+import {
   DEFAULT_REFERENCE_TEXT_SELECTION_SORT,
   nextReferenceTextSelectionSort,
   sortReferenceTextSelectionRepresentatives,
@@ -8842,6 +8846,17 @@ function comparatorBenchmarkMetricDefinitions() {
       stdDevValue: (_proposal, cost) => cost.evalCountStdDev,
       stdDevFormat: (_proposal, cost) => cost.evalCountStdDevLabel || formatComparatorCostQuantity(cost.evalCountStdDev, 2),
       isReported: (_proposal, cost) => comparatorCostHasTokenReport(cost),
+      requireAllReported: true,
+    },
+    {
+      id: "gpt55CommercialExecutionPrice",
+      kind: "cost",
+      direction: "min",
+      label: "Precio comercial (GPT-5.5) de 1 ejecución",
+      detail: "Costo estimado en dólares de una ejecución promedio usando las tarifas short context de OpenAI API Standard para GPT-5.5 sobre los tokens totales reportados de entrada y salida.",
+      value: (_proposal, cost) => comparatorGpt55CommercialExecutionCost(cost),
+      format: (_proposal, cost) => formatComparatorGpt55CommercialExecutionCost(comparatorGpt55CommercialExecutionCost(cost)),
+      isReported: (_proposal, cost) => comparatorGpt55CommercialExecutionCost(cost) !== null,
       requireAllReported: true,
     },
   ];

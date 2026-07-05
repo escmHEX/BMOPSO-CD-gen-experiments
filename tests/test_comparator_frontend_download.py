@@ -94,6 +94,27 @@ class ComparatorFrontendDownloadTests(unittest.TestCase):
         self.assertIn('/instance-labels', app)
         self.assertIn('dom.editComparatorInstanceLabelsButton?.addEventListener("click", openComparatorInstanceLabelsModal)', app)
 
+    def test_comparator_gpt55_price_metric_is_after_output_tokens(self):
+        app = (self.root / "LLM" / "app.js").read_text(encoding="utf-8")
+
+        output_tokens_index = app.index('label: "Tokens salida"')
+        price_metric_id = 'id: "gpt55CommercialExecutionPrice"'
+        price_label = 'label: "Precio comercial (GPT-5.5) de 1 ejecución"'
+        price_metric_index = app.index(price_metric_id)
+        price_metric_block = app[price_metric_index:price_metric_index + 900]
+
+        self.assertGreater(price_metric_index, output_tokens_index)
+        self.assertIn(price_metric_id, price_metric_block)
+        self.assertIn(price_label, price_metric_block)
+        self.assertIn('kind: "cost"', price_metric_block)
+        self.assertIn('direction: "min"', price_metric_block)
+        self.assertIn('comparatorGpt55CommercialExecutionCost(cost)', price_metric_block)
+        self.assertIn('formatComparatorGpt55CommercialExecutionCost', price_metric_block)
+        self.assertIn("tarifas short context", price_metric_block)
+        self.assertNotIn("272K", price_metric_block)
+        self.assertNotIn("long context", price_metric_block)
+        self.assertIn('from "./comparator_cost_helpers.mjs"', app)
+
     def test_pareto_hypervolume_toggle_and_publication_styles_are_wired(self):
         app = (self.root / "LLM" / "app.js").read_text(encoding="utf-8")
 
