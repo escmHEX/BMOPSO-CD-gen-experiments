@@ -555,8 +555,8 @@ export function comparatorPublicationLegendLayout(series = [], selected = {}) {
   const width = entries.length
     ? Math.min(420, Math.max(260, Math.ceil((longestName * 8.2) + 84)))
     : 0;
-  const legendRight = 16;
-  const legendGap = 9;
+  const legendRight = 12;
+  const legendGap = 0;
   return {
     entries,
     width,
@@ -827,7 +827,7 @@ function cleanExportAxis(axis, dataZoom, axisIndexKey) {
       next.interval = 10;
       next.minInterval = 10;
     } else if (axisIndexKey === "yAxisIndex") {
-      const scale = comparatorRegularAxisScale(next.min, next.max);
+      const scale = comparatorRegularAxisScale(next.min, next.max, { minIntervals: 3 });
       if (scale) {
         next.min = scale.min;
         next.max = scale.max;

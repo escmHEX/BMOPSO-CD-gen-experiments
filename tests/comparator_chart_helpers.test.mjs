@@ -233,8 +233,9 @@ test("publication legend layout reserves an external legend box", () => {
   assert.equal(layout.entries[0].icon, "path://M0,5L28,5L28,7L0,7Z");
   assert.equal(layout.entries[1].icon, COMPARATOR_SELECTED_STAR_SYMBOL);
   assert.ok(layout.width >= 240);
-  assert.equal(layout.legendGap, 9);
-  assert.equal(layout.gridRight, layout.width + layout.legendRight + 9);
+  assert.equal(layout.legendGap, 0);
+  assert.equal(layout.legendRight, 12);
+  assert.equal(layout.gridRight, layout.width + layout.legendRight);
 });
 
 test("axis tick formatter keeps at most two decimals", () => {
@@ -263,6 +264,16 @@ test("regular axis scale uses monotonic two-decimal ticks", () => {
   assert.deepEqual(scale.ticks.map((tick) => comparatorFormatAxisTick(tick)), ["0.2", "0.25", "0.3", "0.35", "0.4", "0.45"]);
 });
 
+test("publication axis scale avoids excessive empty headroom", () => {
+  const lineScale = comparatorRegularAxisScale(0.25, 0.397, { minIntervals: 3 });
+  const frontScale = comparatorRegularAxisScale(0.23, 0.486, { minIntervals: 3 });
+
+  assert.deepEqual(lineScale.ticks, [0.25, 0.3, 0.35, 0.4]);
+  assert.equal(lineScale.max, 0.4);
+  assert.deepEqual(frontScale.ticks, [0.2, 0.3, 0.4, 0.5]);
+  assert.equal(frontScale.max, 0.5);
+});
+
 test("regular axis scale expands tiny ranges to unique ordered labels", () => {
   const scale = comparatorRegularAxisScaleForPoints([{ value: [0, 0.671] }, { value: [1, 0.704] }], "y");
   const labels = scale.ticks.map((tick) => comparatorFormatAxisTick(tick));
@@ -270,6 +281,20 @@ test("regular axis scale expands tiny ranges to unique ordered labels", () => {
   assert.deepEqual(scale.ticks, [0.67, 0.68, 0.69, 0.7, 0.71, 0.72]);
   assert.equal(new Set(labels).size, labels.length);
   assert.deepEqual([...labels].sort((left, right) => Number(left) - Number(right)), labels);
+});
+
+test("chart export option keeps compact y-axis headroom", () => {
+  const exported = comparatorChartExportOption({
+    xAxis: { type: "value", name: "Iteración", min: 0, max: 70 },
+    yAxis: { type: "value", name: "Hipervolumen", min: 0.25, max: 0.397 },
+    dataZoom: [
+      { yAxisIndex: 0, startValue: 0.25, endValue: 0.397 },
+    ],
+    series: [],
+  });
+
+  assert.equal(exported.yAxis.max, 0.4);
+  assert.equal(exported.yAxis.interval, 0.05);
 });
 
 test("chart export option removes UI, descriptions, metric badges, reference lines and white chart backgrounds", () => {

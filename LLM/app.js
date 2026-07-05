@@ -10368,7 +10368,8 @@ function comparatorInteractiveLineOption({
   }
   const chartPoints = activeSeries.flatMap((item) => item.data || []);
   const xAxisWindow = comparatorIterationAxisWindow(activeSeries);
-  const yAxisScale = comparatorRegularAxisScaleForPoints(chartPoints, "y");
+  const publicationAxisScaleOptions = publicationMode ? { minIntervals: 3 } : {};
+  const yAxisScale = comparatorRegularAxisScaleForPoints(chartPoints, "y", publicationAxisScaleOptions);
   const dataZoom = [
     xAxisWindow ? {
       type: "inside",
@@ -10965,9 +10966,11 @@ function baseScatterOption(title, series, options = {}) {
   ));
   const hasExplicitXBounds = Number.isFinite(Number(options.xAxisMin)) && Number.isFinite(Number(options.xAxisMax));
   const hasExplicitYBounds = Number.isFinite(Number(options.yAxisMin)) && Number.isFinite(Number(options.yAxisMax));
+  const publicationAxisScaleOptions = publicationMode ? { minIntervals: 3 } : {};
+  const xAxisScaleOptions = { targetIntervals: 6, ...publicationAxisScaleOptions };
   const xAxisScale = hasExplicitXBounds
-    ? comparatorRegularAxisScale(Number(options.xAxisMin), Number(options.xAxisMax), { targetIntervals: 6 })
-    : comparatorRegularAxisScaleForPoints(axisSource, "x", { targetIntervals: 6 });
+    ? comparatorRegularAxisScale(Number(options.xAxisMin), Number(options.xAxisMax), xAxisScaleOptions)
+    : comparatorRegularAxisScaleForPoints(axisSource, "x", xAxisScaleOptions);
   const xAxisWindow = xAxisScale
     ? {
         defaultMin: xAxisScale.min,
@@ -10977,8 +10980,8 @@ function baseScatterOption(title, series, options = {}) {
       }
     : null;
   const yAxisScale = hasExplicitYBounds
-    ? comparatorRegularAxisScale(Number(options.yAxisMin), Number(options.yAxisMax))
-    : comparatorRegularAxisScaleForPoints(axisSource, "y");
+    ? comparatorRegularAxisScale(Number(options.yAxisMin), Number(options.yAxisMax), publicationAxisScaleOptions)
+    : comparatorRegularAxisScaleForPoints(axisSource, "y", publicationAxisScaleOptions);
   const dataZoom = [
     xAxisWindow ? {
       type: "inside",
