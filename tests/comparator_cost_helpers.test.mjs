@@ -3,7 +3,9 @@ import { test } from "node:test";
 
 import {
   comparatorGpt55CommercialExecutionCost,
+  comparatorHaiku45CommercialExecutionCost,
   formatComparatorGpt55CommercialExecutionCost,
+  formatComparatorHaiku45CommercialExecutionCost,
 } from "../LLM/comparator_cost_helpers.mjs";
 
 test("gpt-5.5 commercial cost uses standard short-context input and output prices", () => {
@@ -55,4 +57,25 @@ test("gpt-5.5 commercial cost format keeps small non-zero costs visible", () => 
 
   assert.equal(cost, 0.00011);
   assert.equal(formatComparatorGpt55CommercialExecutionCost(cost), "USD $0.00011");
+});
+
+test("haiku 4.5 commercial cost uses input and output prices", () => {
+  const cost = comparatorHaiku45CommercialExecutionCost({
+    hasTokenReport: true,
+    promptEvalCount: 100_000,
+    evalCount: 10_000,
+  });
+
+  assert.equal(cost, 0.15);
+});
+
+test("haiku 4.5 commercial cost format keeps small non-zero costs visible", () => {
+  const cost = comparatorHaiku45CommercialExecutionCost({
+    hasTokenReport: true,
+    promptEvalCount: 10,
+    evalCount: 2,
+  });
+
+  assert.equal(cost, 0.00002);
+  assert.equal(formatComparatorHaiku45CommercialExecutionCost(cost), "USD $0.00002");
 });

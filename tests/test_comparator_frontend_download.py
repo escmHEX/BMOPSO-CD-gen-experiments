@@ -94,7 +94,7 @@ class ComparatorFrontendDownloadTests(unittest.TestCase):
         self.assertIn('/instance-labels', app)
         self.assertIn('dom.editComparatorInstanceLabelsButton?.addEventListener("click", openComparatorInstanceLabelsModal)', app)
 
-    def test_comparator_gpt55_price_metric_is_after_output_tokens(self):
+    def test_comparator_commercial_price_metrics_are_after_output_tokens(self):
         app = (self.root / "LLM" / "app.js").read_text(encoding="utf-8")
 
         output_tokens_index = app.index('label: "Tokens salida"')
@@ -102,6 +102,10 @@ class ComparatorFrontendDownloadTests(unittest.TestCase):
         price_label = 'label: "Precio comercial (GPT-5.5) de 1 ejecución"'
         price_metric_index = app.index(price_metric_id)
         price_metric_block = app[price_metric_index:price_metric_index + 900]
+        haiku_metric_id = 'id: "haiku45CommercialExecutionPrice"'
+        haiku_label = 'label: "Precio comercial (Haiku 4.5) de 1 ejecución"'
+        haiku_metric_index = app.index(haiku_metric_id)
+        haiku_metric_block = app[haiku_metric_index:haiku_metric_index + 900]
 
         self.assertGreater(price_metric_index, output_tokens_index)
         self.assertIn(price_metric_id, price_metric_block)
@@ -114,6 +118,14 @@ class ComparatorFrontendDownloadTests(unittest.TestCase):
         self.assertNotIn("272K", price_metric_block)
         self.assertNotIn("long context", price_metric_block)
         self.assertIn('from "./comparator_cost_helpers.mjs"', app)
+        self.assertGreater(haiku_metric_index, price_metric_index)
+        self.assertIn(haiku_metric_id, haiku_metric_block)
+        self.assertIn(haiku_label, haiku_metric_block)
+        self.assertIn('kind: "cost"', haiku_metric_block)
+        self.assertIn('direction: "min"', haiku_metric_block)
+        self.assertIn('comparatorHaiku45CommercialExecutionCost(cost)', haiku_metric_block)
+        self.assertIn('formatComparatorHaiku45CommercialExecutionCost', haiku_metric_block)
+        self.assertIn("Anthropic Claude Haiku 4.5", haiku_metric_block)
 
     def test_pareto_hypervolume_toggle_and_publication_styles_are_wired(self):
         app = (self.root / "LLM" / "app.js").read_text(encoding="utf-8")

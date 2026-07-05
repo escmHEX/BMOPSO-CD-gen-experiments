@@ -58,7 +58,9 @@ import {
 } from "./comparator_instance_helpers.mjs";
 import {
   comparatorGpt55CommercialExecutionCost,
+  comparatorHaiku45CommercialExecutionCost,
   formatComparatorGpt55CommercialExecutionCost,
+  formatComparatorHaiku45CommercialExecutionCost,
 } from "./comparator_cost_helpers.mjs";
 import {
   DEFAULT_REFERENCE_TEXT_SELECTION_SORT,
@@ -8857,6 +8859,17 @@ function comparatorBenchmarkMetricDefinitions() {
       value: (_proposal, cost) => comparatorGpt55CommercialExecutionCost(cost),
       format: (_proposal, cost) => formatComparatorGpt55CommercialExecutionCost(comparatorGpt55CommercialExecutionCost(cost)),
       isReported: (_proposal, cost) => comparatorGpt55CommercialExecutionCost(cost) !== null,
+      requireAllReported: true,
+    },
+    {
+      id: "haiku45CommercialExecutionPrice",
+      kind: "cost",
+      direction: "min",
+      label: "Precio comercial (Haiku 4.5) de 1 ejecución",
+      detail: "Costo estimado en dólares de una ejecución promedio usando las tarifas de Anthropic Claude Haiku 4.5 sobre los tokens totales reportados de entrada y salida.",
+      value: (_proposal, cost) => comparatorHaiku45CommercialExecutionCost(cost),
+      format: (_proposal, cost) => formatComparatorHaiku45CommercialExecutionCost(comparatorHaiku45CommercialExecutionCost(cost)),
+      isReported: (_proposal, cost) => comparatorHaiku45CommercialExecutionCost(cost) !== null,
       requireAllReported: true,
     },
   ];
