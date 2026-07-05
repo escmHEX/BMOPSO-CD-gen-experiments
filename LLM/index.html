@@ -657,7 +657,7 @@ Each line must follow this format:
           <section class="grid two-columns">
             <article class="panel">
               <div class="panel-title">
-                <h2>Referencia y ejecucion</h2>
+                <h2>Referencia y ejecución</h2>
               </div>
               <div class="form-grid">
                 <label>
@@ -1982,14 +1982,14 @@ Context:
             </div>
             <div class="header-status">
               <span id="comparatorConnectionDot" class="status-dot" aria-hidden="true"></span>
-              <span id="comparatorConnectionText">Sin ejecucion</span>
+              <span id="comparatorConnectionText">Sin ejecución</span>
             </div>
           </header>
 
           <section class="grid">
             <article class="panel">
               <div class="panel-title">
-                <h2>Referencia y ejecucion</h2>
+                <h2>Referencia y ejecución</h2>
               </div>
               <div class="form-grid">
                 <label class="span-2">
@@ -2030,17 +2030,17 @@ Context:
                 <label>
                   <span>N individuos</span>
                   <input id="comparatorN" type="number" min="1" max="500" value="10">
-                  <small class="field-note">Tamano de poblacion o enjambre usado como parametro comun para las propuestas.</small>
+                  <small class="field-note">Tamaño de población o enjambre usado como parámetro común para las propuestas.</small>
                 </label>
                 <label>
                   <span>Generaciones / iteraciones</span>
                   <input id="comparatorGeneraciones" type="number" min="0" max="500" value="3">
-                  <small class="field-note">Cantidad de pasos del optimizador; se mantiene comun para comparabilidad.</small>
+                  <small class="field-note">Cantidad de pasos del optimizador; se mantiene común para comparabilidad.</small>
                 </label>
                 <label>
                   <span>Semilla</span>
                   <input id="comparatorSeed" type="number" min="0" max="2147483647" value="42">
-                  <small class="field-note">Semilla base para reproducibilidad; en K repeticiones el comparador deriva semillas por repeticion.</small>
+                  <small class="field-note">Semilla base para reproducibilidad; en K repeticiones el comparador deriva semillas por repetición.</small>
                 </label>
                 <label>
                   <span>K repeticiones</span>
@@ -2048,9 +2048,9 @@ Context:
                   <small class="field-note">Cantidad de corridas estocasticas independientes por instancia de propuesta.</small>
                 </label>
                 <label>
-                  <span>Modo de ejecucion</span>
+                  <span>Modo de ejecución</span>
                   <select id="comparatorExecutionMode">
-                    <option value="fair_sequential" selected>Comparacion justa (secuencial)</option>
+                    <option value="fair_sequential" selected>Comparación justa (secuencial)</option>
                     <option value="exploratory_parallel">Exploratoria paralela</option>
                   </select>
                   <small id="comparatorExecutionModeNote" class="field-note">Costos comparables: las propuestas se ejecutan una por una.</small>
@@ -2058,7 +2058,7 @@ Context:
                 <label>
                   <span>Propuestas paralelas</span>
                   <input id="comparatorProposalParallelism" type="number" min="1" max="8" value="1">
-                  <small class="field-note">Solo aplica en modo exploratorio; el modo justo fuerza ejecucion secuencial para no sesgar costos.</small>
+                  <small class="field-note">Solo aplica en modo exploratorio; el modo justo fuerza ejecución secuencial para no sesgar costos.</small>
                 </label>
                 <label>
                   <span>Timeout por propuesta (min)</span>
@@ -2068,8 +2068,8 @@ Context:
                 <label class="span-2 toggle-field">
                   <input id="comparatorSameInitialPopulationForBmopso" type="checkbox">
                   <span>
-                    <strong>Misma poblacion inicial para MOPSO</strong>
-                    <small>Una instancia Binary MOPSO-CD genera la poblacion inicial y las demas Binary la reutilizan en la misma repeticion.</small>
+                    <strong>Misma población inicial para MOPSO</strong>
+                    <small>Una instancia Binary MOPSO-CD genera la población inicial y las demás Binary la reutilizan en la misma repetición.</small>
                   </span>
                 </label>
                 <label class="span-2 toggle-field">
@@ -2085,9 +2085,9 @@ Context:
                 </fieldset>
               </div>
               <div class="inline-actions">
-                <button id="runComparatorButton" type="button">Ejecutar comparacion</button>
+                <button id="runComparatorButton" type="button">Ejecutar comparación</button>
                 <button id="cancelComparatorButton" class="danger" type="button" disabled>Cancelar</button>
-                <button id="recomputeComparatorMetricsButton" class="secondary" type="button" disabled>Recalcular metricas</button>
+                <button id="recomputeComparatorMetricsButton" class="secondary" type="button" disabled>Recalcular métricas</button>
                 <button id="clearComparatorButton" class="secondary" type="button">Limpiar</button>
                 <button id="recontinueComparatorButton" class="secondary" type="button" disabled>Re-continuar</button>
               </div>
@@ -2105,7 +2105,7 @@ Context:
             <summary class="disclosure-summary">
               <span>
                 <strong>Instancias a comparar</strong>
-                <small>Cada instancia ejecuta una propuesta base con configuracion propia; salida, referencia, semilla y repeticiones las gestiona el comparador.</small>
+                <small>Cada instancia ejecuta una propuesta base con configuración propia; salida, referencia, semilla y repeticiones las gestiona el comparador.</small>
               </span>
               <b aria-hidden="true"></b>
             </summary>
@@ -2120,13 +2120,45 @@ Context:
                 <div>
                   <span class="eyebrow">Instancia de propuesta</span>
                   <h2 id="comparatorInstanceModalTitle">Configurar instancia</h2>
-                  <p id="comparatorInstanceModalSubtitle">Ajusta solo parametros propios de la propuesta.</p>
+                  <p id="comparatorInstanceModalSubtitle">Ajusta solo parámetros propios de la propuesta.</p>
                 </div>
                 <button id="cancelComparatorInstanceModalButton" class="secondary" type="button">Cancelar</button>
               </div>
               <div id="comparatorInstanceModalBody" class="modal-body"></div>
               <div class="modal-actions">
-                <button id="saveComparatorInstanceModalButton" type="button">Guardar configuracion</button>
+                <button id="saveComparatorInstanceModalButton" type="button">Guardar configuración</button>
+              </div>
+            </section>
+          </div>
+
+          <div id="comparatorChartLabelsModal" class="modal-backdrop" hidden>
+            <section class="diagnostic-modal comparator-chart-labels-modal" role="dialog" aria-modal="true" aria-labelledby="comparatorChartLabelsModalTitle">
+              <div class="modal-header">
+                <div>
+                  <span class="eyebrow">Gráficos exportables</span>
+                  <h2 id="comparatorChartLabelsModalTitle">Editar etiquetas</h2>
+                  <p id="comparatorChartLabelsModalSubtitle">Estos valores quedan como default para el comparador web.</p>
+                </div>
+                <button id="cancelComparatorChartLabelsButton" class="secondary" type="button">Cancelar</button>
+              </div>
+              <div class="modal-body">
+                <div class="comparator-chart-label-fields">
+                  <label class="cli-field">
+                    <span>Título</span>
+                    <input id="comparatorChartTitleInput" type="text" maxlength="160" autocomplete="off">
+                  </label>
+                  <label class="cli-field">
+                    <span>Eje X</span>
+                    <input id="comparatorChartXAxisInput" type="text" maxlength="160" autocomplete="off">
+                  </label>
+                  <label class="cli-field">
+                    <span>Eje Y</span>
+                    <input id="comparatorChartYAxisInput" type="text" maxlength="160" autocomplete="off">
+                  </label>
+                </div>
+              </div>
+              <div class="modal-actions">
+                <button id="saveComparatorChartLabelsButton" type="button">Guardar como default</button>
               </div>
             </section>
           </div>
@@ -2180,7 +2212,7 @@ Context:
           <section class="panel">
             <div class="panel-title">
               <h2>Progreso de corrida</h2>
-              <span id="comparatorProgressDetail">Sin ejecucion.</span>
+              <span id="comparatorProgressDetail">Sin ejecución.</span>
             </div>
             <div class="progress-track" aria-hidden="true">
               <span id="comparatorProgressBar"></span>
@@ -2191,7 +2223,7 @@ Context:
           <section class="panel">
             <div class="panel-title">
               <h2>Resumen por propuesta</h2>
-              <span>Estado operativo y trazabilidad; las metricas comparativas estan en la tabla unica.</span>
+              <span>Estado operativo y trazabilidad; las métricas comparativas están en la tabla única.</span>
             </div>
             <div id="comparatorProposalCards" class="proposal-card-grid">
               <article class="proposal-card">
@@ -2206,7 +2238,7 @@ Context:
             <button class="secondary comparator-tab" type="button" data-comparator-tab="otherCharts" aria-selected="false">Otros gráficos</button>
             <button id="comparatorInternalBmopsoTabButton" class="secondary comparator-tab" type="button" data-comparator-tab="internalBmopso" aria-selected="false" hidden>Análisis interno BMOPSO</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="table" aria-selected="false">Tabla</button>
-            <button class="secondary comparator-tab" type="button" data-comparator-tab="costs" aria-selected="false">Metricas</button>
+            <button class="secondary comparator-tab" type="button" data-comparator-tab="costs" aria-selected="false">Métricas</button>
             <button class="secondary comparator-tab" type="button" data-comparator-tab="logs" aria-selected="false">Logs</button>
             <button id="downloadComparatorRunDataButton" class="secondary" type="button" disabled>Descargar datos</button>
             <label id="comparatorPointRepetitionField" class="inline-select-field" hidden>
@@ -2218,11 +2250,11 @@ Context:
           <section id="comparatorChartsTab" class="comparator-tab-panel is-active">
             <article class="panel comparator-chart-filter-panel">
               <div class="panel-title">
-                <h2>Filtro de graficos</h2>
+                <h2>Filtro de gráficos</h2>
                 <span>Por defecto se muestran todas las propuestas.</span>
               </div>
-              <div id="comparatorChartProposalFilters" class="chart-filter-list" aria-label="Filtrar graficos por propuesta">
-                <span class="muted-text">Ejecuta una comparacion para activar filtros.</span>
+              <div id="comparatorChartProposalFilters" class="chart-filter-list" aria-label="Filtrar gráficos por propuesta">
+                <span class="muted-text">Ejecuta una comparación para activar filtros.</span>
               </div>
             </article>
             <div id="comparatorParetoCharts" class="chart-grid"></div>
@@ -2243,17 +2275,17 @@ Context:
             <section class="grid three-columns">
               <article class="panel">
                 <div class="panel-title"><h2>HV</h2></div>
-                <p class="chart-help">Mayor HV es mejor: mide area dominada por iteracion respecto a [0,0] en el espacio comparable.</p>
+                <p class="chart-help">Mayor HV es mejor: mide área dominada por iteración respecto a [0,0] en el espacio comparable.</p>
                 <div id="comparatorHvChart" class="chart-surface small-chart"></div>
               </article>
               <article class="panel">
                 <div class="panel-title"><h2>Contribution</h2></div>
-                <p class="chart-help">Mayor es mejor: indica mayor aporte al frente combinado P* por iteracion.</p>
+                <p class="chart-help">Mayor es mejor: indica mayor aporte al frente combinado P* por iteración.</p>
                 <div id="comparatorContributionLineChart" class="chart-surface small-chart"></div>
               </article>
               <article class="panel">
                 <div class="panel-title"><h2>Extent</h2></div>
-                <p class="chart-help">Mayor es mejor: mide cobertura del frente comparable por iteracion.</p>
+                <p class="chart-help">Mayor es mejor: mide cobertura del frente comparable por iteración.</p>
                 <div id="comparatorExtentChart" class="chart-surface small-chart"></div>
               </article>
             </section>
@@ -2265,12 +2297,12 @@ Context:
               </article>
               <article class="panel">
                 <div class="panel-title"><h2>K-means inertia</h2></div>
-                <p class="chart-help">Mayor K-means inertia indica mayor dispersion global de embeddings en la poblacion por iteracion.</p>
+                <p class="chart-help">Mayor K-means inertia indica mayor dispersión global de embeddings en la población por iteración.</p>
                 <div id="comparatorGlobalInertiaChart" class="chart-surface small-chart"></div>
               </article>
               <article class="panel">
                 <div class="panel-title"><h2>Entity entropy</h2></div>
-                <p class="chart-help">Mayor entity entropy indica mayor variedad conceptual observada por iteracion.</p>
+                <p class="chart-help">Mayor entity entropy indica mayor variedad conceptual observada por iteración.</p>
                 <div id="comparatorGlobalEntropyChart" class="chart-surface small-chart"></div>
               </article>
             </section>
@@ -2318,7 +2350,7 @@ Context:
                   </tr>
                 </thead>
                 <tbody id="comparatorResultsBody">
-                  <tr><td colspan="9">Sin resultados todavia.</td></tr>
+                  <tr><td colspan="9">Sin resultados todavía.</td></tr>
                 </tbody>
               </table>
             </div>
@@ -2326,7 +2358,7 @@ Context:
 
           <section id="comparatorCostsTab" class="panel comparator-tab-panel">
             <div class="panel-title">
-              <h2>Metricas comparativas</h2>
+              <h2>Métricas comparativas</h2>
               <span>Calidad y costo en una tabla unica por propuesta.</span>
             </div>
             <div id="comparatorCostExplanation" class="cost-explanation">
@@ -2341,12 +2373,12 @@ Context:
                   </tr>
                 </thead>
                 <tbody id="comparatorCostTableBody">
-                  <tr><td colspan="2">Sin resultados todavia.</td></tr>
+                  <tr><td colspan="2">Sin resultados todavía.</td></tr>
                 </tbody>
               </table>
             </div>
             <details id="comparatorCostTraceability" class="artifact-disclosure comparator-traceability">
-              <summary>Trazabilidad tecnica</summary>
+              <summary>Trazabilidad técnica</summary>
               <div id="comparatorCostTraceabilityBody" class="semantic-artifact-content">
                 Sin corrida activa.
               </div>
@@ -2359,7 +2391,7 @@ Context:
                 <h2>Ultimos logs</h2>
                 <button id="copyComparatorLogButton" class="secondary compact" type="button" disabled>Copiar log</button>
               </div>
-              <pre id="comparatorLogOutput" class="output-box">Sin logs todavia.</pre>
+              <pre id="comparatorLogOutput" class="output-box">Sin logs todavía.</pre>
             </article>
 
             <article class="panel">

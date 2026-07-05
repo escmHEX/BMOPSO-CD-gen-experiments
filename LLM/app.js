@@ -7,6 +7,7 @@ import {
   comparatorCanRecontinueRun,
   comparatorClearPointExclusions,
   comparatorChartAxisWindow,
+  comparatorDefaultChartLabels,
   comparatorCountByProposal,
   comparatorExpandedAxisWindow,
   comparatorFrontDiagnostics,
@@ -25,9 +26,12 @@ import {
   comparatorMetricMetadata,
   comparatorMetricReferenceLines,
   comparatorMetricReferenceLinePatch,
+  comparatorMergeChartLabels,
   comparatorLimitSeriesToIteration,
   comparatorPartitionPointsByExclusion,
   comparatorPointCoordinates,
+  comparatorRegularAxisScale,
+  comparatorRegularAxisScaleForPoints,
   comparatorPointChartRepetitionOptions,
   comparatorPointChartRepetitions,
   comparatorPointChartViewProposal,
@@ -35,6 +39,12 @@ import {
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
   comparatorSelectedFrontPointsForIndividuals,
+  comparatorChartExportOption,
+  comparatorChartAxisTickFormatter,
+  comparatorPublicationLegendLayout,
+  comparatorPublicationLegendEntries,
+  COMPARATOR_TRANSPARENT_BACKGROUND,
+  COMPARATOR_SELECTED_STAR_SYMBOL,
   comparatorSeriesWithFinalMetricReplacement,
   comparatorSeriesIterationExtent,
   comparatorVisibleFrontChartPoints,
@@ -426,6 +436,10 @@ let comparatorInstanceModalState = null;
 let comparatorCharts = [];
 let comparatorChartStyles = new Map();
 let comparatorChartLegendState = new WeakMap();
+let comparatorChartingConfig = { labels: {} };
+let comparatorChartLabels = comparatorDefaultChartLabels();
+let comparatorChartLabelModalState = null;
+let comparatorParetoHypervolumeAreaScopes = new Set();
 let comparatorChartSignature = "";
 let comparatorFrontDiagnosticLoadToken = 0;
 let comparatorFrontDiagnosticCache = new Map();
@@ -783,6 +797,14 @@ const dom = {
   comparatorInstanceModalBody: document.querySelector("#comparatorInstanceModalBody"),
   saveComparatorInstanceModalButton: document.querySelector("#saveComparatorInstanceModalButton"),
   cancelComparatorInstanceModalButton: document.querySelector("#cancelComparatorInstanceModalButton"),
+  comparatorChartLabelsModal: document.querySelector("#comparatorChartLabelsModal"),
+  comparatorChartLabelsModalTitle: document.querySelector("#comparatorChartLabelsModalTitle"),
+  comparatorChartLabelsModalSubtitle: document.querySelector("#comparatorChartLabelsModalSubtitle"),
+  comparatorChartTitleInput: document.querySelector("#comparatorChartTitleInput"),
+  comparatorChartXAxisInput: document.querySelector("#comparatorChartXAxisInput"),
+  comparatorChartYAxisInput: document.querySelector("#comparatorChartYAxisInput"),
+  saveComparatorChartLabelsButton: document.querySelector("#saveComparatorChartLabelsButton"),
+  cancelComparatorChartLabelsButton: document.querySelector("#cancelComparatorChartLabelsButton"),
   comparatorN: document.querySelector("#comparatorN"),
   comparatorGeneraciones: document.querySelector("#comparatorGeneraciones"),
   runComparatorButton: document.querySelector("#runComparatorButton"),
@@ -943,6 +965,19 @@ const COMPARATOR_METRIC_REFERENCE_ICON = "path://M4,7H20M4,12H20M4,17H20M5,20L19
 const COMPARATOR_HIDE_SERIES_TOOL_KEY = "myComparatorHideSeries";
 const COMPARATOR_HIDE_SERIES_TITLE = "Ocultar series";
 const COMPARATOR_HIDE_SERIES_ICON = "path://M4,6H20V8H4ZM4,11H20V13H4ZM4,16H20V18H4Z";
+const COMPARATOR_CHART_LABEL_TOOL_KEY = "myComparatorChartLabels";
+const COMPARATOR_CHART_LABEL_TITLE = "Editar título y ejes";
+const COMPARATOR_CHART_LABEL_ICON = "path://M4,5H20V7H4ZM4,9H14V11H4ZM4,13H20V15H4ZM4,17H14V19H4Z";
+const COMPARATOR_CHART_EXPORT_TOOL_KEY = "myComparatorExportImage";
+const COMPARATOR_CHART_EXPORT_TITLE = "Descargar imagen";
+const COMPARATOR_CHART_EXPORT_ICON = "path://M12,3V14M8,10L12,14L16,10M5,19H19V21H5Z";
+const COMPARATOR_CHART_EXPORT_WIDTH = 1280;
+const COMPARATOR_CHART_EXPORT_HEIGHT = 760;
+const COMPARATOR_PUBLICATION_BORDER_WIDTH = 3;
+const COMPARATOR_PARETO_HV_TOOL_KEY = "myComparatorParetoHv";
+const COMPARATOR_PARETO_HV_SHOW_TITLE = "Mostrar área de hipervolumen";
+const COMPARATOR_PARETO_HV_HIDE_TITLE = "Ocultar área de hipervolumen";
+const COMPARATOR_PARETO_HV_ICON = "path://M4,18H20V20H4ZM5,16L9,11L13,14L19,6V16Z";
 const COMPARATOR_RESET_FRONT_POINTS_TOOL_KEY = "myComparatorResetFrontPoints";
 const COMPARATOR_RESET_FRONT_POINTS_TITLE = "Restaurar puntos";
 const COMPARATOR_RESET_FRONT_POINTS_ICON = "path://M12,5V2L7,6L12,10V7C15.31,7 18,9.69 18,13C18,16.31 15.31,19 12,19C9.61,19 7.55,17.61 6.57,15.6L4.75,16.45C6.05,19.14 8.8,21 12,21C16.42,21 20,17.42 20,13C20,8.58 16.42,5 12,5Z";
@@ -974,56 +1009,56 @@ const ABBREVIATION_TOOLTIPS = Object.freeze({
   "api": "Application Programming Interface.",
   "bd pso": "Base de datos de individuos PSO.",
   "distilbert": "Modelo DistilBERT usado por la estrategia correspondiente.",
-  "evolmd post-hoc": "Metricas diagnosticas calculadas despues de la ejecucion nativa de EVOLMD.",
-  "uniobjetivo post-hoc": "Metricas diagnosticas calculadas despues de ejecutar propuestas uniobjetivo como EVOLMD o MESAP.",
-  "f.o": "Funcion objetivo.",
-  "f.o.": "Funcion objetivo.",
-  "f.o. comun": "Funcion objetivo comun usada para comparar estrategias.",
-  "f.o. nativa": "Funcion objetivo nativa reportada por la estrategia.",
+  "evolmd post-hoc": "Métricas diagnósticas calculadas después de la ejecución nativa de EVOLMD.",
+  "uniobjetivo post-hoc": "Métricas diagnósticas calculadas después de ejecutar propuestas uniobjetivo como EVOLMD o MESAP.",
+  "f.o": "Función objetivo.",
+  "f.o.": "Función objetivo.",
+  "f.o. comun": "Función objetivo común usada para comparar estrategias.",
+  "f.o. nativa": "Función objetivo nativa reportada por la estrategia.",
   "git": "Sistema de control de versiones Git.",
   "g": "Cantidad de generaciones o iteraciones configuradas.",
   "hv": "Hypervolume.",
   "hv comp.": "Hypervolume comparable en el espacio objetivo normalizado.",
   "hv comp. post-hoc": "Hypervolume comparable calculado post-hoc.",
-  "hv por iteracion": "Hypervolume por iteracion.",
+  "hv por iteracion": "Hypervolume por iteración.",
   "k": "Cantidad de repeticiones independientes.",
   "llm": "Large Language Model.",
   "llm actual": "Large Language Model actualmente configurado.",
   "llamadas llm": "Llamadas al Large Language Model.",
   "mejor comp.": "Mejor vector comparable normalizado.",
-  "mejor f.o.": "Mejor funcion objetivo.",
-  "mejor f.o. comun": "Mejor funcion objetivo comun.",
-  "mo comparable": "Comparacion multiobjetivo en el espacio objetivo normalizado comun.",
-  "mteb average (56)": "Promedio MTEB sobre 56 tareas de evaluacion.",
-  "n": "Tamano de poblacion o cantidad de individuos.",
-  "n individuos": "Tamano de poblacion o cantidad de individuos.",
+  "mejor f.o.": "Mejor función objetivo.",
+  "mejor f.o. comun": "Mejor función objetivo común.",
+  "mo comparable": "Comparación multiobjetivo en el espacio objetivo normalizado común.",
+  "mteb average (56)": "Promedio MTEB sobre 56 tareas de evaluación.",
+  "n": "Tamaño de población o cantidad de individuos.",
+  "n individuos": "Tamaño de población o cantidad de individuos.",
   "no dom. post-hoc": "Soluciones no dominadas calculadas post-hoc.",
   "no dominadas": "Soluciones no dominadas.",
-  "no dominadas globales": "Soluciones no dominadas al comparar la union de propuestas.",
+  "no dominadas globales": "Soluciones no dominadas al comparar la unión de propuestas.",
   "no dominadas nativas": "Soluciones no dominadas en el espacio nativo de la estrategia.",
   "ollama": "Servidor local Ollama usado para ejecutar el modelo LLM.",
   "ppdb": "Paraphrase Database.",
   "prom. llamada": "Tiempo promedio por llamada.",
   "prom. llm / individuo": "Tiempo promedio de LLM por individuo.",
   "pso": "Particle Swarm Optimization.",
-  "rank": "Orden de la solucion dentro de la tabla o seleccion.",
-  "run": "Identificador de ejecucion.",
-  "run id": "Identificador de ejecucion.",
+  "rank": "Orden de la solución dentro de la tabla o selección.",
+  "run": "Identificador de ejecución.",
+  "run id": "Identificador de ejecución.",
   "sbert": "Sentence-BERT.",
-  "sin paralelismo estim.": "Estimacion sin ejecutar estrategias en paralelo.",
-  "contribution": "Aporte de la propuesta al frente combinado P*, con credito compartido entre puntos repetidos.",
+  "sin paralelismo estim.": "Estimación sin ejecutar estrategias en paralelo.",
+  "contribution": "Aporte de la propuesta al frente combinado P*, con crédito compartido entre puntos repetidos.",
   "extent": "Cobertura del frente comparable normalizado.",
-  "unary entropy": "Distribucion del frente comparable normalizado en celdas.",
+  "unary entropy": "Distribución del frente comparable normalizado en celdas.",
   "tokens entrada": "Tokens de prompt o entrada reportados por Ollama.",
   "tokens salida": "Tokens de completion o salida reportados por Ollama.",
   "temp. prompts": "Temperatura usada para generar prompts.",
   "tiempo llm": "Tiempo acumulado asociado a llamadas LLM.",
   "tiempo llm cliente": "Suma de latencias cliente de llamadas LLM.",
   "tiempo llm total": "Tiempo total asociado a llamadas LLM.",
-  "top p": "Parametro nucleus sampling top-p.",
+  "top p": "Parámetro nucleus sampling top-p.",
   "total prop.": "Tiempo total de la propuesta.",
-  "vector f.o": "Vector de funcion objetivo.",
-  "vector f.o.": "Vector de funcion objetivo.",
+  "vector f.o": "Vector de función objetivo.",
+  "vector f.o.": "Vector de función objetivo.",
   "wordnet": "Base lexical WordNet.",
   "wordnet+ppdb+sbert": "Estrategia que combina WordNet, PPDB y Sentence-BERT.",
 });
@@ -1033,18 +1068,18 @@ const ABBREVIATION_TOKEN_TOOLTIPS = Object.freeze([
   { pattern: /\bBD\b/u, title: "BD = Base de datos" },
   { pattern: /\bcomp\./iu, title: "comp. = comparable" },
   { pattern: /\bestim\./iu, title: "estim. = estimado" },
-  { pattern: /\bF\.?\s*O\.?\b/u, title: "F.O. = funcion objetivo" },
+  { pattern: /\bF\.?\s*O\.?\b/u, title: "F.O. = función objetivo" },
   { pattern: /\bG\b/u, title: "G = generaciones o iteraciones" },
   { pattern: /\bGit\b/u, title: "Git = sistema de control de versiones" },
   { pattern: /\bHV\b/u, title: "HV = Hypervolume" },
   { pattern: /\bK\b/u, title: "K = repeticiones independientes" },
   { pattern: /\bLLM\b/u, title: "LLM = Large Language Model" },
-  { pattern: /\bm(?:a|\u00e1)x\./iu, title: "max. = maximo" },
-  { pattern: /\bm(?:i|\u00ed)n\./iu, title: "min. = minimo" },
+  { pattern: /\bm(?:a|\u00e1)x\./iu, title: "max. = máximo" },
+  { pattern: /\bm(?:i|\u00ed)n\./iu, title: "min. = mínimo" },
   { pattern: /\bMO\b/u, title: "MO = multiobjetivo" },
   { pattern: /\bMTEB\b/u, title: "MTEB = Massive Text Embedding Benchmark" },
-  { pattern: /\bN\b/u, title: "N = tamano de poblacion o cantidad de individuos" },
-  { pattern: /\bpost-hoc\b/iu, title: "post-hoc = calculado despues de la ejecucion nativa" },
+  { pattern: /\bN\b/u, title: "N = tamaño de población o cantidad de individuos" },
+  { pattern: /\bpost-hoc\b/iu, title: "post-hoc = calculado después de la ejecución nativa" },
   { pattern: /\bPPDB\b/u, title: "PPDB = Paraphrase Database" },
   { pattern: /\bprom\./iu, title: "prom. = promedio" },
   { pattern: /\bprop\./iu, title: "prop. = propuesta" },
@@ -5524,7 +5559,7 @@ function syncComparatorExecutionModeControls(isRunning = false) {
   if (dom.comparatorExecutionModeNote) {
     dom.comparatorExecutionModeNote.textContent = fair
       ? "Costos comparables: las propuestas se ejecutan una por una."
-      : "Modo exploratorio: metricas visibles, pero costos no comparables por recursos compartidos.";
+      : "Modo exploratorio: métricas visibles, pero costos no comparables por recursos compartidos.";
   }
 }
 
@@ -5629,10 +5664,10 @@ function syncComparatorRecomputeButton(run = null) {
   const recommended = Boolean(status.recommended);
   dom.recomputeComparatorMetricsButton.disabled = !available;
   dom.recomputeComparatorMetricsButton.textContent = recommended
-    ? "Recalcular metricas recomendado"
-    : "Recalcular metricas";
+    ? "Recalcular métricas recomendado"
+    : "Recalcular métricas";
   dom.recomputeComparatorMetricsButton.title = available
-    ? "Reconstruye metricas y graficos desde los artefactos Python reales, sin reejecutar propuestas ni LLM."
+    ? "Reconstruye métricas y gráficos desde los artefactos Python reales, sin reejecutar propuestas ni LLM."
     : "Disponible solo para corridas completadas.";
 }
 
@@ -5644,7 +5679,7 @@ function setComparatorLogCopyButton(hasLogs) {
 
 async function copyComparatorLog() {
   const text = dom.comparatorLogOutput.textContent || "";
-  if (!text.trim() || text === "Sin logs todavia.") {
+  if (!text.trim() || text === "Sin logs todavía.") {
     setComparatorLogCopyButton(false);
     return;
   }
@@ -5657,7 +5692,7 @@ async function copyComparatorLog() {
   } finally {
     window.setTimeout(() => {
       const hasLogs = (dom.comparatorLogOutput.textContent || "").trim() !== ""
-        && dom.comparatorLogOutput.textContent !== "Sin logs todavia.";
+        && dom.comparatorLogOutput.textContent !== "Sin logs todavía.";
       setComparatorLogCopyButton(hasLogs);
     }, 1200);
   }
@@ -5689,12 +5724,12 @@ function resetComparatorUi(options = {}) {
   dom.comparatorCompletedProposals.textContent = "--";
   if (dom.comparatorShownRows) dom.comparatorShownRows.textContent = "--";
   dom.comparatorRunId.textContent = "--";
-  dom.comparatorConnectionText.textContent = "Sin ejecucion";
+  dom.comparatorConnectionText.textContent = "Sin ejecución";
   dom.comparatorConnectionDot.classList.remove("is-busy", "is-error");
-  dom.comparatorResultsBody.innerHTML = '<tr><td colspan="9">Sin resultados todavia.</td></tr>';
+  dom.comparatorResultsBody.innerHTML = '<tr><td colspan="9">Sin resultados todavía.</td></tr>';
   dom.comparatorParetoCharts.replaceChildren();
   if (dom.comparatorChartProposalFilters) {
-    dom.comparatorChartProposalFilters.innerHTML = '<span class="muted-text">Ejecuta una comparacion para activar filtros.</span>';
+    dom.comparatorChartProposalFilters.innerHTML = '<span class="muted-text">Ejecuta una comparación para activar filtros.</span>';
   }
   if (dom.comparatorPointRepetitionField) dom.comparatorPointRepetitionField.hidden = true;
   if (dom.comparatorPointRepetitionSelect) dom.comparatorPointRepetitionSelect.replaceChildren();
@@ -5737,7 +5772,7 @@ function resetComparatorUi(options = {}) {
     </article>
   `;
   resetComparatorLogLoader(null);
-  dom.comparatorLogOutput.textContent = "Sin logs todavia.";
+  dom.comparatorLogOutput.textContent = "Sin logs todavía.";
   setComparatorLogCopyButton(false);
   renderComparatorProgress(null);
   setComparatorRunning(false);
@@ -5871,6 +5906,7 @@ function comparatorFrontDiagnosticsForScope(scopeKey) {
 function clearComparatorFrontPointUiState() {
   comparatorFrontDiagnosticsByScope = new Map();
   comparatorFrontPointExclusionsByScope = new Map();
+  comparatorParetoHypervolumeAreaScopes = new Set();
 }
 
 function comparatorVisibleFrontContext(proposal, runId = comparatorFrontRunId(), sourceProposal = proposal) {
@@ -7380,7 +7416,7 @@ function openComparatorInstanceModal(proposalId, instanceId = null, duplicate = 
     <label class="cli-field">
       <span>Nombre de instancia</span>
       <input type="text" data-comparator-instance-name value="${escapeHtml(draft.displayName)}" autocomplete="off">
-      <small>Este nombre aparece en columnas, filtros, logs y graficos.</small>
+      <small>Este nombre aparece en columnas, filtros, logs y gráficos.</small>
     </label>
     <div class="proposal-cli-fields proposal-runtime-fields" data-instance-runtime-fields>
       <label class="cli-field">
@@ -7438,6 +7474,99 @@ function closeComparatorInstanceModal() {
   dom.comparatorInstanceModalBody.replaceChildren();
   dom.saveComparatorInstanceModalButton.hidden = false;
   dom.cancelComparatorInstanceModalButton.textContent = "Cancelar";
+}
+
+function setComparatorChartingConfig(charting = {}) {
+  comparatorChartingConfig = charting && typeof charting === "object" ? charting : { labels: {} };
+  comparatorChartLabels = comparatorMergeChartLabels(comparatorChartingConfig.labels || {});
+}
+
+function comparatorChartLabel(chartKey) {
+  return comparatorChartLabels[chartKey] || comparatorDefaultChartLabels()[chartKey] || {
+    title: "Gráfico",
+    xAxis: "Eje X",
+    yAxis: "Eje Y",
+  };
+}
+
+function rerenderComparatorPublicationCharts() {
+  comparatorChartSignature = "";
+  comparatorProjectionSignature = "";
+  comparatorInternalBmopsoSignature = "";
+  if (!latestComparatorRun) return;
+  renderComparatorCharts(latestComparatorRun);
+  renderComparatorEmbeddingProjection(latestComparatorRun);
+  syncComparatorInternalBmopsoTab(latestComparatorRun);
+  renderComparatorInternalBmopsoAnalysis(latestComparatorRun);
+}
+
+function openComparatorChartLabelsModal(chartKey) {
+  if (!dom.comparatorChartLabelsModal || !chartKey) return;
+  const labels = comparatorChartLabel(chartKey);
+  comparatorChartLabelModalState = { chartKey };
+  dom.comparatorChartLabelsModalTitle.textContent = "Editar etiquetas";
+  dom.comparatorChartLabelsModalSubtitle.textContent = "Estos valores quedan como default para el comparador web.";
+  dom.comparatorChartTitleInput.value = labels.title || "";
+  dom.comparatorChartXAxisInput.value = labels.xAxis || "";
+  dom.comparatorChartYAxisInput.value = labels.yAxis || "";
+  dom.saveComparatorChartLabelsButton.disabled = false;
+  dom.saveComparatorChartLabelsButton.textContent = "Guardar como default";
+  dom.comparatorChartLabelsModal.hidden = false;
+  dom.comparatorChartTitleInput.focus();
+}
+
+function closeComparatorChartLabelsModal() {
+  comparatorChartLabelModalState = null;
+  if (!dom.comparatorChartLabelsModal) return;
+  dom.comparatorChartLabelsModal.hidden = true;
+  dom.comparatorChartLabelsModalSubtitle.textContent = "Estos valores quedan como default para el comparador web.";
+  dom.saveComparatorChartLabelsButton.disabled = false;
+  dom.saveComparatorChartLabelsButton.textContent = "Guardar como default";
+}
+
+function comparatorChartLabelInputValues() {
+  return {
+    title: String(dom.comparatorChartTitleInput?.value || "").trim(),
+    xAxis: String(dom.comparatorChartXAxisInput?.value || "").trim(),
+    yAxis: String(dom.comparatorChartYAxisInput?.value || "").trim(),
+  };
+}
+
+async function saveComparatorChartLabels() {
+  const chartKey = comparatorChartLabelModalState?.chartKey;
+  if (!chartKey) return;
+  const values = comparatorChartLabelInputValues();
+  const emptyField = Object.entries(values).find(([, value]) => !value);
+  if (emptyField) {
+    dom.comparatorChartLabelsModalSubtitle.textContent = "Título y ejes son obligatorios.";
+    const focusTarget = emptyField[0] === "xAxis"
+      ? dom.comparatorChartXAxisInput
+      : emptyField[0] === "yAxis" ? dom.comparatorChartYAxisInput : dom.comparatorChartTitleInput;
+    focusTarget?.focus();
+    return;
+  }
+  dom.saveComparatorChartLabelsButton.disabled = true;
+  dom.saveComparatorChartLabelsButton.textContent = "Guardando...";
+  try {
+    const payload = await requestComparatorJson("/charting", {
+      method: "POST",
+      body: JSON.stringify({ labels: { [chartKey]: values } }),
+    });
+    setComparatorChartingConfig(payload.charting || {});
+    closeComparatorChartLabelsModal();
+    rerenderComparatorPublicationCharts();
+    setStatus(
+      dom.comparatorStatusTone,
+      dom.comparatorStatusTitle,
+      dom.comparatorStatusDetail,
+      "Etiquetas guardadas",
+      "Los nuevos títulos y ejes quedaron como default del comparador.",
+    );
+  } catch (error) {
+    dom.comparatorChartLabelsModalSubtitle.textContent = `No se pudo guardar: ${error.message}`;
+    dom.saveComparatorChartLabelsButton.disabled = false;
+    dom.saveComparatorChartLabelsButton.textContent = "Guardar como default";
+  }
 }
 
 function saveComparatorInstanceModal() {
@@ -7754,6 +7883,7 @@ async function restartPortalBackend() {
 async function loadComparatorProposals() {
   try {
     const payload = await requestComparatorJson("/proposals");
+    setComparatorChartingConfig(payload.defaults?.charting || {});
     if (dom.comparatorUpdateReposBeforeRun && payload.defaults?.updateRepositoriesBeforeRun !== undefined) {
       dom.comparatorUpdateReposBeforeRun.checked = Boolean(payload.defaults.updateRepositoriesBeforeRun);
     }
@@ -7783,10 +7913,10 @@ async function loadComparatorProposals() {
       ["Git antes de ejecutar", `${payload.defaults?.updateRepositoriesBeforeRun ? "Activado" : "Desactivado"}; ${gitSummary}`],
       ["EVOLMD", "data_final_evaluada.json -> [fitness]"],
       ["MESAP", "population_final.json -> [fitness]"],
-      ["Proxy comun", "Todas las propuestas usan el proxy SBERT [semantic_fidelity, semantic_diversity] para metricas comparables; los objetivos nativos quedan como trazabilidad."],
+      ["Proxy común", "Todas las propuestas usan el proxy SBERT [semantic_fidelity, semantic_diversity] para métricas comparables; los objetivos nativos quedan como trazabilidad."],
       ["EVOLMD-MO", "pareto_front.json -> [fidelity_sbert, diversity_individual]"],
       ["Binary MOPSO-CD", "pareto_front.json -> [objectives.f1, objectives.f2]; seleccion desde final_selection_hybrid.json"],
-      ["MO comparable", "Graficos, HV, Contribution, Extent y Unary Entropy usan [(semantic_fidelity + 1) / 2, semantic_diversity / 2] con referencia [0,0]."],
+      ["MO comparable", "Gráficos, HV, Contribution, Extent y Unary Entropy usan [(semantic_fidelity + 1) / 2, semantic_diversity / 2] con referencia [0,0]."],
     ]);
   } catch (error) {
     renderDefinitionList(dom.comparatorIntegrationDetails, [
@@ -7946,7 +8076,7 @@ async function recomputeComparatorMetrics() {
       dom.comparatorStatusTitle,
       dom.comparatorStatusDetail,
       "Run ID requerido",
-      "Reanuda o ingresa una corrida completada antes de recalcular metricas.",
+      "Reanuda o ingresa una corrida completada antes de recalcular métricas.",
       "error",
     );
     return;
@@ -7958,8 +8088,8 @@ async function recomputeComparatorMetrics() {
     dom.comparatorStatusTone,
     dom.comparatorStatusTitle,
     dom.comparatorStatusDetail,
-    "Recalculando metricas",
-    "El backend reconstruye metricas y graficos desde artefactos Python reales, sin reejecutar propuestas ni LLM.",
+    "Recalculando métricas",
+    "El backend reconstruye métricas y gráficos desde artefactos Python reales, sin reejecutar propuestas ni LLM.",
     "busy",
   );
 
@@ -7985,7 +8115,7 @@ async function recontinueComparatorRun() {
       dom.comparatorStatusTitle,
       dom.comparatorStatusDetail,
       "Run ID requerido",
-      "Ingresa o carga una corrida antes de continuar la ejecucion.",
+      "Ingresa o carga una corrida antes de continuar la ejecución.",
       "error",
     );
     return;
@@ -8090,7 +8220,7 @@ function renderComparatorProgress(progress, config = null) {
   if (!progress) {
     dom.comparatorProgressPercent.textContent = "--";
     dom.comparatorProgressSummary.textContent = "Sin corrida activa.";
-    dom.comparatorProgressDetail.textContent = "Sin ejecucion.";
+    dom.comparatorProgressDetail.textContent = "Sin ejecución.";
     dom.comparatorProgressBar.style.width = "0%";
     renderDefinitionList(dom.comparatorProgressDetails, [
       ["Tiempo transcurrido", "--"],
@@ -8114,7 +8244,7 @@ function renderComparatorProgress(progress, config = null) {
     ["Base estimacion", progress.etaBasisLabel || "No disponible"],
     ["Alcance ETA", progress.etaScopeLabel || "No disponible"],
     ["Propuesta activa", progress.activeProposalName || "--"],
-    ["Modo ejecucion", config?.executionPolicy?.label || config?.executionMode || "--"],
+    ["Modo ejecución", config?.executionPolicy?.label || config?.executionMode || "--"],
     ["Paralelismo efectivo", config?.executionPolicy ? `${config.executionPolicy.effectiveParallelism} de ${config.executionPolicy.requestedParallelism} solicitado(s)` : "--"],
     ["K rep. default", config?.repetitionsK ?? 1],
     ["Cola", `${progress.queuedProposals ?? 0}/${progress.totalProposals ?? 0}`],
@@ -8205,27 +8335,27 @@ function comparatorRepetitionProgressLabel(progressState, config) {
     ? `; actual ${Math.max(1, Number(progressState.currentRepetitionIndex))}/${total}`
     : "";
   return {
-    text: `Repeticion estocastica: ${completed}/${total}`,
-    title: `Repeticiones estocasticas completadas sobre el total configurado${current}.`,
+    text: `Repetición estocástica: ${completed}/${total}`,
+    title: `Repeticiones estocásticas completadas sobre el total configurado${current}.`,
   };
 }
 
 function comparatorProposalSummaryTooltip(label, metrics = {}) {
   const key = String(label || "").trim().toLocaleLowerCase("es-CL");
   const diagnosticSuffix = metrics.postHocDiagnostic
-    ? " En propuestas uniobjetivo se calcula como diagnostico post-hoc; no fue optimizado por el algoritmo."
+    ? " En propuestas uniobjetivo se calcula como diagnóstico post-hoc; no fue optimizado por el algoritmo."
     : "";
   if (key === "parametros") {
-    return "Parametros enviados por CLI: N es poblacion; G es generaciones o iteraciones; K rep. es el numero de repeticiones estocasticas.";
+    return "Parámetros enviados por CLI: N es población; G es generaciones o iteraciones; K rep. es el número de repeticiones estocásticas.";
   }
   if (key === "n") {
-    return "Poblacion o cantidad de individuos efectiva. En defaults generales es el valor base; en una propuesta puede estar sobrescrita por instancia.";
+    return "Población o cantidad de individuos efectiva. En defaults generales es el valor base; en una propuesta puede estar sobrescrita por instancia.";
   }
   if (key === "g") {
     return "Generaciones o iteraciones comunes para toda la corrida.";
   }
   if (key.startsWith("k rep")) {
-    return "Repeticiones estocasticas configuradas. En defaults generales es el valor base; en una propuesta puede estar sobrescrita por instancia.";
+    return "Repeticiones estocásticas configuradas. En defaults generales es el valor base; en una propuesta puede estar sobrescrita por instancia.";
   }
   if (key.startsWith("no dom")) {
     return `Cantidad de soluciones no dominadas: ninguna otra solucion es igual o mejor en todos los objetivos y mejor en al menos uno.${diagnosticSuffix}`;
@@ -8240,22 +8370,22 @@ function comparatorProposalSummaryTooltip(label, metrics = {}) {
     return "Cobertura del frente no dominado en el espacio comparable normalizado. Mayor es mejor.";
   }
   if (key.startsWith("unary")) {
-    return "Entropia normalizada de la distribucion del frente comparable. Mayor es mejor.";
+    return "Entropía normalizada de la distribución del frente comparable. Mayor es mejor.";
   }
   if (key === "vector post-hoc") {
-    return "Vector diagnostico SBERT/diversidad calculado despues de ejecutar una propuesta uniobjetivo; se usa para comparar, no para decidir dentro del algoritmo.";
+    return "Vector diagnóstico SBERT/diversidad calculado después de ejecutar una propuesta uniobjetivo; se usa para comparar, no para decidir dentro del algoritmo.";
   }
   if (key === "algoritmo") {
-    return "Tiempo wall-clock promedio por repeticion completada del proceso Python; no incluye metricas ni graficos del comparador.";
+    return "Tiempo wall-clock promedio por repetición completada del proceso Python; no incluye métricas ni gráficos del comparador.";
   }
   if (key === "total prop.") {
-    return "Tiempo promedio por repeticion de la propuesta mas post-procesamiento externo del comparador.";
+    return "Tiempo promedio por repetición de la propuesta más post-procesamiento externo del comparador.";
   }
   if (key === "llamadas llm") {
-    return "Promedio de llamadas registradas al modelo LLM por repeticion completada.";
+    return "Promedio de llamadas registradas al modelo LLM por repetición completada.";
   }
   if (key === "tiempo llm") {
-    return "Tiempo LLM cliente promedio por repeticion completada.";
+    return "Tiempo LLM cliente promedio por repetición completada.";
   }
   if (key === "prom. llamada") {
     return "Tiempo LLM promedio por llamada registrada. Menor indica llamadas mas rapidas.";
@@ -8320,7 +8450,7 @@ function formatComparatorArchiveCounter(average, total, repetitionsK = 1) {
   const parts = [];
   if (hasTotal) parts.push(`Total: ${formatComparatorCostQuantity(totalNumber, 2)}`);
   if (hasAverage && repetitions > 1) {
-    parts.push(`Promedio por repeticion: ${formatComparatorCostQuantity(averageNumber, 2)}`);
+    parts.push(`Promedio por repetición: ${formatComparatorCostQuantity(averageNumber, 2)}`);
   }
   return {
     value,
@@ -8350,7 +8480,7 @@ function comparatorGeneralParametersCard(config = null) {
   article.innerHTML = `
     <div class="proposal-card-header">
       <strong>Defaults generales</strong>
-      <p>N y K repeticiones pueden sobrescribirse por instancia; G se mantiene comun.</p>
+      <p>N y K repeticiones pueden sobrescribirse por instancia; G se mantiene común.</p>
     </div>
     <dl class="proposal-summary-list">
       ${comparatorProposalSummaryField("N", escapeHtml(String(n)))}
@@ -8467,13 +8597,13 @@ function renderComparatorCostExplanation(run) {
   const runCost = run.costSummary || {};
   const comparisonDetail = comparable
     ? "las propuestas se ejecutan una por una."
-    : "las propuestas comparten Ollama/CPU/GPU; los valores se muestran solo como diagnostico.";
+    : "las propuestas comparten Ollama/CPU/GPU; los valores se muestran solo como diagnóstico.";
   dom.comparatorCostExplanation.innerHTML = `
     <p><strong>${escapeHtml(comparable ? "Costos comparables" : "Costos no comparables")}</strong>: ${escapeHtml(comparisonDetail)}</p>
     <p>Modo: ${escapeHtml(policy.label || run.config?.executionMode || "--")}; paralelismo efectivo ${escapeHtml(String(effective))} de ${escapeHtml(String(requested))} solicitado(s); wall-clock total de corrida ${escapeHtml(runCost.runWallClockLabel || "--")}.</p>
-    <p>La tabla consolida calidad y costo por propuesta. Las metricas de calidad siempre resaltan el mejor valor; costos, llamadas y tokens solo resaltan ganador cuando la ejecucion fue comparable.</p>
-    <p>Cuando hay al menos dos repeticiones completadas, ± indica desviacion estandar muestral entre repeticiones.</p>
-    <p>Tokens de entrada y salida se muestran separados. totalTokens queda solo como trazabilidad tecnica en el JSON.</p>
+    <p>La tabla consolida calidad y costo por propuesta. Las métricas de calidad siempre resaltan el mejor valor; costos, llamadas y tokens solo resaltan ganador cuando la ejecución fue comparable.</p>
+    <p>Cuando hay al menos dos repeticiones completadas, ± indica desviación estándar muestral entre repeticiones.</p>
+    <p>Tokens de entrada y salida se muestran separados. totalTokens queda solo como trazabilidad técnica en el JSON.</p>
   `;
 }
 
@@ -8517,13 +8647,13 @@ function comparatorBenchmarkMetricDefinitions() {
     qualityMetric("hypervolume", "hypervolumeLabel", "HV", "Area dominada respecto a [0,0] en el espacio proxy comparable."),
     qualityMetric("contribution", "contributionLabel", "Contribution", "Aporte al frente combinado P*, con credito compartido entre puntos repetidos."),
     qualityMetric("extent", "extentLabel", "Extent", "Cobertura del frente no dominado en el espacio comparable."),
-    qualityMetric("unaryEntropy", "unaryEntropyLabel", "Unary Entropy", "Entropia normalizada de la distribucion del frente comparable."),
-    qualityMetric("globalInertia", "globalInertiaLabel", "K-means inertia", "Dispersion geometrica promedio de embeddings SBERT por generacion final disponible."),
+    qualityMetric("unaryEntropy", "unaryEntropyLabel", "Unary Entropy", "Entropía normalizada de la distribución del frente comparable."),
+    qualityMetric("globalInertia", "globalInertiaLabel", "K-means inertia", "Dispersión geométrica promedio de embeddings SBERT por generación final disponible."),
     qualityMetric("globalEntropy", "globalEntropyLabel", "Entity entropy", "Variedad conceptual por lemas NOUN/VERB/ADJ en la generacion final disponible."),
     {
       id: "process",
       label: "Wall-clock",
-      detail: "Tiempo real promedio del proceso Python por repeticion completada.",
+      detail: "Tiempo real promedio del proceso Python por repetición completada.",
       ...secondsMetric("processWallClockSeconds", "processWallClockLabel"),
     },
     {
@@ -8531,7 +8661,7 @@ function comparatorBenchmarkMetricDefinitions() {
       kind: "cost",
       direction: "min",
       label: "Llamadas LLM",
-      detail: "Promedio de llamadas reales registradas hacia el LLM por repeticion completada.",
+      detail: "Promedio de llamadas reales registradas hacia el LLM por repetición completada.",
       value: (_proposal, cost) => cost.llmCalls,
       format: (_proposal, cost) => formatComparatorCostQuantity(cost.llmCalls ?? 0),
       stdDevValue: (_proposal, cost) => cost.llmCallsStdDev,
@@ -8543,7 +8673,7 @@ function comparatorBenchmarkMetricDefinitions() {
       kind: "cost",
       direction: "min",
       label: "Tokens entrada",
-      detail: "Promedio de tokens de prompt reportados por repeticion completada.",
+      detail: "Promedio de tokens de prompt reportados por repetición completada.",
       value: (_proposal, cost) => cost.promptEvalCount,
       format: (_proposal, cost) => formatComparatorCostQuantity(cost.promptEvalCount ?? 0),
       stdDevValue: (_proposal, cost) => cost.promptEvalCountStdDev,
@@ -8556,7 +8686,7 @@ function comparatorBenchmarkMetricDefinitions() {
       kind: "cost",
       direction: "min",
       label: "Tokens salida",
-      detail: "Promedio de tokens de salida reportados por repeticion completada.",
+      detail: "Promedio de tokens de salida reportados por repetición completada.",
       value: (_proposal, cost) => cost.evalCount,
       format: (_proposal, cost) => formatComparatorCostQuantity(cost.evalCount ?? 0),
       stdDevValue: (_proposal, cost) => cost.evalCountStdDev,
@@ -8744,7 +8874,7 @@ function renderComparatorCostTable(proposals, policy) {
     </tr>
   `;
   if (!orderedProposals.length) {
-    dom.comparatorCostTableBody.innerHTML = '<tr><td colspan="2">Sin resultados todavia.</td></tr>';
+    dom.comparatorCostTableBody.innerHTML = '<tr><td colspan="2">Sin resultados todavía.</td></tr>';
     return;
   }
   const metrics = comparatorBenchmarkMetricDefinitions();
@@ -8998,15 +9128,19 @@ function renderComparatorEmbeddingProjectionPayload(payload) {
       window.queueMicrotask(() => {
         const chart = window.echarts.init(chartNode);
         comparatorProjectionCharts.push(chart);
-        const option = embeddingProjectionChartOption(
+        const buildOption = (optionOverrides = {}) => embeddingProjectionChartOption(
           proposal,
           payload.reference || {},
           payload.effectiveMethod || payload.method,
           style,
           bounds,
+          optionOverrides,
         );
-        chart.setOption(option);
-        installComparatorLocalLegend(chart, chartNode, option.series || []);
+        const option = buildOption();
+        setComparatorChartOption(chart, chartNode, option, null, {
+          chartKey: "embeddingProjection",
+          exportOptionFactory: () => buildOption({ publicationMode: true }),
+        });
       });
       return article;
     }),
@@ -9117,15 +9251,33 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
     const frontExcludedKeys = new Set();
     const diagnosticsByKey = new Map();
     const diagnosticLoadToken = comparatorFrontDiagnosticLoadToken;
-    const buildFrontOption = () => internalBmopsoParetoChartOption(
-      "Frente final BMOPSO",
+    const internalScopeKey = `${runId || "run"}::${item.instanceId || item.displayName || index}::bmopso-internal`;
+    const buildFrontOption = (optionOverrides = {}) => internalBmopsoParetoChartOption(
+      comparatorChartLabel("internalBmopsoPareto").title,
       item.analysis,
       style.color,
-      { excludedKeys: frontExcludedKeys, diagnosticsByKey },
+      {
+        excludedKeys: frontExcludedKeys,
+        diagnosticsByKey,
+        showHypervolumeArea: showComparatorHypervolumeAreaByScope(internalScopeKey),
+        ...optionOverrides,
+      },
     );
+    const frontControlsFactory = () => ({
+      chartKey: "internalBmopsoPareto",
+      hideMetricBadgeOnExport: true,
+      hypervolumeToggleFeature: () => comparatorParetoHypervolumeToolboxFeature(
+        internalScopeKey,
+        frontChart,
+        frontNode,
+        buildFrontOption,
+        frontControlsFactory,
+      ),
+      exportOptionFactory: () => buildFrontOption({ exportMode: true, publicationMode: true }),
+    });
     const frontOption = buildFrontOption();
-    setComparatorChartOption(frontChart, frontNode, frontOption);
-    installComparatorPointToggle(frontChart, frontNode, buildFrontOption, frontExcludedKeys);
+    setComparatorChartOption(frontChart, frontNode, frontOption, null, frontControlsFactory());
+    installComparatorPointToggle(frontChart, frontNode, buildFrontOption, frontExcludedKeys, null, frontControlsFactory);
     const requestPoints = comparatorFrontDiagnosticRequestPoints(
       (((item.analysis.charts || {}).pareto) || []).map((point) => comparatorChartPointFromRaw(point)),
       "bmopso-points",
@@ -9137,7 +9289,7 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
         diagnosticsByKey.clear();
         diagnostics.forEach((value, key) => diagnosticsByKey.set(key, value));
         const selected = comparatorLegendSelection(frontChart);
-        setComparatorChartOption(frontChart, frontNode, buildFrontOption(), selected);
+        setComparatorChartOption(frontChart, frontNode, buildFrontOption(), selected, frontControlsFactory());
       })
       .catch(() => {});
 
@@ -9152,26 +9304,30 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
           proposalId: "binary-mopso-cd",
           sourceIndex: point.generation,
           rank: "internal-hv",
-          labelText: `HV interno ${point.generation}`,
+          labelText: `${comparatorChartLabel("internalBmopsoHypervolume").title} ${point.generation}`,
         }, pointIndex)),
     }];
     const hvExtent = comparatorSeriesIterationExtent(rawHvSeries);
     let hvIterationLimit = hvExtent?.max ?? null;
-    const buildHvOption = () => internalBmopsoHvLineOption(
+    const buildHvOption = (optionOverrides = {}) => internalBmopsoHvLineOption(
       hvChart,
       hvSeriesName,
       item.analysis,
       style.color,
       style.lineWidth,
-      { iterationLimit: hvIterationLimit },
+      { iterationLimit: hvIterationLimit, ...optionOverrides },
     );
+    const hvControls = () => ({
+      chartKey: "internalBmopsoHypervolume",
+      exportOptionFactory: () => buildHvOption({ publicationMode: true }),
+    });
     const hvOption = buildHvOption();
-    setComparatorChartOption(hvChart, hvNode, hvOption);
+    setComparatorChartOption(hvChart, hvNode, hvOption, null, hvControls());
     installComparatorCurveVisibilityToggle(hvChart);
     installComparatorIterationSlider(hvNode, hvExtent, (value) => {
       hvIterationLimit = value;
       const selected = comparatorLegendSelection(hvChart);
-      setComparatorChartOption(hvChart, hvNode, buildHvOption(), selected);
+      setComparatorChartOption(hvChart, hvNode, buildHvOption(), selected, hvControls());
     });
   });
   return section;
@@ -9183,7 +9339,7 @@ function embeddingProjectionOverlayPanel(proposals, reference, method, bounds = 
   article.className = "panel";
   article.innerHTML = `
     <div class="panel-title">
-      <h2>Search space overlay</h2>
+      <h2>${escapeHtml(comparatorChartLabel("embeddingOverlay").title)}</h2>
       <span>${escapeHtml(String(proposals.length))} propuesta(s); ${escapeHtml(String(totalPoints))} texto(s) del frente final</span>
     </div>
     <div class="chart-surface" data-embedding-projection-chart></div>
@@ -9192,9 +9348,19 @@ function embeddingProjectionOverlayPanel(proposals, reference, method, bounds = 
   window.queueMicrotask(() => {
     const chart = window.echarts.init(chartNode);
     comparatorProjectionCharts.push(chart);
-    const option = embeddingProjectionOverlayChartOption(proposals, reference, method, bounds, styleMap);
-    chart.setOption(option);
-    installComparatorLocalLegend(chart, chartNode, option.series || []);
+    const buildOption = (optionOverrides = {}) => embeddingProjectionOverlayChartOption(
+      proposals,
+      reference,
+      method,
+      bounds,
+      styleMap,
+      optionOverrides,
+    );
+    const option = buildOption();
+    setComparatorChartOption(chart, chartNode, option, null, {
+      chartKey: "embeddingOverlay",
+      exportOptionFactory: () => buildOption({ publicationMode: true }),
+    });
   });
   return article;
 }
@@ -9247,7 +9413,7 @@ function embeddingProjectionReferencePoint(reference) {
     : [];
 }
 
-function embeddingProjectionOverlayChartOption(proposals, reference, method, bounds = {}, styleMap = comparatorChartStyles) {
+function embeddingProjectionOverlayChartOption(proposals, reference, method, bounds = {}, styleMap = comparatorChartStyles, options = {}) {
   const axisName = projectionMethodLabel(method);
   const referencePoint = embeddingProjectionReferencePoint(reference);
   const proposalSeries = proposals.map((proposal, index) => {
@@ -9284,7 +9450,7 @@ function embeddingProjectionOverlayChartOption(proposals, reference, method, bou
       z: 5,
     };
   }).filter(Boolean);
-  return baseScatterOption("Search space overlay", [
+  return baseScatterOption(comparatorChartLabel("embeddingOverlay").title, [
     {
       name: "Referencia",
       type: "scatter",
@@ -9297,6 +9463,8 @@ function embeddingProjectionOverlayChartOption(proposals, reference, method, bou
     ...proposalSeries,
     ...selectedSeries,
   ], {
+    chartKey: "embeddingOverlay",
+    publicationMode: Boolean(options.publicationMode),
     description: "Superposicion del frente final proyectado por propuesta.",
     xAxisName: `${axisName} 1`,
     yAxisName: `${axisName} 2`,
@@ -9306,13 +9474,13 @@ function embeddingProjectionOverlayChartOption(proposals, reference, method, bou
   });
 }
 
-function embeddingProjectionChartOption(proposal, reference, method, style, bounds = {}) {
+function embeddingProjectionChartOption(proposal, reference, method, style, bounds = {}, options = {}) {
   const color = style.color;
   const points = (proposal.points || []).map(embeddingProjectionPointData);
   const selected = points.filter((point) => point.selected || point.selectionRank);
   const referencePoint = embeddingProjectionReferencePoint(reference);
   const axisName = projectionMethodLabel(method);
-  return baseScatterOption(`Embeddings ${axisName}`, [
+  return baseScatterOption(comparatorChartLabel("embeddingProjection").title, [
     {
       name: "Referencia",
       type: "scatter",
@@ -9339,6 +9507,8 @@ function embeddingProjectionChartOption(proposal, reference, method, style, boun
       z: 5,
     },
   ], {
+    chartKey: "embeddingProjection",
+    publicationMode: Boolean(options.publicationMode),
     description: "Coordenadas compartidas para todas las propuestas del run.",
     xAxisName: `${axisName} 1`,
     yAxisName: `${axisName} 2`,
@@ -9533,12 +9703,15 @@ function comparatorLegendSelection(chart) {
   return selected;
 }
 
-function setComparatorChartOption(chart, chartNode, option, selected = null) {
+function setComparatorChartOption(chart, chartNode, option, selected = null, controls = {}) {
   const nextOption = selected
     ? { ...option, legend: { ...(option.legend || {}), selected } }
     : option;
   chart.setOption(nextOption, true);
   installComparatorLocalLegend(chart, chartNode, nextOption.series || []);
+  if (controls.chartKey || typeof controls.exportOptionFactory === "function" || typeof controls.hypervolumeToggleFeature === "function") {
+    installComparatorPublicationTools(chart, chartNode, nextOption, controls);
+  }
 }
 
 function comparatorSeriesVisible(chart, seriesName) {
@@ -9567,12 +9740,205 @@ function comparatorHideSeriesToolboxFeature(chart) {
   };
 }
 
+function comparatorChartLabelToolboxFeature(chartKey) {
+  return {
+    show: true,
+    title: COMPARATOR_CHART_LABEL_TITLE,
+    icon: COMPARATOR_CHART_LABEL_ICON,
+    onclick: () => openComparatorChartLabelsModal(chartKey),
+  };
+}
+
+function comparatorChartExportToolboxFeature(chart, chartNode, option, controls = {}) {
+  return {
+    show: true,
+    title: COMPARATOR_CHART_EXPORT_TITLE,
+    icon: COMPARATOR_CHART_EXPORT_ICON,
+    onclick: () => downloadComparatorChartImage(chart, chartNode, option, controls),
+  };
+}
+
+function comparatorChartDownloadName(chartKey) {
+  const title = comparatorChartLabel(chartKey).title || "grafico";
+  const slug = title
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return `${slug || "grafico"}.png`;
+}
+
+function comparatorOptionWithLegendSelection(option, selected = {}) {
+  const source = option || {};
+  const withSelection = (legend) => ({
+    ...(legend || {}),
+    selected: { ...((legend || {}).selected || {}), ...selected },
+  });
+  return {
+    ...source,
+    legend: Array.isArray(source.legend)
+      ? source.legend.map((legend) => withSelection(legend))
+      : withSelection(source.legend),
+  };
+}
+
+function firstComparatorChartComponent(component) {
+  return Array.isArray(component) ? component[0] : component;
+}
+
+function comparatorAxisBound(axis, key) {
+  const value = Number(firstComparatorChartComponent(axis)?.[key]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function comparatorPixelCoordinate(chart, finder, value) {
+  if (!Number.isFinite(Number(value)) || !chart?.convertToPixel) return null;
+  try {
+    const pixel = Number(chart.convertToPixel(finder, Number(value)));
+    return Number.isFinite(pixel) ? pixel : null;
+  } catch {
+    return null;
+  }
+}
+
+function alignComparatorExportTitleToGrid(chart, option) {
+  const title = firstComparatorChartComponent(option?.title);
+  if (!title?.text) return;
+  const xMin = comparatorAxisBound(option.xAxis, "min");
+  const xMax = comparatorAxisBound(option.xAxis, "max");
+  const yMax = comparatorAxisBound(option.yAxis, "max");
+  const left = comparatorPixelCoordinate(chart, { xAxisIndex: 0 }, xMin);
+  const right = comparatorPixelCoordinate(chart, { xAxisIndex: 0 }, xMax);
+  const top = comparatorPixelCoordinate(chart, { yAxisIndex: 0 }, yMax);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return;
+  const patch = {
+    left: (left + right) / 2,
+    textAlign: "center",
+  };
+  if (Number.isFinite(top)) {
+    patch.top = Math.max(8, top - 52);
+  }
+  chart.setOption({
+    title: Array.isArray(option.title) ? [patch] : patch,
+  });
+}
+
+function downloadComparatorChartImage(chart, chartNode, option, controls = {}) {
+  if (!chart?.getDataURL) return;
+  const currentOption = chart.getOption?.() || {};
+  const originalWidth = Number(chart.getWidth?.());
+  const originalHeight = Number(chart.getHeight?.());
+  const exportWidth = Number(controls.exportWidth) || COMPARATOR_CHART_EXPORT_WIDTH;
+  const exportHeight = Number(controls.exportHeight) || COMPARATOR_CHART_EXPORT_HEIGHT;
+  const selected = comparatorLegendSelection(chart);
+  const exportSource = typeof controls.exportOptionFactory === "function"
+    ? controls.exportOptionFactory()
+    : option;
+  const exportOption = comparatorChartExportOption(comparatorOptionWithLegendSelection(exportSource, selected), {
+    exportWidth,
+    exportHeight,
+  });
+  let dataUrl = "";
+  try {
+    chart.resize({
+      width: exportWidth,
+      height: exportHeight,
+      silent: true,
+    });
+    chart.setOption(exportOption, { notMerge: true, lazyUpdate: false, silent: true });
+    alignComparatorExportTitleToGrid(chart, exportOption);
+    chart.getZr?.()?.refreshImmediately?.();
+    dataUrl = chart.getDataURL({
+      type: "png",
+      pixelRatio: 3,
+      backgroundColor: COMPARATOR_TRANSPARENT_BACKGROUND,
+      excludeComponents: ["toolbox", "dataZoom", "brush"],
+    });
+  } finally {
+    chart.setOption(currentOption, true);
+    if (Number.isFinite(originalWidth) && Number.isFinite(originalHeight) && originalWidth > 0 && originalHeight > 0) {
+      chart.resize({ width: originalWidth, height: originalHeight, silent: true });
+    } else {
+      chart.resize();
+    }
+    installComparatorPublicationTools(chart, chartNode, option, controls);
+  }
+  if (!dataUrl) return;
+  const anchor = document.createElement("a");
+  anchor.href = dataUrl;
+  anchor.download = comparatorChartDownloadName(controls.chartKey);
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
 function installComparatorHideSeriesToolbox(chart) {
   chart.setOption({
     toolbox: {
       feature: {
         [COMPARATOR_HIDE_SERIES_TOOL_KEY]: comparatorHideSeriesToolboxFeature(chart),
       },
+    },
+  });
+}
+
+function comparatorPublicationLegendOption(series = [], selected = {}, options = {}) {
+  const {
+    entries,
+    width,
+    legendRight,
+  } = comparatorPublicationLegendLayout(series, selected);
+  const top = Number.isFinite(Number(options.top)) ? Number(options.top) : 84;
+  return {
+    show: entries.length > 0,
+    type: "plain",
+    orient: "vertical",
+    right: legendRight,
+    top,
+    width,
+    backgroundColor: "#e9e9f2",
+    borderColor: "#7f7f7f",
+    borderWidth: 1.4,
+    borderRadius: 2,
+    padding: [14, 16],
+    itemGap: 14,
+    itemWidth: 30,
+    itemHeight: 12,
+    align: "left",
+    textStyle: { color: "#111111", fontSize: 14, fontWeight: 400 },
+    data: entries.map((entry) => ({
+      name: entry.name,
+      icon: entry.icon,
+      textStyle: { color: entry.textColor || "#111111" },
+    })),
+    selected,
+  };
+}
+
+function installComparatorPublicationTools(chart, chartNode, option, controls = {}) {
+  chartNode.dataset.comparatorExportableChart = "true";
+  const baseFeatures = { ...((option.toolbox || {}).feature || {}) };
+  delete baseFeatures.saveAsImage;
+  delete baseFeatures[COMPARATOR_HIDE_SERIES_TOOL_KEY];
+  delete baseFeatures[COMPARATOR_CHART_LABEL_TOOL_KEY];
+  delete baseFeatures[COMPARATOR_CHART_EXPORT_TOOL_KEY];
+  const feature = {
+    ...baseFeatures,
+    [COMPARATOR_HIDE_SERIES_TOOL_KEY]: comparatorHideSeriesToolboxFeature(chart),
+    [COMPARATOR_CHART_LABEL_TOOL_KEY]: comparatorChartLabelToolboxFeature(controls.chartKey),
+    ...(typeof controls.hypervolumeToggleFeature === "function"
+      ? { [COMPARATOR_PARETO_HV_TOOL_KEY]: controls.hypervolumeToggleFeature(chart) }
+      : {}),
+    [COMPARATOR_CHART_EXPORT_TOOL_KEY]: comparatorChartExportToolboxFeature(chart, chartNode, option, controls),
+  };
+  chart.setOption({
+    toolbox: {
+      show: true,
+      right: 8,
+      top: 38,
+      feature,
     },
   });
 }
@@ -9635,26 +10001,30 @@ function syncComparatorChartLocalLegends(root = document) {
   });
 }
 
-function resetComparatorFrontPointSelection(chart, chartNode, buildOption, excludedKeys, onReset = null) {
+function comparatorChartControls(controlsFactory = null) {
+  return typeof controlsFactory === "function" ? controlsFactory() : {};
+}
+
+function resetComparatorFrontPointSelection(chart, chartNode, buildOption, excludedKeys, onReset = null, controlsFactory = null) {
   if (!comparatorClearPointExclusions(excludedKeys)) return;
   const selected = comparatorLegendSelection(chart);
-  setComparatorChartOption(chart, chartNode, buildOption(), selected);
-  installComparatorFrontPointResetTool(chart, chartNode, buildOption, excludedKeys, onReset);
+  setComparatorChartOption(chart, chartNode, buildOption(), selected, comparatorChartControls(controlsFactory));
+  installComparatorFrontPointResetTool(chart, chartNode, buildOption, excludedKeys, onReset, controlsFactory);
   if (typeof onReset === "function") {
     onReset();
   }
 }
 
-function comparatorFrontPointResetToolboxFeature(chart, chartNode, buildOption, excludedKeys, onReset = null) {
+function comparatorFrontPointResetToolboxFeature(chart, chartNode, buildOption, excludedKeys, onReset = null, controlsFactory = null) {
   return {
     show: true,
     title: COMPARATOR_RESET_FRONT_POINTS_TITLE,
     icon: COMPARATOR_RESET_FRONT_POINTS_ICON,
-    onclick: () => resetComparatorFrontPointSelection(chart, chartNode, buildOption, excludedKeys, onReset),
+    onclick: () => resetComparatorFrontPointSelection(chart, chartNode, buildOption, excludedKeys, onReset, controlsFactory),
   };
 }
 
-function installComparatorFrontPointResetTool(chart, chartNode, buildOption, excludedKeys, onReset = null) {
+function installComparatorFrontPointResetTool(chart, chartNode, buildOption, excludedKeys, onReset = null, controlsFactory = null) {
   chart.setOption({
     toolbox: {
       feature: {
@@ -9664,15 +10034,38 @@ function installComparatorFrontPointResetTool(chart, chartNode, buildOption, exc
           buildOption,
           excludedKeys,
           onReset,
+          controlsFactory,
         ),
       },
     },
   });
 }
 
-function installComparatorPointToggle(chart, chartNode, buildOption, excludedKeys, onToggle = null) {
+function showComparatorHypervolumeAreaByScope(scopeKey) {
+  return comparatorParetoHypervolumeAreaScopes.has(scopeKey);
+}
+
+function comparatorParetoHypervolumeToolboxFeature(scopeKey, chart, chartNode, buildOption, controlsFactory) {
+  const visible = showComparatorHypervolumeAreaByScope(scopeKey);
+  return {
+    show: true,
+    title: visible ? COMPARATOR_PARETO_HV_HIDE_TITLE : COMPARATOR_PARETO_HV_SHOW_TITLE,
+    icon: COMPARATOR_PARETO_HV_ICON,
+    onclick: () => {
+      if (visible) {
+        comparatorParetoHypervolumeAreaScopes.delete(scopeKey);
+      } else {
+        comparatorParetoHypervolumeAreaScopes.add(scopeKey);
+      }
+      const selected = comparatorLegendSelection(chart);
+      setComparatorChartOption(chart, chartNode, buildOption(), selected, comparatorChartControls(controlsFactory));
+    },
+  };
+}
+
+function installComparatorPointToggle(chart, chartNode, buildOption, excludedKeys, onToggle = null, controlsFactory = null) {
   const installResetTool = typeof onToggle === "function"
-    ? () => installComparatorFrontPointResetTool(chart, chartNode, buildOption, excludedKeys, onToggle)
+    ? () => installComparatorFrontPointResetTool(chart, chartNode, buildOption, excludedKeys, onToggle, controlsFactory)
     : () => {};
   chart.on("click", (params) => {
     const key = params?.data?.pointInteractionKey;
@@ -9683,7 +10076,7 @@ function installComparatorPointToggle(chart, chartNode, buildOption, excludedKey
       excludedKeys.add(key);
     }
     const selected = comparatorLegendSelection(chart);
-    setComparatorChartOption(chart, chartNode, buildOption(), selected);
+    setComparatorChartOption(chart, chartNode, buildOption(), selected, comparatorChartControls(controlsFactory));
     installResetTool();
     if (typeof onToggle === "function") {
       onToggle();
@@ -9778,18 +10171,36 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
         const excludedKeys = comparatorFrontExcludedKeysForScope(scopeKey);
         const diagnosticsByKey = comparatorFrontDiagnosticsForScope(scopeKey);
         const diagnosticLoadToken = comparatorFrontDiagnosticLoadToken;
-        const buildOption = () => paretoChartOption(
-          "Frente comparable normalizado",
+        const buildOption = (optionOverrides = {}) => paretoChartOption(
+          comparatorChartLabel("pareto").title,
           proposal.charts || {},
           proposal.metrics || {},
           color,
-          { excludedKeys, diagnosticsByKey, pointNamespace: COMPARATOR_FRONT_POINT_NAMESPACE },
+          {
+            excludedKeys,
+            diagnosticsByKey,
+            pointNamespace: COMPARATOR_FRONT_POINT_NAMESPACE,
+            showHypervolumeArea: showComparatorHypervolumeAreaByScope(scopeKey),
+            ...optionOverrides,
+          },
         );
+        const controlsFactory = () => ({
+          chartKey: "pareto",
+          hideMetricBadgeOnExport: true,
+          hypervolumeToggleFeature: () => comparatorParetoHypervolumeToolboxFeature(
+            scopeKey,
+            normalizedChart,
+            normalizedChartNode,
+            buildOption,
+            controlsFactory,
+          ),
+          exportOptionFactory: () => buildOption({ exportMode: true, publicationMode: true }),
+        });
         const option = buildOption();
-        setComparatorChartOption(normalizedChart, normalizedChartNode, option);
+        setComparatorChartOption(normalizedChart, normalizedChartNode, option, null, controlsFactory());
         const installPointResetTool = installComparatorPointToggle(normalizedChart, normalizedChartNode, buildOption, excludedKeys, () => {
           refreshComparatorAdjustedComparatorOutputs();
-        });
+        }, controlsFactory);
         const requestPoints = comparatorFrontDiagnosticRequestPoints(
           comparatorVisibleFrontChartPoints(proposal.charts || {}, COMPARATOR_FRONT_POINT_NAMESPACE).individuals
             .map((point) => comparatorChartPointFromRaw(point)),
@@ -9802,7 +10213,7 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
             diagnosticsByKey.clear();
             diagnostics.forEach((value, key) => diagnosticsByKey.set(key, value));
             const selected = comparatorLegendSelection(normalizedChart);
-            setComparatorChartOption(normalizedChart, normalizedChartNode, buildOption(), selected);
+            setComparatorChartOption(normalizedChart, normalizedChartNode, buildOption(), selected, controlsFactory());
             installPointResetTool();
             refreshComparatorAdjustedComparatorOutputs();
           })
@@ -9818,12 +10229,12 @@ function renderComparatorDerivedCharts(proposals, styleMap = comparatorChartStyl
   const pointProposals = comparatorPointChartViewProposals(adjustedProposals);
   renderComparatorCombinedSelectedChart(pointProposals, styleMap, runId);
   renderComparatorContributionChart(pointProposals, styleMap, adjustedProposals, runId);
-  renderComparatorMetricLine(dom.comparatorHvChart, adjustedProposals, "hypervolume", "HV", styleMap);
-  renderComparatorMetricLine(dom.comparatorContributionLineChart, adjustedProposals, "contribution", "Contribution", styleMap);
-  renderComparatorMetricLine(dom.comparatorExtentChart, adjustedProposals, "extent", "Extent", styleMap);
-  renderComparatorMetricLine(dom.comparatorUnaryEntropyChart, adjustedProposals, "unaryEntropy", "Unary Entropy", styleMap);
-  renderComparatorMetricLine(dom.comparatorGlobalInertiaChart, adjustedProposals, "globalInertia", "K-means inertia", styleMap);
-  renderComparatorMetricLine(dom.comparatorGlobalEntropyChart, adjustedProposals, "globalEntropy", "Entity entropy", styleMap);
+  renderComparatorMetricLine(dom.comparatorHvChart, adjustedProposals, "hypervolume", "hypervolume", styleMap);
+  renderComparatorMetricLine(dom.comparatorContributionLineChart, adjustedProposals, "contribution", "contribution", styleMap);
+  renderComparatorMetricLine(dom.comparatorExtentChart, adjustedProposals, "extent", "extent", styleMap);
+  renderComparatorMetricLine(dom.comparatorUnaryEntropyChart, adjustedProposals, "unaryEntropy", "unaryEntropy", styleMap);
+  renderComparatorMetricLine(dom.comparatorGlobalInertiaChart, adjustedProposals, "globalInertia", "globalInertia", styleMap);
+  renderComparatorMetricLine(dom.comparatorGlobalEntropyChart, adjustedProposals, "globalEntropy", "globalEntropy", styleMap);
 }
 
 function renderComparatorCombinedSelectedChart(proposals, styleMap = comparatorChartStyles, runId = comparatorFrontRunId()) {
@@ -9847,11 +10258,16 @@ function renderComparatorCombinedSelectedChart(proposals, styleMap = comparatorC
     };
   });
   const chart = initComparatorChart(dom.comparatorCombinedParetoChart);
-  const option = baseScatterOption("Top 5 combinado", selectedSeries, {
+  const buildOption = (optionOverrides = {}) => baseScatterOption(comparatorChartLabel("combinedSelected").title, selectedSeries, {
+    chartKey: "combinedSelected",
+    publicationMode: Boolean(optionOverrides.publicationMode),
     description: "Ejes normalizados comparables. Mayor fidelidad y diversidad es mejor. Borde rojo: no dominada frente a la union de propuestas.",
   });
-  chart.setOption(option);
-  installComparatorLocalLegend(chart, dom.comparatorCombinedParetoChart, option.series || []);
+  const option = buildOption();
+  setComparatorChartOption(chart, dom.comparatorCombinedParetoChart, option, null, {
+    chartKey: "combinedSelected",
+    exportOptionFactory: () => buildOption({ publicationMode: true }),
+  });
 }
 
 function renderComparatorContributionChart(proposals, styleMap = comparatorChartStyles, metricProposals = proposals, runId = comparatorFrontRunId()) {
@@ -9879,11 +10295,16 @@ function renderComparatorContributionChart(proposals, styleMap = comparatorChart
     };
   });
   const chart = initComparatorChart(dom.comparatorContributionChart);
-  const option = baseScatterOption("Contribution", series, {
+  const buildOption = (optionOverrides = {}) => baseScatterOption(comparatorChartLabel("contributionScatter").title, series, {
+    chartKey: "contributionScatter",
+    publicationMode: Boolean(optionOverrides.publicationMode),
     description: `${globalFront.length} puntos en el frente combinado P*. Puntos compartidos reparten credito 1/K.`,
   });
-  chart.setOption(option);
-  installComparatorLocalLegend(chart, dom.comparatorContributionChart, option.series || []);
+  const option = buildOption();
+  setComparatorChartOption(chart, dom.comparatorContributionChart, option, null, {
+    chartKey: "contributionScatter",
+    exportOptionFactory: () => buildOption({ publicationMode: true }),
+  });
 }
 
 function comparatorLinePoint(seriesName, value, identity = {}, index = 0) {
@@ -9920,11 +10341,19 @@ function comparatorInteractiveLineOption({
   chart,
   rawSeries,
   title,
+  chartKey = null,
+  labels = null,
   description,
   higherIsBetter,
   iterationLimit,
   emptyMessage,
+  publicationMode = false,
 }) {
+  const chartLabels = labels || (chartKey ? comparatorChartLabel(chartKey) : {
+    title,
+    xAxis: "Iteración",
+    yAxis: "",
+  });
   const activeSeries = comparatorInteractiveLineSeries(rawSeries, iterationLimit);
   const metricValues = comparatorLineYValues(activeSeries);
   const referenceTarget = activeSeries.find((item) => item.data.length > 0);
@@ -9939,10 +10368,7 @@ function comparatorInteractiveLineOption({
   }
   const chartPoints = activeSeries.flatMap((item) => item.data || []);
   const xAxisWindow = comparatorIterationAxisWindow(activeSeries);
-  const yAxisWindow = comparatorChartAxisWindow(chartPoints, "y", {
-    paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
-    zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
-  });
+  const yAxisScale = comparatorRegularAxisScaleForPoints(chartPoints, "y");
   const dataZoom = [
     xAxisWindow ? {
       type: "inside",
@@ -9951,16 +10377,15 @@ function comparatorInteractiveLineOption({
       startValue: xAxisWindow.defaultMin,
       endValue: xAxisWindow.defaultMax,
     } : null,
-    yAxisWindow ? {
+    yAxisScale ? {
       type: "inside",
       yAxisIndex: 0,
       filterMode: "none",
-      startValue: yAxisWindow.defaultMin,
-      endValue: yAxisWindow.defaultMax,
+      startValue: yAxisScale.min,
+      endValue: yAxisScale.max,
     } : null,
   ].filter(Boolean);
   const toolboxFeature = {
-    saveAsImage: {},
     dataZoom: {},
     restore: { title: "Reset" },
   };
@@ -9971,28 +10396,65 @@ function comparatorInteractiveLineOption({
       referenceLines,
     );
   }
-  toolboxFeature[COMPARATOR_HIDE_SERIES_TOOL_KEY] = comparatorHideSeriesToolboxFeature(chart);
+  const legendLayout = comparatorPublicationLegendLayout(activeSeries);
   return {
-    title: { text: title, subtext: description, left: 8, top: 6, textStyle: { fontSize: 13 }, subtextStyle: { fontSize: 11, color: "#64748b" } },
+    backgroundColor: "#ffffff",
+    title: {
+      text: chartLabels.title || title,
+      subtext: description,
+      left: publicationMode ? "center" : 8,
+      top: publicationMode ? 12 : 6,
+      textStyle: {
+        fontSize: publicationMode ? 20 : 13,
+        color: "#111111",
+        fontWeight: publicationMode ? 800 : 700,
+      },
+      subtextStyle: { fontSize: 12, color: "#64748b" },
+    },
     tooltip: safeChartTooltip("axis", comparatorLineTooltipFormatter),
-    legend: { show: false },
-    grid: { left: 52, right: 22, top: 78, bottom: 58, containLabel: true },
+    legend: publicationMode ? comparatorPublicationLegendOption(activeSeries, {}, { top: 84 }) : { show: false },
+    grid: {
+      left: 62,
+      right: publicationMode ? legendLayout.gridRight : 22,
+      top: 84,
+      bottom: 62,
+      containLabel: true,
+      show: publicationMode,
+      borderColor: "#111111",
+      borderWidth: publicationMode ? COMPARATOR_PUBLICATION_BORDER_WIDTH : 0,
+      backgroundColor: "#ffffff",
+    },
     toolbox: { feature: toolboxFeature, right: 8, top: 38 },
     dataZoom,
     xAxis: {
       type: "value",
-      name: "Iteracion",
+      name: chartLabels.xAxis || "Iteración",
       nameLocation: "middle",
       nameGap: 34,
+      nameTextStyle: { color: "#333333", fontWeight: 600, fontSize: 15 },
+      axisLine: { show: !publicationMode, lineStyle: { color: "#111111" } },
+      axisTick: { lineStyle: { color: "#111111" } },
+      axisLabel: { color: "#333333", fontSize: 13, formatter: comparatorChartAxisTickFormatter },
+      splitLine: { lineStyle: { color: "#d9d9d9", type: "dotted" } },
       minInterval: 1,
       min: xAxisWindow?.zoomMin,
       max: xAxisWindow?.zoomMax,
     },
     yAxis: {
       type: "value",
+      name: chartLabels.yAxis || "",
+      nameLocation: "middle",
+      nameGap: 44,
+      nameTextStyle: { color: "#333333", fontWeight: 600, fontSize: 15 },
+      axisLine: { show: !publicationMode, lineStyle: { color: "#111111" } },
+      axisTick: { lineStyle: { color: "#111111" } },
+      axisLabel: { color: "#333333", fontSize: 13, formatter: comparatorChartAxisTickFormatter },
+      splitLine: { lineStyle: { color: "#d9d9d9", type: "dotted" } },
       scale: true,
-      min: yAxisWindow?.zoomMin,
-      max: yAxisWindow?.zoomMax,
+      min: yAxisScale?.min,
+      max: yAxisScale?.max,
+      interval: yAxisScale?.interval,
+      splitNumber: yAxisScale?.splitNumber,
     },
     graphic: comparatorEmptyChartGraphic(activeSeries, emptyMessage),
     series: activeSeries,
@@ -10009,7 +10471,7 @@ function installComparatorIterationSlider(container, extent, onChange) {
   const wrapper = document.createElement("label");
   wrapper.className = "comparator-iteration-slider";
   wrapper.innerHTML = `
-    <span>Iteracion hasta <strong>${escapeHtml(String(max))}</strong></span>
+    <span>Iteración hasta <strong>${escapeHtml(String(max))}</strong></span>
     <input type="range" min="${escapeHtml(String(min))}" max="${escapeHtml(String(max))}" step="1" value="${escapeHtml(String(max))}">
   `;
   const input = wrapper.querySelector("input");
@@ -10022,8 +10484,9 @@ function installComparatorIterationSlider(container, extent, onChange) {
   container.after(wrapper);
 }
 
-function renderComparatorMetricLine(container, proposals, metricKey, title, styleMap = comparatorChartStyles) {
+function renderComparatorMetricLine(container, proposals, metricKey, chartKey, styleMap = comparatorChartStyles) {
   const metadata = comparatorMetricMetadata(metricKey);
+  const labels = comparatorChartLabel(chartKey);
   const rawSeries = proposals.map((proposal, index) => {
     const style = comparatorChartStyleForProposal(proposal, index, styleMap);
     const entityId = comparatorEntityId(proposal);
@@ -10039,7 +10502,7 @@ function renderComparatorMetricLine(container, proposals, metricKey, title, styl
           proposalId: proposal.proposalId,
           sourceIndex: point.generation,
           rank: metricKey,
-          labelText: `${title} ${point.generation}`,
+          labelText: `${labels.title} ${point.generation}`,
         }, pointIndex)),
       itemStyle: { color: style.color },
       lineStyle: { color: style.color, width: style.lineWidth },
@@ -10048,22 +10511,29 @@ function renderComparatorMetricLine(container, proposals, metricKey, title, styl
   const chart = initComparatorChart(container);
   const extent = comparatorSeriesIterationExtent(rawSeries);
   let iterationLimit = extent?.max ?? null;
-  const buildOption = () => comparatorInteractiveLineOption({
+  const buildOption = (optionOverrides = {}) => comparatorInteractiveLineOption({
       chart,
       rawSeries,
-      title,
+      title: labels.title,
+      chartKey,
+      labels,
       description: metadata.description,
       higherIsBetter: metadata.higherIsBetter,
       iterationLimit,
       emptyMessage: proposals.length ? "Sin serie disponible para las propuestas filtradas." : "Sin propuestas filtradas.",
+      publicationMode: Boolean(optionOverrides.publicationMode),
     });
   const option = buildOption();
-  setComparatorChartOption(chart, container, option);
+  const controls = () => ({
+    chartKey,
+    exportOptionFactory: () => buildOption({ publicationMode: true }),
+  });
+  setComparatorChartOption(chart, container, option, null, controls());
   installComparatorCurveVisibilityToggle(chart);
   installComparatorIterationSlider(container, extent, (value) => {
     iterationLimit = value;
     const selected = comparatorLegendSelection(chart);
-    setComparatorChartOption(chart, container, buildOption(), selected);
+    setComparatorChartOption(chart, container, buildOption(), selected, controls());
   });
 }
 
@@ -10196,6 +10666,10 @@ function comparatorFrontDiagnosticsBadge(points, color) {
 function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa", options = {}) {
   const excludedKeys = options.excludedKeys || new Set();
   const pointNamespace = options.pointNamespace || "pareto-points";
+  const showHypervolumeArea = Boolean(options.showHypervolumeArea);
+  const exportMode = Boolean(options.exportMode);
+  const publicationMode = Boolean(options.publicationMode);
+  const frontPointColor = options.frontPointColor || "#64b5f6";
   const visibleFront = comparatorVisibleFrontChartPoints(charts, pointNamespace);
   const allPoints = comparatorApplyFrontDiagnostics(
     visibleFront.individuals.map((point) => comparatorChartPointFromRaw(point)),
@@ -10211,65 +10685,77 @@ function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa
   const selectedPartition = comparatorPartitionInteractivePoints(selectedPoints, excludedKeys, pointNamespace);
   const activeAllPoints = allPartition.active.map((entry) => entry.point);
   const activeSelectedPoints = selectedPartition.active.map((entry) => entry.point);
-  const inactiveAllPoints = allPartition.inactive.map((entry) =>
-    comparatorInactivePoint(entry, proposalColor, { color: proposalColor }),
+  const inactiveAllPoints = exportMode ? [] : allPartition.inactive.map((entry) =>
+    comparatorInactivePoint(entry, frontPointColor, { color: frontPointColor }),
   );
-  const inactiveSelectedPoints = selectedPartition.inactive.map((entry) =>
-    comparatorInactivePoint(entry, proposalColor, { color: "#ffffff", borderColor: proposalColor }),
+  const inactiveSelectedPoints = exportMode ? [] : selectedPartition.inactive.map((entry) =>
+    comparatorInactivePoint(entry, "#e11d48", { color: "#e11d48", borderColor: "#111111" }),
   );
   const hvLabel = metrics.hypervolumeLabel === "No aplica" ? "" : comparatorHypervolumeLabel(activeAllPoints);
-  const hvAreaSeries = comparatorHypervolumeAreaSeries(activeAllPoints, hvLabel, proposalColor);
+  const hvAreaSeries = showHypervolumeArea ? comparatorHypervolumeAreaSeries(activeAllPoints, hvLabel, proposalColor) : [];
   const diagnosticsBadge = comparatorFrontDiagnosticsBadge(activeAllPoints, proposalColor);
-  return baseScatterOption(title, [
+  const series = [
     ...hvAreaSeries,
     {
-      name: `Individuos (${activeAllPoints.length})`,
+      name: "Soluciones del frente",
       type: "scatter",
       symbolSize: 8,
       data: activeAllPoints,
       label: { show: false },
-      itemStyle: { color: proposalColor, opacity: 0.72 },
+      itemStyle: { color: frontPointColor, opacity: 0.86, borderColor: "#ffffff", borderWidth: 0.8 },
     },
-    {
-      name: "Individuos inactivos",
+    ...(!exportMode ? [{
+      name: "Soluciones del frente inactivas",
       type: "scatter",
       symbolSize: 8,
       data: inactiveAllPoints,
       label: { show: false },
-      itemStyle: { color: proposalColor, opacity: COMPARATOR_INACTIVE_POINT_OPACITY },
+      itemStyle: { color: frontPointColor, opacity: COMPARATOR_INACTIVE_POINT_OPACITY },
       showInLegend: false,
+      comparatorExportExclude: true,
       z: 2,
-    },
+    }] : []),
     {
-      name: `Seleccionadas (${activeSelectedPoints.length})`,
+      name: "Soluciones seleccionadas",
       type: "scatter",
-      symbol: "circle",
-      symbolSize: 15,
+      symbol: COMPARATOR_SELECTED_STAR_SYMBOL,
+      symbolSize: 18,
       data: activeSelectedPoints,
       label: { show: false },
-      itemStyle: { color: "#ffffff", borderColor: proposalColor, borderWidth: 2.5 },
+      itemStyle: { color: "#e11d48", borderColor: "#111111", borderWidth: 1.5 },
       z: 4,
     },
-    {
-      name: "Seleccionadas inactivas",
+    ...(!exportMode ? [{
+      name: "Soluciones seleccionadas inactivas",
       type: "scatter",
-      symbol: "circle",
-      symbolSize: 15,
+      symbol: COMPARATOR_SELECTED_STAR_SYMBOL,
+      symbolSize: 18,
       data: inactiveSelectedPoints,
       label: { show: false },
       itemStyle: {
-        color: "#ffffff",
-        borderColor: proposalColor,
-        borderWidth: 2.5,
+        color: "#e11d48",
+        borderColor: "#111111",
+        borderWidth: 1.5,
         opacity: COMPARATOR_INACTIVE_POINT_OPACITY,
       },
       showInLegend: false,
+      comparatorExportExclude: true,
       z: 3,
-    },
-  ], {
-    description: "Ejes normalizados comparables. Area sombreada: HV dominado respecto a [0, 0].",
-    axisPoints: [...activeAllPoints, ...activeSelectedPoints, ...inactiveAllPoints, ...inactiveSelectedPoints],
-    fixedBadge: diagnosticsBadge,
+    }] : []),
+  ];
+  return baseScatterOption(title, series, {
+    chartKey: "pareto",
+    publicationMode,
+    description: showHypervolumeArea
+      ? "Ejes normalizados comparables. Área sombreada: hipervolumen dominado respecto a [0, 0]."
+      : "Ejes normalizados comparables. Mayor fidelidad y diversidad es mejor.",
+    axisPoints: exportMode
+      ? [...activeAllPoints, ...activeSelectedPoints]
+      : [...activeAllPoints, ...activeSelectedPoints, ...inactiveAllPoints, ...inactiveSelectedPoints],
+    fixedBadge: exportMode ? null : diagnosticsBadge,
+    includeIdeal: false,
+    plotBackgroundColor: publicationMode ? "#e9e9f2" : "#ffffff",
+    splitLineColor: publicationMode ? "#ffffff" : "#d9d9d9",
   });
 }
 
@@ -10277,6 +10763,10 @@ function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C
   const charts = analysis.charts || {};
   const excludedKeys = options.excludedKeys || new Set();
   const pointNamespace = options.pointNamespace || "bmopso-points";
+  const showHypervolumeArea = Boolean(options.showHypervolumeArea);
+  const exportMode = Boolean(options.exportMode);
+  const publicationMode = Boolean(options.publicationMode);
+  const frontPointColor = options.frontPointColor || "#64b5f6";
   const allPoints = comparatorApplyFrontDiagnostics(
     (charts.pareto || []).map((point) => comparatorChartPointFromRaw(point)),
     options.diagnosticsByKey,
@@ -10287,69 +10777,82 @@ function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C
   const selectedPartition = comparatorPartitionInteractivePoints(selectedPoints, excludedKeys, pointNamespace);
   const activeAllPoints = allPartition.active.map((entry) => entry.point);
   const activeSelectedPoints = selectedPartition.active.map((entry) => entry.point);
-  const inactiveAllPoints = allPartition.inactive.map((entry) =>
-    comparatorInactivePoint(entry, proposalColor, { color: proposalColor }),
+  const inactiveAllPoints = exportMode ? [] : allPartition.inactive.map((entry) =>
+    comparatorInactivePoint(entry, frontPointColor, { color: frontPointColor }),
   );
-  const inactiveSelectedPoints = selectedPartition.inactive.map((entry) =>
-    comparatorInactivePoint(entry, proposalColor, { color: "#ffffff", borderColor: proposalColor }),
+  const inactiveSelectedPoints = exportMode ? [] : selectedPartition.inactive.map((entry) =>
+    comparatorInactivePoint(entry, "#e11d48", { color: "#e11d48", borderColor: "#111111" }),
   );
   const hvLabel = analysis.metrics?.hypervolumeLabel === "No aplica" ? "" : comparatorHypervolumeLabel(activeAllPoints);
-  const hvAreaSeries = comparatorHypervolumeAreaSeries(activeAllPoints, hvLabel, proposalColor);
+  const hvAreaSeries = showHypervolumeArea ? comparatorHypervolumeAreaSeries(activeAllPoints, hvLabel, proposalColor) : [];
   const diagnosticsBadge = comparatorFrontDiagnosticsBadge(activeAllPoints, proposalColor);
-  return baseScatterOption(title, [
+  const series = [
     ...hvAreaSeries,
     {
-      name: `Individuos (${activeAllPoints.length})`,
+      name: "Soluciones del frente",
       type: "scatter",
       symbolSize: 8,
       data: activeAllPoints,
       label: { show: false },
-      itemStyle: { color: proposalColor, opacity: 0.72 },
+      itemStyle: { color: frontPointColor, opacity: 0.86, borderColor: "#ffffff", borderWidth: 0.8 },
     },
-    {
-      name: "Individuos inactivos",
+    ...(!exportMode ? [{
+      name: "Soluciones del frente inactivas",
       type: "scatter",
       symbolSize: 8,
       data: inactiveAllPoints,
       label: { show: false },
-      itemStyle: { color: proposalColor, opacity: COMPARATOR_INACTIVE_POINT_OPACITY },
+      itemStyle: { color: frontPointColor, opacity: COMPARATOR_INACTIVE_POINT_OPACITY },
       showInLegend: false,
+      comparatorExportExclude: true,
       z: 2,
-    },
+    }] : []),
     {
-      name: `Seleccionadas (${activeSelectedPoints.length})`,
+      name: "Soluciones seleccionadas",
       type: "scatter",
-      symbol: "circle",
-      symbolSize: 15,
+      symbol: COMPARATOR_SELECTED_STAR_SYMBOL,
+      symbolSize: 18,
       data: activeSelectedPoints,
       label: { show: false },
-      itemStyle: { color: "#ffffff", borderColor: proposalColor, borderWidth: 2.5 },
+      itemStyle: { color: "#e11d48", borderColor: "#111111", borderWidth: 1.5 },
       z: 4,
     },
-    {
-      name: "Seleccionadas inactivas",
+    ...(!exportMode ? [{
+      name: "Soluciones seleccionadas inactivas",
       type: "scatter",
-      symbol: "circle",
-      symbolSize: 15,
+      symbol: COMPARATOR_SELECTED_STAR_SYMBOL,
+      symbolSize: 18,
       data: inactiveSelectedPoints,
       label: { show: false },
       itemStyle: {
-        color: "#ffffff",
-        borderColor: proposalColor,
-        borderWidth: 2.5,
+        color: "#e11d48",
+        borderColor: "#111111",
+        borderWidth: 1.5,
         opacity: COMPARATOR_INACTIVE_POINT_OPACITY,
       },
       showInLegend: false,
+      comparatorExportExclude: true,
       z: 3,
-    },
-  ], {
-    description: "Ejes nativos normalizados de Binary MOPSO-CD. Area sombreada: HV interno reportado por BMOPSO.",
-    axisPoints: [...activeAllPoints, ...activeSelectedPoints, ...inactiveAllPoints, ...inactiveSelectedPoints],
-    fixedBadge: diagnosticsBadge,
+    }] : []),
+  ];
+  return baseScatterOption(title, series, {
+    chartKey: "internalBmopsoPareto",
+    publicationMode,
+    description: showHypervolumeArea
+      ? "Ejes nativos normalizados de Binary MOPSO-CD. Área sombreada: hipervolumen interno reportado por BMOPSO."
+      : "Ejes nativos normalizados de Binary MOPSO-CD.",
+    axisPoints: exportMode
+      ? [...activeAllPoints, ...activeSelectedPoints]
+      : [...activeAllPoints, ...activeSelectedPoints, ...inactiveAllPoints, ...inactiveSelectedPoints],
+    fixedBadge: exportMode ? null : diagnosticsBadge,
+    includeIdeal: false,
+    plotBackgroundColor: publicationMode ? "#e9e9f2" : "#ffffff",
+    splitLineColor: publicationMode ? "#ffffff" : "#d9d9d9",
   });
 }
 
 function internalBmopsoHvLineOption(chart, seriesName, analysis, color = "#2A8C00", lineWidth = 3, options = {}) {
+  const labels = comparatorChartLabel("internalBmopsoHypervolume");
   const rawSeries = [{
     id: `bmopso-internal-hv-${seriesName}`,
     name: seriesName,
@@ -10362,7 +10865,7 @@ function internalBmopsoHvLineOption(chart, seriesName, analysis, color = "#2A8C0
         proposalId: "binary-mopso-cd",
         sourceIndex: point.generation,
         rank: "internal-hv",
-        labelText: `HV interno ${point.generation}`,
+        labelText: `${labels.title} ${point.generation}`,
       }, index)),
     itemStyle: { color },
     lineStyle: { color, width: lineWidth },
@@ -10370,11 +10873,14 @@ function internalBmopsoHvLineOption(chart, seriesName, analysis, color = "#2A8C0
   return comparatorInteractiveLineOption({
     chart,
     rawSeries,
-    title: "HV(t) interno BMOPSO",
-    description: "Serie nativa reportada por evolucion_metricas.csv; no usa recomputo post-hoc.",
+    title: labels.title,
+    chartKey: "internalBmopsoHypervolume",
+    labels,
+    description: "Serie nativa reportada por evolucion_metricas.csv; no usa recálculo post-hoc.",
     higherIsBetter: true,
     iterationLimit: options.iterationLimit,
     emptyMessage: "Sin serie HV interna disponible.",
+    publicationMode: Boolean(options.publicationMode),
   });
 }
 
@@ -10384,10 +10890,11 @@ function comparatorHypervolumeAreaSeries(points, hypervolumeLabel, color = "#256
   if (!area) return [];
   return [
     {
-      name: "Area HV",
+      name: "Área de hipervolumen",
       type: "line",
       data: area.lineData,
       showSymbol: false,
+      showInLegend: false,
       silent: true,
       tooltip: { show: false },
       lineStyle: { color, width: 1.2, opacity: 0.5 },
@@ -10397,16 +10904,23 @@ function comparatorHypervolumeAreaSeries(points, hypervolumeLabel, color = "#256
   ];
 }
 
-function comparatorFixedBadgeGraphic(badge) {
-  if (!badge?.text) return [];
+function comparatorFixedBadgeDimensions(badge) {
+  if (!badge?.text) return null;
   const lines = String(badge.text).split("\n");
-  const width = Math.max(126, Math.min(210, (Math.max(...lines.map((line) => line.length)) * 7) + 22));
-  const height = Math.max(28, (lines.length * 15) + 14);
+  const width = Math.max(156, Math.min(240, (Math.max(...lines.map((line) => line.length)) * 8.2) + 28));
+  const height = Math.max(40, (lines.length * 18) + 18);
+  return { lines, width, height };
+}
+
+function comparatorFixedBadgeGraphic(badge) {
+  const dimensions = comparatorFixedBadgeDimensions(badge);
+  if (!dimensions) return [];
+  const { lines, width, height } = dimensions;
   return [
     {
       type: "group",
-      right: 34,
-      top: 108,
+      right: 24,
+      top: 88,
       silent: true,
       z: 100,
       children: [
@@ -10416,19 +10930,19 @@ function comparatorFixedBadgeGraphic(badge) {
           style: {
             fill: "rgba(255, 255, 255, 0.92)",
             stroke: badge.color || "#2563eb",
-            lineWidth: 1,
+            lineWidth: 1.5,
           },
         },
         {
           type: "text",
-          left: 10,
-          top: 8,
+          left: 12,
+          top: 9,
           style: {
             text: badge.text,
             fill: badge.color || "#2563eb",
-            fontSize: 11,
+            fontSize: 13,
             fontWeight: 700,
-            lineHeight: 15,
+            lineHeight: 18,
           },
         },
       ],
@@ -10437,6 +10951,13 @@ function comparatorFixedBadgeGraphic(badge) {
 }
 
 function baseScatterOption(title, series, options = {}) {
+  const publicationMode = Boolean(options.publicationMode);
+  const fixedBadgeDimensions = publicationMode ? null : comparatorFixedBadgeDimensions(options.fixedBadge);
+  const chartLabels = options.labels || (options.chartKey ? comparatorChartLabel(options.chartKey) : {
+    title,
+    xAxis: options.xAxisName || "Fidelidad normalizada",
+    yAxis: options.yAxisName || "Diversidad normalizada",
+  });
   const idealSeries = options.includeIdeal === false ? null : comparatorIdealSeries(series, options.idealPoint);
   const renderedSeries = idealSeries ? [...series, idealSeries] : series;
   const axisSource = options.axisPoints || renderedSeries.flatMap((item) => (item.data || []).map((point) =>
@@ -10444,22 +10965,20 @@ function baseScatterOption(title, series, options = {}) {
   ));
   const hasExplicitXBounds = Number.isFinite(Number(options.xAxisMin)) && Number.isFinite(Number(options.xAxisMax));
   const hasExplicitYBounds = Number.isFinite(Number(options.yAxisMin)) && Number.isFinite(Number(options.yAxisMax));
-  const xAxisWindow = hasExplicitXBounds
-    ? comparatorExpandedAxisWindow(Number(options.xAxisMin), Number(options.xAxisMax), {
-        zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
-      })
-    : comparatorChartAxisWindow(axisSource, "x", {
-        paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
-        zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
-      });
-  const yAxisWindow = hasExplicitYBounds
-    ? comparatorExpandedAxisWindow(Number(options.yAxisMin), Number(options.yAxisMax), {
-        zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
-      })
-    : comparatorChartAxisWindow(axisSource, "y", {
-        paddingRatio: COMPARATOR_CHART_PADDING_RATIO,
-        zoomFactor: COMPARATOR_CHART_ZOOM_FACTOR,
-      });
+  const xAxisScale = hasExplicitXBounds
+    ? comparatorRegularAxisScale(Number(options.xAxisMin), Number(options.xAxisMax), { targetIntervals: 6 })
+    : comparatorRegularAxisScaleForPoints(axisSource, "x", { targetIntervals: 6 });
+  const xAxisWindow = xAxisScale
+    ? {
+        defaultMin: xAxisScale.min,
+        defaultMax: xAxisScale.max,
+        zoomMin: xAxisScale.min,
+        zoomMax: xAxisScale.max,
+      }
+    : null;
+  const yAxisScale = hasExplicitYBounds
+    ? comparatorRegularAxisScale(Number(options.yAxisMin), Number(options.yAxisMax))
+    : comparatorRegularAxisScaleForPoints(axisSource, "y");
   const dataZoom = [
     xAxisWindow ? {
       type: "inside",
@@ -10468,12 +10987,12 @@ function baseScatterOption(title, series, options = {}) {
       startValue: xAxisWindow.defaultMin,
       endValue: xAxisWindow.defaultMax,
     } : null,
-    yAxisWindow ? {
+    yAxisScale ? {
       type: "inside",
       yAxisIndex: 0,
       filterMode: "none",
-      startValue: yAxisWindow.defaultMin,
-      endValue: yAxisWindow.defaultMax,
+      startValue: yAxisScale.min,
+      endValue: yAxisScale.max,
     } : null,
     xAxisWindow ? {
       type: "slider",
@@ -10483,39 +11002,70 @@ function baseScatterOption(title, series, options = {}) {
       bottom: 12,
       startValue: xAxisWindow.defaultMin,
       endValue: xAxisWindow.defaultMax,
+      labelFormatter: comparatorChartAxisTickFormatter,
     } : null,
   ].filter(Boolean);
+  const legendLayout = comparatorPublicationLegendLayout(renderedSeries);
   return {
+    backgroundColor: "#ffffff",
     title: {
-      text: title,
+      text: chartLabels.title || title,
       subtext: options.description || "Mayor fidelidad y diversidad es mejor.",
-      left: 8,
-      top: 6,
-      textStyle: { fontSize: 13 },
-      subtextStyle: { fontSize: 11, color: "#64748b" },
+      left: publicationMode ? "center" : 8,
+      top: publicationMode ? 12 : 6,
+      textStyle: {
+        fontSize: publicationMode ? 20 : 13,
+        color: "#111111",
+        fontWeight: publicationMode ? 800 : 700,
+      },
+      subtextStyle: { fontSize: 12, color: "#64748b" },
     },
     tooltip: safeChartTooltip("item", options.tooltipFormatter || comparatorScatterTooltipFormatter),
-    legend: { show: false },
-    grid: { left: 58, right: 24, top: 84, bottom: 78, containLabel: true },
-    toolbox: { feature: { saveAsImage: {}, dataZoom: {}, restore: { title: "Reset" } }, right: 8, top: 38 },
+    legend: publicationMode ? comparatorPublicationLegendOption(renderedSeries, {}, { top: 88 }) : { show: false },
+    grid: {
+      left: 64,
+      right: publicationMode ? legendLayout.gridRight : fixedBadgeDimensions ? fixedBadgeDimensions.width + 48 : 24,
+      top: 88,
+      bottom: 78,
+      containLabel: true,
+      show: publicationMode,
+      borderColor: "#111111",
+      borderWidth: publicationMode ? COMPARATOR_PUBLICATION_BORDER_WIDTH : 0,
+      backgroundColor: options.plotBackgroundColor || "#ffffff",
+    },
+    toolbox: { feature: { dataZoom: {}, restore: { title: "Reset" } }, right: 8, top: 38 },
     dataZoom,
     xAxis: {
       type: "value",
-      name: options.xAxisName || "Fidelidad normalizada",
+      name: chartLabels.xAxis || options.xAxisName || "Fidelidad normalizada",
       nameLocation: "middle",
       nameGap: 42,
+      nameTextStyle: { color: "#333333", fontWeight: 600, fontSize: 15 },
+      axisLine: { show: !publicationMode, lineStyle: { color: "#111111" } },
+      axisTick: { lineStyle: { color: "#111111" } },
+      axisLabel: { color: "#333333", fontSize: 13, formatter: comparatorChartAxisTickFormatter },
+      splitLine: { lineStyle: { color: options.splitLineColor || "#d9d9d9", type: "dotted" } },
       scale: true,
       min: xAxisWindow?.zoomMin,
       max: xAxisWindow?.zoomMax,
+      interval: xAxisScale?.interval,
+      splitNumber: xAxisScale?.splitNumber,
     },
     yAxis: {
       type: "value",
-      name: options.yAxisName || "Diversidad normalizada",
+      name: chartLabels.yAxis || options.yAxisName || "Diversidad normalizada",
       nameLocation: "middle",
       nameGap: 44,
+      nameTextStyle: { color: "#333333", fontWeight: 600, fontSize: 15 },
+      axisLine: { show: !publicationMode, lineStyle: { color: "#111111" } },
+      axisTick: { lineStyle: { color: "#111111" } },
+      axisLabel: { color: "#333333", fontSize: 13, formatter: comparatorChartAxisTickFormatter },
+      splitLine: { lineStyle: { color: options.splitLineColor || "#d9d9d9", type: "dotted" } },
       scale: true,
-      min: yAxisWindow?.zoomMin,
-      max: yAxisWindow?.zoomMax,
+      min: yAxisScale?.min,
+      max: yAxisScale?.max,
+      interval: yAxisScale?.interval,
+      splitNumber: yAxisScale?.splitNumber,
     },
     graphic: [
       ...comparatorEmptyChartGraphic(renderedSeries, "Sin puntos disponibles para las propuestas filtradas."),
@@ -10671,7 +11221,7 @@ function comparatorLineTooltipFormatter(params) {
   const items = Array.isArray(params) ? params : [params];
   return items.map((item) => {
     const value = item.value || [];
-    return `${item.marker || ""}${escapeHtml(item.seriesName)}: ${formatOptionalNumber(value[1], 6)}<br><small>Iteracion ${escapeHtml(String(value[0] ?? "--"))}</small>`;
+    return `${item.marker || ""}${escapeHtml(item.seriesName)}: ${formatOptionalNumber(value[1], 6)}<br><small>Iteración ${escapeHtml(String(value[0] ?? "--"))}</small>`;
   }).join("<br>");
 }
 
@@ -10711,7 +11261,7 @@ function activateComparatorTab(tabName) {
 
 function renderComparatorRows(rows) {
   if (!rows.length) {
-    dom.comparatorResultsBody.innerHTML = '<tr><td colspan="9">Sin resultados todavia.</td></tr>';
+    dom.comparatorResultsBody.innerHTML = '<tr><td colspan="9">Sin resultados todavía.</td></tr>';
     return;
   }
 
@@ -10750,7 +11300,7 @@ function formatComparatorLogEntry(entry) {
 
 function renderComparatorLogLines() {
   if (!comparatorLogLines.length) {
-    dom.comparatorLogOutput.textContent = comparatorLogLoading ? "Cargando log completo..." : "Sin logs todavia.";
+    dom.comparatorLogOutput.textContent = comparatorLogLoading ? "Cargando log completo..." : "Sin logs todavía.";
     setComparatorLogCopyButton(false);
     return;
   }
@@ -11341,6 +11891,9 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && dom.comparatorInstanceModal && !dom.comparatorInstanceModal.hidden) {
     closeComparatorInstanceModal();
   }
+  if (event.key === "Escape" && dom.comparatorChartLabelsModal && !dom.comparatorChartLabelsModal.hidden) {
+    closeComparatorChartLabelsModal();
+  }
   if (event.key === "Escape") {
     closeTurbulenceMetricPopover();
   }
@@ -11533,6 +12086,13 @@ dom.cancelComparatorInstanceModalButton?.addEventListener("click", closeComparat
 dom.comparatorInstanceModal?.addEventListener("click", (event) => {
   if (event.target === dom.comparatorInstanceModal) {
     closeComparatorInstanceModal();
+  }
+});
+dom.saveComparatorChartLabelsButton?.addEventListener("click", saveComparatorChartLabels);
+dom.cancelComparatorChartLabelsButton?.addEventListener("click", closeComparatorChartLabelsModal);
+dom.comparatorChartLabelsModal?.addEventListener("click", (event) => {
+  if (event.target === dom.comparatorChartLabelsModal) {
+    closeComparatorChartLabelsModal();
   }
 });
 document.querySelectorAll(".comparator-tab").forEach((button) => {

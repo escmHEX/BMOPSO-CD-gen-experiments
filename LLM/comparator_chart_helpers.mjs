@@ -21,6 +21,28 @@ function cleanAxisNumber(value) {
   return Number(Number(value).toPrecision(12));
 }
 
+export const COMPARATOR_TRANSPARENT_BACKGROUND = "rgba(0, 0, 0, 0)";
+
+export function comparatorFormatAxisTick(value, decimals = 2) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value ?? "");
+  const precision = Math.max(0, Math.min(6, Number(decimals) || 0));
+  const rounded = Number(numeric.toFixed(precision));
+  return Object.is(rounded, -0) ? "0" : String(rounded);
+}
+
+export function comparatorChartAxisTickFormatter(value) {
+  return comparatorFormatAxisTick(value);
+}
+
+function normalizeComparableText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
 function stableIdentityValue(value) {
   if (value === null || value === undefined) return "";
   const normalized = String(value).trim();
@@ -348,6 +370,519 @@ const COMPARATOR_NON_BINARY_PALETTE = Object.freeze([
   "#0041F2",
   "#A218F2",
 ]);
+
+const COMPARATOR_DEFAULT_CHART_LABELS = Object.freeze({
+  pareto: Object.freeze({
+    title: "Frente de Pareto",
+    xAxis: "Fidelidad normalizada",
+    yAxis: "Diversidad normalizada",
+  }),
+  combinedSelected: Object.freeze({
+    title: "Soluciones seleccionadas combinadas",
+    xAxis: "Fidelidad normalizada",
+    yAxis: "Diversidad normalizada",
+  }),
+  contributionScatter: Object.freeze({
+    title: "Contribución al frente combinado",
+    xAxis: "Fidelidad normalizada",
+    yAxis: "Diversidad normalizada",
+  }),
+  hypervolume: Object.freeze({
+    title: "Hipervolumen",
+    xAxis: "Iteración",
+    yAxis: "Hipervolumen",
+  }),
+  contribution: Object.freeze({
+    title: "Contribución",
+    xAxis: "Iteración",
+    yAxis: "Contribución",
+  }),
+  extent: Object.freeze({
+    title: "Extensión del frente",
+    xAxis: "Iteración",
+    yAxis: "Extensión",
+  }),
+  unaryEntropy: Object.freeze({
+    title: "Entropía unaria",
+    xAxis: "Iteración",
+    yAxis: "Entropía unaria",
+  }),
+  globalInertia: Object.freeze({
+    title: "Inercia global de embeddings",
+    xAxis: "Iteración",
+    yAxis: "Inercia global",
+  }),
+  globalEntropy: Object.freeze({
+    title: "Entropía global de entidades",
+    xAxis: "Iteración",
+    yAxis: "Entropía global",
+  }),
+  embeddingOverlay: Object.freeze({
+    title: "Proyección combinada de diversidad",
+    xAxis: "Dimensión proyectada 1",
+    yAxis: "Dimensión proyectada 2",
+  }),
+  embeddingProjection: Object.freeze({
+    title: "Proyección de diversidad",
+    xAxis: "Dimensión proyectada 1",
+    yAxis: "Dimensión proyectada 2",
+  }),
+  internalBmopsoPareto: Object.freeze({
+    title: "Frente interno de Binary MOPSO-CD",
+    xAxis: "Objetivo nativo normalizado 1",
+    yAxis: "Objetivo nativo normalizado 2",
+  }),
+  internalBmopsoHypervolume: Object.freeze({
+    title: "Hipervolumen interno de Binary MOPSO-CD",
+    xAxis: "Iteración",
+    yAxis: "Hipervolumen interno",
+  }),
+});
+
+const COMPARATOR_LEGACY_CHART_LABELS = Object.freeze({
+  contributionScatter: Object.freeze({
+    title: "Contribucion al frente combinado",
+  }),
+  hypervolume: Object.freeze({
+    xAxis: "Iteracion",
+  }),
+  contribution: Object.freeze({
+    title: "Contribucion",
+    xAxis: "Iteracion",
+    yAxis: "Contribucion",
+  }),
+  extent: Object.freeze({
+    title: "Extension del frente",
+    xAxis: "Iteracion",
+    yAxis: "Extension",
+  }),
+  unaryEntropy: Object.freeze({
+    title: "Entropia unaria",
+    xAxis: "Iteracion",
+    yAxis: "Entropia unaria",
+  }),
+  globalInertia: Object.freeze({
+    xAxis: "Iteracion",
+  }),
+  globalEntropy: Object.freeze({
+    title: "Entropia global de entidades",
+    xAxis: "Iteracion",
+    yAxis: "Entropia global",
+  }),
+  embeddingOverlay: Object.freeze({
+    title: "Proyeccion combinada de diversidad",
+    xAxis: "Dimension proyectada 1",
+    yAxis: "Dimension proyectada 2",
+  }),
+  embeddingProjection: Object.freeze({
+    title: "Proyeccion de diversidad",
+    xAxis: "Dimension proyectada 1",
+    yAxis: "Dimension proyectada 2",
+  }),
+  internalBmopsoHypervolume: Object.freeze({
+    xAxis: "Iteracion",
+  }),
+});
+
+export const COMPARATOR_SELECTED_STAR_SYMBOL = "path://M12,2L14.9,8.6L22,9.2L16.7,13.8L18.3,20.8L12,17.1L5.7,20.8L7.3,13.8L2,9.2L9.1,8.6Z";
+
+function chartLabelValue(value, fallback) {
+  const text = String(value ?? "").trim();
+  return text || fallback;
+}
+
+function chartLabelOverrideValue(value, fallback, legacyValue) {
+  const text = chartLabelValue(value, fallback);
+  return legacyValue !== undefined && text === legacyValue ? fallback : text;
+}
+
+export function comparatorDefaultChartLabels() {
+  return Object.fromEntries(
+    Object.entries(COMPARATOR_DEFAULT_CHART_LABELS).map(([key, value]) => [key, { ...value }]),
+  );
+}
+
+export function comparatorMergeChartLabels(overrides = {}, defaults = comparatorDefaultChartLabels()) {
+  const source = overrides && typeof overrides === "object" ? overrides : {};
+  return Object.fromEntries(
+    Object.entries(defaults).map(([key, defaultValue]) => {
+      const override = source[key] && typeof source[key] === "object" ? source[key] : {};
+      const legacy = COMPARATOR_LEGACY_CHART_LABELS[key] || {};
+      return [key, {
+        title: chartLabelOverrideValue(override.title, defaultValue.title, legacy.title),
+        xAxis: chartLabelOverrideValue(override.xAxis, defaultValue.xAxis, legacy.xAxis),
+        yAxis: chartLabelOverrideValue(override.yAxis, defaultValue.yAxis, legacy.yAxis),
+      }];
+    }),
+  );
+}
+
+function comparatorSeriesLegendColor(series) {
+  return series?.itemStyle?.borderColor
+    || series?.itemStyle?.color
+    || series?.lineStyle?.color
+    || series?.areaStyle?.color
+    || "#64748b";
+}
+
+function comparatorLegendIcon(series) {
+  if (series?.symbol === "star" || series?.symbol === COMPARATOR_SELECTED_STAR_SYMBOL) {
+    return COMPARATOR_SELECTED_STAR_SYMBOL;
+  }
+  if (series?.type === "line") return "path://M0,5L28,5L28,7L0,7Z";
+  return "circle";
+}
+
+export function comparatorPublicationLegendEntries(series = [], selected = {}) {
+  const seen = new Set();
+  return (series || []).map((item) => {
+    if (item?.showInLegend === false) return null;
+    const name = String(item?.name || "").trim();
+    if (!name || seen.has(name) || selected[name] === false) return null;
+    seen.add(name);
+    return {
+      name,
+      color: comparatorSeriesLegendColor(item),
+      icon: comparatorLegendIcon(item),
+      textColor: "#111111",
+    };
+  }).filter(Boolean);
+}
+
+export function comparatorPublicationLegendLayout(series = [], selected = {}) {
+  const entries = comparatorPublicationLegendEntries(series, selected);
+  const longestName = entries.reduce((max, entry) => Math.max(max, entry.name.length), 0);
+  const width = entries.length
+    ? Math.min(420, Math.max(260, Math.ceil((longestName * 8.2) + 84)))
+    : 0;
+  const legendRight = 16;
+  const legendGap = 9;
+  return {
+    entries,
+    width,
+    legendGap,
+    legendRight,
+    gridRight: entries.length ? width + legendRight + legendGap : 24,
+  };
+}
+
+function cloneComparatorChartOptionValue(value) {
+  if (Array.isArray(value)) return value.map((item) => cloneComparatorChartOptionValue(item));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entryValue]) => [key, cloneComparatorChartOptionValue(entryValue)]),
+  );
+}
+
+function asComponentArray(component) {
+  if (component === undefined || component === null) return [];
+  return Array.isArray(component) ? component : [component];
+}
+
+function normalizeLegendName(entry) {
+  return String(typeof entry === "string" ? entry : entry?.name || "").trim();
+}
+
+function stripTitleSubtext(title) {
+  const clean = (entry) => {
+    if (!entry || typeof entry !== "object") return entry;
+    const next = { ...entry };
+    delete next.subtext;
+    delete next.subtextStyle;
+    return next;
+  };
+  return Array.isArray(title) ? title.map(clean) : clean(title);
+}
+
+function numericLayoutValue(value, fallback = 0) {
+  if (Number.isFinite(Number(value))) return Number(value);
+  return fallback;
+}
+
+function firstComponent(component) {
+  return asComponentArray(component)[0] || null;
+}
+
+function positionExportTitle(title, grid, exportWidth) {
+  if (!Number.isFinite(Number(exportWidth)) || Number(exportWidth) <= 0) return title;
+  const gridEntry = firstComponent(grid);
+  if (!gridEntry || typeof gridEntry !== "object") return title;
+  const left = numericLayoutValue(gridEntry.left, 0);
+  const right = numericLayoutValue(gridEntry.right, 0);
+  const top = numericLayoutValue(gridEntry.top, 72);
+  const center = (left + (Number(exportWidth) - right)) / 2;
+  const titleTop = Math.max(8, top - 50);
+  const position = (entry) => {
+    if (!entry || typeof entry !== "object") return entry;
+    return {
+      ...entry,
+      left: center,
+      top: titleTop,
+      textAlign: "center",
+    };
+  };
+  return Array.isArray(title) ? title.map((entry, index) => (index === 0 ? position(entry) : entry)) : position(title);
+}
+
+function isWhiteBackground(value) {
+  const normalized = String(value || "").replace(/\s+/g, "").toLowerCase();
+  return normalized === "#fff"
+    || normalized === "#ffffff"
+    || normalized === "white"
+    || normalized === "rgb(255,255,255)"
+    || normalized === "rgba(255,255,255,1)";
+}
+
+function cleanExportGrid(grid) {
+  const clean = (entry) => {
+    if (!entry || typeof entry !== "object") return entry;
+    const next = { ...entry };
+    if (isWhiteBackground(next.backgroundColor)) {
+      next.backgroundColor = COMPARATOR_TRANSPARENT_BACKGROUND;
+    }
+    return next;
+  };
+  return Array.isArray(grid) ? grid.map(clean) : clean(grid);
+}
+
+function cleanExportLegend(legend, series) {
+  const selected = asComponentArray(legend)[0]?.selected || {};
+  const visibleNames = new Set(
+    (series || [])
+      .map((item) => String(item?.name || "").trim())
+      .filter((name) => name && selected[name] !== false),
+  );
+  const clean = (entry) => {
+    if (!entry || typeof entry !== "object") return entry;
+    const next = { ...entry };
+    if (isWhiteBackground(next.backgroundColor)) {
+      next.backgroundColor = COMPARATOR_TRANSPARENT_BACKGROUND;
+    }
+    if (Array.isArray(next.data)) {
+      next.data = next.data.filter((item) => visibleNames.has(normalizeLegendName(item)));
+    }
+    next.show = next.data ? next.data.length > 0 : visibleNames.size > 0;
+    return next;
+  };
+  return Array.isArray(legend) ? legend.map(clean) : clean(legend);
+}
+
+function normalizeDataZoomAxisIndexes(value) {
+  if (value === undefined || value === null) return [];
+  return (Array.isArray(value) ? value : [value])
+    .map((entry) => Number(entry))
+    .filter((entry) => Number.isInteger(entry) && entry >= 0);
+}
+
+function dataZoomWindowForAxis(dataZoom, axisIndexKey, axisIndex) {
+  return (dataZoom || []).find((zoom) => {
+    if (!zoom || typeof zoom !== "object") return false;
+    const indexes = normalizeDataZoomAxisIndexes(zoom[axisIndexKey]);
+    if (!indexes.includes(axisIndex)) return false;
+    return Number.isFinite(Number(zoom.startValue)) && Number.isFinite(Number(zoom.endValue));
+  }) || null;
+}
+
+function outwardRoundedAxisBound(value, direction) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return value;
+  const scaled = numeric * 100;
+  const rounded = direction === "min" ? Math.floor(scaled) / 100 : Math.ceil(scaled) / 100;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+function roundedExportAxisInterval(min, max) {
+  const low = Number(min);
+  const high = Number(max);
+  if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) return null;
+  const rawInterval = (high - low) / 5;
+  if (!Number.isFinite(rawInterval) || rawInterval <= 0) return null;
+  const magnitude = 10 ** Math.floor(Math.log10(rawInterval));
+  const normalized = rawInterval / magnitude;
+  const niceStep = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  const interval = niceStep * magnitude;
+  const rounded = interval >= 1
+    ? Math.ceil(interval)
+    : Math.ceil(interval * 100) / 100;
+  return rounded > 0 ? rounded : null;
+}
+
+function isIterationAxis(entry) {
+  return normalizeComparableText(entry?.name) === "iteracion";
+}
+
+function stepDecimals(step) {
+  const text = String(step);
+  if (!text.includes(".")) return 0;
+  return text.split(".")[1].length;
+}
+
+function cleanStepNumber(value, decimals = 2) {
+  const precision = Math.max(0, Math.min(6, Number(decimals) || 0));
+  const rounded = Number(Number(value).toFixed(precision));
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+function ceilNiceStep(rawStep, decimals = 2) {
+  const numeric = Number(rawStep);
+  const minimum = 10 ** -Math.max(0, Math.min(6, Number(decimals) || 0));
+  if (!Number.isFinite(numeric) || numeric <= minimum) return minimum;
+  const magnitude = 10 ** Math.floor(Math.log10(numeric));
+  for (const multiplier of [1, 2, 5, 10]) {
+    const candidate = cleanStepNumber(multiplier * magnitude, Math.max(decimals, stepDecimals(multiplier * magnitude)));
+    if (candidate >= numeric && candidate >= minimum) return cleanStepNumber(candidate, decimals);
+  }
+  return cleanStepNumber(10 * magnitude, decimals);
+}
+
+function floorToStep(value, step) {
+  return cleanStepNumber(Math.floor((Number(value) + Number.EPSILON) / step) * step);
+}
+
+function ceilToStep(value, step) {
+  return cleanStepNumber(Math.ceil((Number(value) - Number.EPSILON) / step) * step);
+}
+
+export function comparatorRegularAxisScale(min, max, options = {}) {
+  const low = Number(min);
+  const high = Number(max);
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return null;
+  const decimals = Math.max(0, Math.min(2, Number(options.decimals ?? 2)));
+  const targetIntervals = Math.max(1, Math.trunc(Number(options.targetIntervals) || 5));
+  const minIntervals = Math.max(1, Math.trunc(Number(options.minIntervals) || 5));
+  const dataMin = Math.min(low, high);
+  const dataMax = Math.max(low, high);
+  const rawRange = dataMax - dataMin;
+  const minimumStep = 10 ** -decimals;
+  const interval = ceilNiceStep(Math.max(rawRange / targetIntervals, minimumStep), decimals);
+  const minimumSpan = interval * minIntervals;
+  let scaleMin = floorToStep(dataMin, interval);
+  let scaleMax = ceilToStep(dataMax, interval);
+
+  if (scaleMax <= scaleMin) {
+    const center = cleanStepNumber((dataMin + dataMax) / 2, decimals);
+    scaleMin = floorToStep(center - (minimumSpan / 2), interval);
+    scaleMax = cleanStepNumber(scaleMin + minimumSpan, decimals);
+  }
+
+  if ((scaleMax - scaleMin) < minimumSpan) {
+    const targetMaxFromMin = cleanStepNumber(scaleMin + minimumSpan, decimals);
+    if (targetMaxFromMin >= dataMax) {
+      scaleMax = targetMaxFromMin;
+    } else {
+      scaleMax = ceilToStep(dataMax, interval);
+      scaleMin = cleanStepNumber(scaleMax - minimumSpan, decimals);
+    }
+  }
+
+  while (scaleMin > dataMin) scaleMin = cleanStepNumber(scaleMin - interval, decimals);
+  while (scaleMax < dataMax) scaleMax = cleanStepNumber(scaleMax + interval, decimals);
+
+  const intervalCount = Math.max(1, Math.round((scaleMax - scaleMin) / interval));
+  const ticks = Array.from({ length: intervalCount + 1 }, (_, index) =>
+    cleanStepNumber(scaleMin + (interval * index), decimals));
+  const labels = ticks.map((tick) => comparatorFormatAxisTick(tick, decimals));
+  if (new Set(labels).size !== labels.length) {
+    const expandedMax = cleanStepNumber(scaleMin + (minimumStep * minIntervals), decimals);
+    return comparatorRegularAxisScale(scaleMin, expandedMax, { decimals, targetIntervals, minIntervals });
+  }
+
+  return {
+    min: scaleMin,
+    max: scaleMax,
+    interval,
+    splitNumber: intervalCount,
+    ticks,
+  };
+}
+
+export function comparatorRegularAxisScaleForPoints(points = [], axis = "y", options = {}) {
+  const values = (points || [])
+    .map((point) => finiteAxisValue(point, axis))
+    .filter((value) => value !== null);
+  if (!values.length) return null;
+  return comparatorRegularAxisScale(Math.min(...values), Math.max(...values), options);
+}
+
+function roundedIterationAxisMax(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 10;
+  return Math.max(10, Math.ceil(numeric / 10) * 10);
+}
+
+function cleanExportAxis(axis, dataZoom, axisIndexKey) {
+  const clean = (entry, axisIndex) => {
+    if (!entry || typeof entry !== "object") return entry;
+    const next = { ...entry };
+    const zoom = dataZoomWindowForAxis(dataZoom, axisIndexKey, axisIndex);
+    if (zoom) {
+      const startValue = Number(zoom.startValue);
+      const endValue = Number(zoom.endValue);
+      next.min = outwardRoundedAxisBound(Math.min(startValue, endValue), "min");
+      next.max = outwardRoundedAxisBound(Math.max(startValue, endValue), "max");
+    }
+    if (axisIndexKey === "xAxisIndex" && isIterationAxis(next)) {
+      next.min = 0;
+      next.max = roundedIterationAxisMax(next.max);
+      next.interval = 10;
+      next.minInterval = 10;
+    } else if (axisIndexKey === "yAxisIndex") {
+      const scale = comparatorRegularAxisScale(next.min, next.max);
+      if (scale) {
+        next.min = scale.min;
+        next.max = scale.max;
+        next.interval = scale.interval;
+        next.splitNumber = scale.splitNumber;
+      }
+    }
+    next.axisLabel = {
+      ...(next.axisLabel || {}),
+      formatter: comparatorChartAxisTickFormatter,
+    };
+    const interval = axisIndexKey === "xAxisIndex" && isIterationAxis(next)
+      ? null
+      : roundedExportAxisInterval(next.min, next.max);
+    if (interval !== null && next.interval === undefined) {
+      next.interval = interval;
+    }
+    return next;
+  };
+  return Array.isArray(axis) ? axis.map((entry, index) => clean(entry, index)) : clean(axis, 0);
+}
+
+export function comparatorChartExportOption(option = {}, exportLayout = {}) {
+  const next = cloneComparatorChartOptionValue(option || {});
+  const dataZoom = asComponentArray(next.dataZoom);
+  next.backgroundColor = COMPARATOR_TRANSPARENT_BACKGROUND;
+  next.animation = false;
+  next.animationDuration = 0;
+  next.animationDurationUpdate = 0;
+  next.stateAnimation = { duration: 0 };
+  next.title = stripTitleSubtext(next.title);
+  next.xAxis = cleanExportAxis(next.xAxis, dataZoom, "xAxisIndex");
+  next.yAxis = cleanExportAxis(next.yAxis, dataZoom, "yAxisIndex");
+  delete next.toolbox;
+  delete next.dataZoom;
+  delete next.brush;
+  next.graphic = [];
+  next.series = asComponentArray(next.series)
+    .filter((series) => !series?.comparatorExportExclude)
+    .map((series) => {
+      if (!series || typeof series !== "object") return series;
+      const cleanSeries = { ...series };
+      delete cleanSeries.markLine;
+      delete cleanSeries.comparatorExportExclude;
+      cleanSeries.animation = false;
+      cleanSeries.animationDuration = 0;
+      cleanSeries.animationDurationUpdate = 0;
+      cleanSeries.clip = true;
+      return cleanSeries;
+    });
+  next.legend = cleanExportLegend(next.legend, next.series);
+  next.grid = cleanExportGrid(next.grid);
+  next.title = positionExportTitle(next.title, next.grid, exportLayout.exportWidth);
+  return next;
+}
 
 export function comparatorExpandedAxisWindow(defaultMin, defaultMax, options = {}) {
   const rawMin = Number(defaultMin);
@@ -948,7 +1483,7 @@ export function comparatorMetricMetadata(metricKey) {
   if (metricKey === "globalEntropy") {
     return { description: "Mayor entity entropy indica mayor variedad conceptual o semantica.", higherIsBetter: true };
   }
-  return { description: "Mayor HV es mejor: mas area dominada respecto a [0,0].", higherIsBetter: true };
+  return { description: "Mayor hipervolumen es mejor: más área dominada respecto a [0,0].", higherIsBetter: true };
 }
 
 export function comparatorMetricExtremes(values, higherIsBetter) {

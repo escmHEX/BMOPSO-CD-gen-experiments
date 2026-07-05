@@ -849,6 +849,15 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             )
             return
 
+        if path_parts == ["charting"]:
+            try:
+                self.send_json(200, {"charting": self.comparator_service.charting_config()})
+            except ValueError as error:
+                self.send_json(400, {"error": str(error)})
+            except Exception as error:
+                self.send_json(500, {"error": str(error)})
+            return
+
         if len(path_parts) == 2 and path_parts[0] == "runs":
             run = self.comparator_service.get_run(path_parts[1])
             if not run:
@@ -906,6 +915,11 @@ class ToolPortalHandler(http.server.SimpleHTTPRequestHandler):
             if path_parts == ["runs"]:
                 run = self.comparator_service.start_run(self.read_json_body())
                 self.send_json(202, run)
+                return
+
+            if path_parts == ["charting"]:
+                charting = self.comparator_service.save_charting_config(self.read_json_body())
+                self.send_json(200, {"charting": charting})
                 return
 
             if len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "cancel":

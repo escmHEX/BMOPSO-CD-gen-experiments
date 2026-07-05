@@ -55,6 +55,49 @@ class ComparatorFrontendDownloadTests(unittest.TestCase):
             app,
         )
 
+    def test_comparator_chart_label_modal_and_charting_route_are_wired(self):
+        html = (self.root / "LLM" / "index.html").read_text(encoding="utf-8")
+        app = (self.root / "LLM" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="comparatorChartLabelsModal"', html)
+        self.assertIn('id="comparatorChartTitleInput"', html)
+        self.assertIn('id="comparatorChartXAxisInput"', html)
+        self.assertIn('id="comparatorChartYAxisInput"', html)
+        self.assertIn('comparatorChartLabelsModal: document.querySelector("#comparatorChartLabelsModal")', app)
+        self.assertIn('requestComparatorJson("/charting"', app)
+        self.assertIn('COMPARATOR_CHART_LABEL_TOOL_KEY', app)
+        self.assertIn('openComparatorChartLabelsModal', app)
+        self.assertIn('downloadComparatorChartImage', app)
+        self.assertIn('comparatorChartExportOption', app)
+        self.assertIn('COMPARATOR_TRANSPARENT_BACKGROUND', app)
+        self.assertIn('installComparatorLocalLegend(chart, chartNode, nextOption.series || [])', app)
+        self.assertIn('exportOptionFactory: () => buildOption({ publicationMode: true })', app)
+        self.assertIn('COMPARATOR_CHART_EXPORT_WIDTH = 1280', app)
+        self.assertIn('COMPARATOR_CHART_EXPORT_HEIGHT = 760', app)
+        self.assertIn('COMPARATOR_PUBLICATION_BORDER_WIDTH = 3', app)
+        self.assertIn('chart.resize({', app)
+        self.assertNotIn('backgroundColor: "#ffffff",\n    excludeComponents: ["toolbox", "dataZoom", "brush"]', app)
+        self.assertNotIn('publicationMode: true,\n          chartKey: "embeddingProjection"', app)
+        self.assertNotIn('publicationMode: true,\n      chartKey: "embeddingOverlay"', app)
+
+    def test_pareto_hypervolume_toggle_and_publication_styles_are_wired(self):
+        app = (self.root / "LLM" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('COMPARATOR_PARETO_HV_TOOL_KEY', app)
+        self.assertIn('showComparatorHypervolumeAreaByScope', app)
+        self.assertIn('Mostrar área de hipervolumen', app)
+        self.assertIn('hideMetricBadgeOnExport', app)
+        self.assertIn('exportOptionFactory: () => buildOption({ exportMode: true, publicationMode: true })', app)
+        self.assertIn('exportOptionFactory: () => buildFrontOption({ exportMode: true, publicationMode: true })', app)
+        self.assertIn('fixedBadge: exportMode ? null : diagnosticsBadge', app)
+        self.assertIn('publicationMode: Boolean(options.publicationMode)', app)
+        self.assertIn('COMPARATOR_SELECTED_STAR_SYMBOL', app)
+        self.assertIn('borderColor: "#111111"', app)
+        self.assertIn('right: publicationMode ? legendLayout.gridRight : fixedBadgeDimensions ? fixedBadgeDimensions.width + 48 : 24', app)
+        self.assertIn('right: 24,\n      top: 88,', app)
+        self.assertNotIn('publicationMode: true,\n          chartKey: "pareto"', app)
+        self.assertNotIn('publicationMode: true,\n      chartKey: "internalBmopsoPareto"', app)
+
 
 if __name__ == "__main__":
     unittest.main()

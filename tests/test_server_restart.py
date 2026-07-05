@@ -146,6 +146,87 @@ class ToolPortalRestartTests(unittest.TestCase):
 
         self.assertEqual(sent, [(500, {"error": "No module named numpy"})])
 
+    def test_comparator_charting_get_and_post_use_effective_config_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "baselines" / "comparator_config.local.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "defaults": {"model": "llama3"},
+                        "proposals": {},
+                        "charting": {
+                            "library": "Apache ECharts",
+                            "labels": {
+                                "hypervolume": {
+                                    "title": "Hipervolumen guardado",
+                                    "xAxis": "Generacion",
+                                    "yAxis": "Hipervolumen",
+                                }
+                            },
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            service = comparator_module.ComparatorService(root, config_path=config_path)
+            sent: list[tuple[int, dict]] = []
+
+            get_handler = SimpleNamespace(
+                path="/api/comparator/charting",
+                comparator_path_parts=lambda: ["charting"],
+                comparator_service=service,
+                send_json=lambda status, payload: sent.append((status, payload)),
+            )
+            server.ToolPortalHandler.handle_comparator_get(get_handler)
+
+            self.assertEqual(sent[0][0], 200)
+            self.assertEqual(sent[0][1]["charting"]["labels"]["hypervolume"]["title"], "Hipervolumen guardado")
+
+            post_handler = SimpleNamespace(
+                path="/api/comparator/charting",
+                comparator_path_parts=lambda: ["charting"],
+                comparator_service=service,
+                read_json_body=lambda: {
+                    "labels": {
+                        "pareto": {
+                            "title": "Frente tesis",
+                            "xAxis": "Fidelidad normalizada",
+                            "yAxis": "Diversidad normalizada",
+                        }
+                    }
+                },
+                send_json=lambda status, payload: sent.append((status, payload)),
+            )
+            server.ToolPortalHandler.handle_comparator_post(post_handler)
+
+            self.assertEqual(sent[1][0], 200)
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["charting"]["labels"]["pareto"]["title"], "Frente tesis")
+            self.assertEqual(saved["charting"]["library"], "Apache ECharts")
+
+    def test_comparator_charting_post_rejects_blank_label_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "baselines" / "comparator_config.local.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text('{"charting": {}}', encoding="utf-8")
+            sent: list[tuple[int, dict]] = []
+            fake_handler = SimpleNamespace(
+                path="/api/comparator/charting",
+                comparator_path_parts=lambda: ["charting"],
+                comparator_service=comparator_module.ComparatorService(root, config_path=config_path),
+                read_json_body=lambda: {"labels": {"hypervolume": {"title": ""}}},
+                send_json=lambda status, payload: sent.append((status, payload)),
+            )
+
+            server.ToolPortalHandler.handle_comparator_post(fake_handler)
+
+            self.assertEqual(sent[0][0], 400)
+            self.assertIn("title", sent[0][1]["error"])
+
     def test_comparator_run_download_get_returns_zip_response(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

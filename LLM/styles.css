@@ -909,6 +909,15 @@ label span,
   scroll-padding-bottom: 24px;
 }
 
+.comparator-chart-labels-modal {
+  width: min(640px, 96vw);
+}
+
+.comparator-chart-label-fields {
+  display: grid;
+  gap: 12px;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -1345,6 +1354,10 @@ input[type="checkbox"]:disabled {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 18px;
+}
+
+#comparatorParetoCharts.chart-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 760px), 1fr));
 }
 
 .bmopso-internal-analysis,

@@ -108,6 +108,114 @@ def load_comparator_config() -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+class ComparatorChartingConfigStore:
+    LABEL_FIELDS = ("title", "xAxis", "yAxis")
+    MAX_LABEL_LENGTH = 160
+    KEY_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$")
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._lock = threading.RLock()
+
+    def public_config(self) -> dict[str, Any]:
+        with self._lock:
+            return self._public_charting(self._read_payload().get("charting"))
+
+    def save(self, payload: dict[str, Any]) -> dict[str, Any]:
+        labels = self._validated_labels(payload.get("labels"))
+        with self._lock:
+            config = self._read_payload()
+            charting = dict(config.get("charting") if isinstance(config.get("charting"), dict) else {})
+            current_labels = dict(charting.get("labels") if isinstance(charting.get("labels"), dict) else {})
+            for key, values in labels.items():
+                current = dict(current_labels.get(key) if isinstance(current_labels.get(key), dict) else {})
+                current.update(values)
+                current_labels[key] = current
+            charting["labels"] = current_labels
+            config["charting"] = charting
+            self._write_payload(config)
+            return self._public_charting(charting)
+
+    def _read_payload(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {}
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"No se pudo leer la configuracion del comparador: {error}") from error
+        if not isinstance(payload, dict):
+            raise ValueError("La configuracion del comparador debe ser un objeto JSON.")
+        return payload
+
+    def _write_payload(self, payload: dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        encoded = json.dumps(payload, ensure_ascii=False, indent=2)
+        last_error: OSError | None = None
+        for attempt in range(6):
+            temp_path = self.path.with_name(f"{self.path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+            try:
+                temp_path.write_text(encoded, encoding="utf-8")
+                temp_path.replace(self.path)
+                return
+            except OSError as error:
+                last_error = error
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                time.sleep(0.05 * (attempt + 1))
+        if last_error is not None:
+            raise last_error
+
+    def _validated_labels(self, raw_labels: Any) -> dict[str, dict[str, str]]:
+        if not isinstance(raw_labels, dict) or not raw_labels:
+            raise ValueError("labels debe ser un objeto no vacio.")
+        labels: dict[str, dict[str, str]] = {}
+        for raw_key, raw_values in raw_labels.items():
+            key = str(raw_key or "").strip()
+            if not self.KEY_RE.match(key):
+                raise ValueError("Cada clave de labels debe ser alfanumerica.")
+            if not isinstance(raw_values, dict):
+                raise ValueError(f"labels.{key} debe ser un objeto.")
+            values: dict[str, str] = {}
+            for field in self.LABEL_FIELDS:
+                if field not in raw_values:
+                    continue
+                value = str(raw_values.get(field) or "").strip()
+                if not value:
+                    raise ValueError(f"labels.{key}.{field} no puede estar vacio.")
+                if len(value) > self.MAX_LABEL_LENGTH:
+                    raise ValueError(f"labels.{key}.{field} no puede superar {self.MAX_LABEL_LENGTH} caracteres.")
+                values[field] = value
+            if values:
+                labels[key] = values
+        if not labels:
+            raise ValueError("labels debe incluir al menos title, xAxis o yAxis.")
+        return labels
+
+    def _public_charting(self, charting: Any) -> dict[str, Any]:
+        source = charting if isinstance(charting, dict) else {}
+        labels = source.get("labels") if isinstance(source.get("labels"), dict) else {}
+        clean_labels: dict[str, dict[str, str]] = {}
+        for key, values in labels.items():
+            if not self.KEY_RE.match(str(key or "")) or not isinstance(values, dict):
+                continue
+            clean_values = {
+                field: str(values[field]).strip()
+                for field in self.LABEL_FIELDS
+                if field in values and str(values[field]).strip()
+            }
+            if clean_values:
+                clean_labels[str(key)] = clean_values
+        public = {
+            "library": str(source.get("library") or "Apache ECharts"),
+            "version": str(source.get("version") or ""),
+            "localPath": str(source.get("localPath") or ""),
+            "labels": clean_labels,
+        }
+        return public
+
+
 def config_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -2241,7 +2349,7 @@ def hidden_subprocess_kwargs(detached: bool = False) -> dict[str, Any]:
 
 
 class ComparatorService:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, config_path: Path | None = None) -> None:
         self.root = root
         self.runs_root = root / "runs" / "comparator"
         self._runs: dict[str, dict[str, Any]] = {}
@@ -2249,6 +2357,7 @@ class ComparatorService:
         self._posthoc_spacy_model: Any | None = None
         self._comparable_proxy = ComparableObjectiveProxy()
         self._front_point_diagnostic_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        self._charting_config_store = ComparatorChartingConfigStore(config_path or COMPARATOR_CONFIG_PATH)
 
     def list_proposals(self) -> list[dict[str, Any]]:
         proposals = []
@@ -2321,7 +2430,14 @@ class ComparatorService:
             "executionMode": DEFAULT_EXECUTION_MODE,
             "metricSchemaVersion": METRIC_SCHEMA_VERSION,
             "metricCoordinateSpace": METRIC_COORDINATE_SPACE,
+            "charting": self.charting_config(),
         }
+
+    def charting_config(self) -> dict[str, Any]:
+        return self._charting_config_store.public_config()
+
+    def save_charting_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._charting_config_store.save(payload)
 
     def _initial_proposal_state(
         self,

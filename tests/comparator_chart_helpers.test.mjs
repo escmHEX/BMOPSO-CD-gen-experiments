@@ -33,6 +33,17 @@ import {
   comparatorMetricMetadata,
   comparatorMetricReferenceLines,
   comparatorMetricReferenceLinePatch,
+  comparatorDefaultChartLabels,
+  comparatorMergeChartLabels,
+  comparatorPublicationLegendEntries,
+  comparatorPublicationLegendLayout,
+  comparatorChartExportOption,
+  comparatorChartAxisTickFormatter,
+  comparatorFormatAxisTick,
+  comparatorRegularAxisScale,
+  comparatorRegularAxisScaleForPoints,
+  COMPARATOR_TRANSPARENT_BACKGROUND,
+  COMPARATOR_SELECTED_STAR_SYMBOL,
   comparatorActivePointCount,
   comparatorLimitSeriesToIteration,
   comparatorPartitionPointsByExclusion,
@@ -150,6 +161,239 @@ test("metric reference line labels stay inside the chart grid", () => {
   assert.equal(referenceLines.data[1].name, "Peor");
   assert.equal(referenceLines.data[1].label.position, "insideEndBottom");
   assert.equal(referenceLines.data[1].label.distance, 4);
+});
+
+test("default comparator chart labels are thesis-ready Spanish labels without abbreviations", () => {
+  const labels = comparatorDefaultChartLabels();
+
+  assert.deepEqual(labels.hypervolume, {
+    title: "Hipervolumen",
+    xAxis: "Iteración",
+    yAxis: "Hipervolumen",
+  });
+  assert.deepEqual(labels.pareto, {
+    title: "Frente de Pareto",
+    xAxis: "Fidelidad normalizada",
+    yAxis: "Diversidad normalizada",
+  });
+  assert.ok(Object.values(labels).every((item) => !/\bHV\b/u.test(item.title)));
+  assert.equal(labels.contribution.title, "Contribución");
+  assert.equal(labels.extent.title, "Extensión del frente");
+  assert.equal(labels.unaryEntropy.yAxis, "Entropía unaria");
+  assert.equal(labels.embeddingProjection.xAxis, "Dimensión proyectada 1");
+});
+
+test("chart label overrides merge with defaults and discard unknown or blank fields", () => {
+  const labels = comparatorMergeChartLabels({
+    hypervolume: { title: "Hipervolumen tesis", xAxis: "Generación", yAxis: "" },
+    unknown: { title: "No debe aparecer", xAxis: "X", yAxis: "Y" },
+  });
+
+  assert.equal(labels.hypervolume.title, "Hipervolumen tesis");
+  assert.equal(labels.hypervolume.xAxis, "Generación");
+  assert.equal(labels.hypervolume.yAxis, "Hipervolumen");
+  assert.equal(labels.unknown, undefined);
+});
+
+test("chart label merge upgrades exact legacy defaults without overwriting custom labels", () => {
+  const labels = comparatorMergeChartLabels({
+    hypervolume: { xAxis: "Iteracion" },
+    contribution: { title: "Contribucion", yAxis: "Contribucion personalizada" },
+    embeddingProjection: { title: "Proyeccion de diversidad" },
+  });
+
+  assert.equal(labels.hypervolume.xAxis, "Iteración");
+  assert.equal(labels.contribution.title, "Contribución");
+  assert.equal(labels.contribution.yAxis, "Contribucion personalizada");
+  assert.equal(labels.embeddingProjection.title, "Proyección de diversidad");
+});
+
+test("publication legend entries keep visible series with black text metadata", () => {
+  const entries = comparatorPublicationLegendEntries(
+    [
+      { name: "Soluciones del frente", type: "scatter", itemStyle: { color: "#64b5f6" } },
+      { name: "Area de hipervolumen", showInLegend: false, lineStyle: { color: "#2A8C00" } },
+      { name: "EVOLMD-MO", type: "line", lineStyle: { color: "#111111" } },
+    ],
+    { "EVOLMD-MO": false },
+  );
+
+  assert.deepEqual(entries, [
+    { name: "Soluciones del frente", color: "#64b5f6", icon: "circle", textColor: "#111111" },
+  ]);
+});
+
+test("publication legend layout reserves an external legend box", () => {
+  const layout = comparatorPublicationLegendLayout([
+    { name: "Propuesta experimental con nombre largo", type: "line", lineStyle: { color: "#2A8C00" } },
+    { name: "Soluciones seleccionadas", type: "scatter", symbol: "star", itemStyle: { color: "#e11d48" } },
+  ]);
+
+  assert.equal(layout.entries.length, 2);
+  assert.equal(layout.entries[0].icon, "path://M0,5L28,5L28,7L0,7Z");
+  assert.equal(layout.entries[1].icon, COMPARATOR_SELECTED_STAR_SYMBOL);
+  assert.ok(layout.width >= 240);
+  assert.equal(layout.legendGap, 9);
+  assert.equal(layout.gridRight, layout.width + layout.legendRight + 9);
+});
+
+test("axis tick formatter keeps at most two decimals", () => {
+  assert.equal(comparatorFormatAxisTick(0.9981), "1");
+  assert.equal(comparatorFormatAxisTick(0.2225), "0.22");
+  assert.equal(comparatorFormatAxisTick(12), "12");
+  assert.equal(comparatorFormatAxisTick(-0.004), "0");
+});
+
+test("chart axis tick formatter ignores the ECharts tick index argument", () => {
+  assert.equal(comparatorChartAxisTickFormatter(0.2, 0), "0.2");
+  assert.equal(comparatorChartAxisTickFormatter(0.25, 1), "0.25");
+  assert.equal(comparatorChartAxisTickFormatter(0.3, 2), "0.3");
+});
+
+test("regular axis scale uses monotonic two-decimal ticks", () => {
+  const scale = comparatorRegularAxisScale(0.2225, 0.409558);
+
+  assert.deepEqual(scale, {
+    min: 0.2,
+    max: 0.45,
+    interval: 0.05,
+    splitNumber: 5,
+    ticks: [0.2, 0.25, 0.3, 0.35, 0.4, 0.45],
+  });
+  assert.deepEqual(scale.ticks.map((tick) => comparatorFormatAxisTick(tick)), ["0.2", "0.25", "0.3", "0.35", "0.4", "0.45"]);
+});
+
+test("regular axis scale expands tiny ranges to unique ordered labels", () => {
+  const scale = comparatorRegularAxisScaleForPoints([{ value: [0, 0.671] }, { value: [1, 0.704] }], "y");
+  const labels = scale.ticks.map((tick) => comparatorFormatAxisTick(tick));
+
+  assert.deepEqual(scale.ticks, [0.67, 0.68, 0.69, 0.7, 0.71, 0.72]);
+  assert.equal(new Set(labels).size, labels.length);
+  assert.deepEqual([...labels].sort((left, right) => Number(left) - Number(right)), labels);
+});
+
+test("chart export option removes UI, descriptions, metric badges, reference lines and white chart backgrounds", () => {
+  const option = {
+    backgroundColor: "#ffffff",
+    title: { text: "Hipervolumen", subtext: "Mayor HV es mejor", subtextStyle: { color: "#64748b" } },
+    toolbox: { show: true },
+    dataZoom: [{ type: "inside" }],
+    brush: { toolbox: ["rect"] },
+    graphic: [{ type: "group" }],
+    legend: {
+      show: true,
+      backgroundColor: "#e9e9f2",
+      selected: { "Serie oculta": false },
+      data: [{ name: "Serie visible" }, { name: "Serie oculta" }],
+    },
+    grid: { backgroundColor: "#ffffff", borderWidth: 1 },
+    series: [
+      {
+        name: "Serie visible",
+        type: "line",
+        markLine: { data: [{ name: "Mejor", yAxis: 0.9 }, { name: "Peor", yAxis: 0.1 }] },
+        data: [[0, 0.2]],
+      },
+      {
+        name: "Serie oculta",
+        type: "line",
+        data: [[0, 0.3]],
+      },
+      {
+        name: "Soluciones del frente inactivas",
+        type: "scatter",
+        comparatorExportExclude: true,
+        data: [[0.1, 0.9]],
+      },
+    ],
+  };
+
+  const exported = comparatorChartExportOption(option);
+
+  assert.equal(exported.backgroundColor, COMPARATOR_TRANSPARENT_BACKGROUND);
+  assert.equal(exported.animation, false);
+  assert.equal(exported.animationDuration, 0);
+  assert.deepEqual(exported.stateAnimation, { duration: 0 });
+  assert.equal(exported.title.subtext, undefined);
+  assert.equal(exported.title.subtextStyle, undefined);
+  assert.equal(exported.toolbox, undefined);
+  assert.equal(exported.dataZoom, undefined);
+  assert.equal(exported.brush, undefined);
+  assert.deepEqual(exported.graphic, []);
+  assert.equal(exported.grid.backgroundColor, COMPARATOR_TRANSPARENT_BACKGROUND);
+  assert.equal(exported.legend.backgroundColor, "#e9e9f2");
+  assert.deepEqual(exported.legend.data, [{ name: "Serie visible" }]);
+  assert.deepEqual(exported.series.map((item) => item.name), ["Serie visible", "Serie oculta"]);
+  assert.equal(exported.series[0].markLine, undefined);
+  assert.equal(exported.series[0].animation, false);
+  assert.equal(exported.series[0].clip, true);
+});
+
+test("chart export option converts dataZoom windows into rounded explicit axis bounds", () => {
+  const exported = comparatorChartExportOption({
+    xAxis: { name: "Iteración", min: -100, max: 200 },
+    yAxis: { min: -8, max: 9 },
+    dataZoom: [
+      { type: "inside", xAxisIndex: 0, startValue: 0, endValue: 70 },
+      { type: "inside", yAxisIndex: 0, startValue: 0.2225, endValue: 0.409558 },
+    ],
+    series: [{ name: "Hipervolumen", type: "line", data: [[0, 0.2], [70, 0.39]] }],
+  });
+
+  assert.equal(exported.xAxis.min, 0);
+  assert.equal(exported.xAxis.max, 70);
+  assert.equal(exported.xAxis.interval, 10);
+  assert.equal(exported.xAxis.minInterval, 10);
+  assert.equal(exported.yAxis.min, 0.2);
+  assert.equal(exported.yAxis.max, 0.45);
+  assert.equal(exported.yAxis.interval, 0.05);
+  assert.equal(exported.yAxis.splitNumber, 5);
+  assert.equal(exported.yAxis.axisLabel.formatter(0.409558), "0.41");
+  assert.equal(exported.dataZoom, undefined);
+});
+
+test("chart export option keeps generation zero and rounds iteration max to tens", () => {
+  const exported = comparatorChartExportOption({
+    xAxis: { name: "Iteración", min: -12, max: 74 },
+    yAxis: { min: 0.2225, max: 0.409558 },
+    dataZoom: [
+      { type: "inside", xAxisIndex: 0, startValue: 0, endValue: 53 },
+      { type: "inside", yAxisIndex: 0, startValue: 0.2225, endValue: 0.409558 },
+    ],
+    series: [{
+      name: "Hipervolumen",
+      type: "line",
+      data: [[0, 0.24], [1, 0.3], [53, 0.39]],
+    }],
+  });
+
+  assert.equal(exported.xAxis.min, 0);
+  assert.equal(exported.xAxis.max, 60);
+  assert.equal(exported.xAxis.interval, 10);
+  assert.equal(exported.xAxis.axisLabel.formatter(53.333), "53.33");
+  assert.deepEqual(exported.series[0].data[0], [0, 0.24]);
+});
+
+test("chart export option centers title against the reserved plot grid when export width is known", () => {
+  const exported = comparatorChartExportOption({
+    title: { text: "Hipervolumen", left: "center", top: 12 },
+    grid: { left: 62, right: 286, top: 84 },
+    series: [],
+  }, { exportWidth: 1280 });
+
+  assert.equal(exported.title.left, 528);
+  assert.equal(exported.title.top, 34);
+  assert.equal(exported.title.textAlign, "center");
+});
+
+test("chart export option preserves non-white plot backgrounds for Pareto", () => {
+  const exported = comparatorChartExportOption({
+    grid: { backgroundColor: "#e9e9f2" },
+    series: [],
+  });
+
+  assert.equal(exported.backgroundColor, COMPARATOR_TRANSPARENT_BACKGROUND);
+  assert.equal(exported.grid.backgroundColor, "#e9e9f2");
 });
 
 test("global non-dominated front is computed from all proposal points", () => {
