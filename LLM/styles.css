@@ -610,6 +610,21 @@ label span,
   margin-top: 3px;
 }
 
+.bmopso-edit-selection-field {
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.bmopso-edit-selection-field input {
+  margin-top: 0;
+}
+
+.bmopso-edit-selection-field strong {
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
 .field-note {
   display: block;
   color: #52687c;

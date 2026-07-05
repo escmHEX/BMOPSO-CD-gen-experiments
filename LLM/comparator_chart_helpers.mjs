@@ -318,6 +318,35 @@ export function comparatorPartitionPointsByExclusion(points = [], excludedKeys =
   }, { active: [], inactive: [] });
 }
 
+export function comparatorSelectedFrontPointsWithEditable(
+  baseSelectedPoints = [],
+  frontPoints = [],
+  selectedKeys = new Set(),
+  excludedKeys = new Set(),
+  namespace = "",
+) {
+  const selected = Array.isArray(baseSelectedPoints) ? [...baseSelectedPoints] : [];
+  const editableKeys = selectedKeys instanceof Set ? selectedKeys : new Set(selectedKeys || []);
+  if (!editableKeys.size) return selected;
+  const excluded = excludedKeys instanceof Set ? excludedKeys : new Set(excludedKeys || []);
+  const selectedMembership = new Set(
+    selected
+      .map((point) => comparatorFrontMembershipKey(point, namespace))
+      .filter(Boolean),
+  );
+  (Array.isArray(frontPoints) ? frontPoints : []).forEach((point, index) => {
+    const interactionKey = point?.pointInteractionKey || comparatorPointInteractionKey(point, index, namespace);
+    if (!editableKeys.has(interactionKey) || excluded.has(interactionKey)) return;
+    const membershipKey = comparatorFrontMembershipKey(point, namespace);
+    if (membershipKey && selectedMembership.has(membershipKey)) return;
+    selected.push(point);
+    if (membershipKey) {
+      selectedMembership.add(membershipKey);
+    }
+  });
+  return selected;
+}
+
 export function comparatorClearPointExclusions(excludedKeys) {
   if (!(excludedKeys instanceof Set) || excludedKeys.size === 0) return false;
   excludedKeys.clear();

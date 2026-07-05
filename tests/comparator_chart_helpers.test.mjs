@@ -55,6 +55,7 @@ import {
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
   comparatorClearPointExclusions,
+  comparatorSelectedFrontPointsWithEditable,
   comparatorSelectedFrontPointsForIndividuals,
   comparatorSeriesWithFinalMetricReplacement,
   comparatorSeriesIterationExtent,
@@ -1458,6 +1459,61 @@ test("BMOPSO internal front options keep final first and sort iteration fronts",
   assert.deepEqual(options.map((item) => item.label), ["Final", "Iteración 2", "Iteración 10"]);
   assert.equal(options[0].analysis.charts.selected.length, 1);
   assert.deepEqual(options[1].analysis.charts.selected, []);
+});
+
+test("BMOPSO editable final selection adds selected front points", () => {
+  const frontPoints = [
+    { value: [0.2, 0.8], labelText: "Sol A", prompt: "Prompt A", instanceId: "binary-a", proposalId: "binary-mopso-cd", rank: 1 },
+    { value: [0.4, 0.6], labelText: "Sol B", prompt: "Prompt B", instanceId: "binary-a", proposalId: "binary-mopso-cd", rank: 2 },
+  ];
+  const selectedKeys = new Set([comparatorPointInteractionKey(frontPoints[1], 1, "bmopso-points")]);
+
+  const selected = comparatorSelectedFrontPointsWithEditable([], frontPoints, selectedKeys, new Set(), "bmopso-points");
+
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].labelText, "Sol B");
+  assert.equal(selected[0].prompt, "Prompt B");
+});
+
+test("BMOPSO editable final selection ignores excluded front points", () => {
+  const frontPoints = [
+    { value: [0.4, 0.6], labelText: "Sol B", prompt: "Prompt B", instanceId: "binary-a", proposalId: "binary-mopso-cd", rank: 2 },
+  ];
+  const key = comparatorPointInteractionKey(frontPoints[0], 0, "bmopso-points");
+
+  const selected = comparatorSelectedFrontPointsWithEditable([], frontPoints, new Set([key]), new Set([key]), "bmopso-points");
+
+  assert.deepEqual(selected, []);
+});
+
+test("BMOPSO editable final selection does not duplicate artifact selections", () => {
+  const artifactSelection = {
+    value: [0.2, 0.8],
+    labelText: "Sol A",
+    prompt: "Prompt A",
+    instanceId: "binary-a",
+    proposalId: "binary-mopso-cd",
+    rank: 99,
+  };
+  const frontPoints = [
+    { value: [0.2, 0.8], labelText: "Sol A", prompt: "Prompt A", instanceId: "binary-a", proposalId: "binary-mopso-cd", rank: 1 },
+  ];
+  const selectedKeys = new Set([comparatorPointInteractionKey(frontPoints[0], 0, "bmopso-points")]);
+
+  const selected = comparatorSelectedFrontPointsWithEditable([artifactSelection], frontPoints, selectedKeys, new Set(), "bmopso-points");
+
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].rank, 99);
+});
+
+test("BMOPSO editable final selection stays empty without editable keys", () => {
+  const frontPoints = [
+    { value: [0.2, 0.8], labelText: "Sol A", prompt: "Prompt A", instanceId: "binary-a", proposalId: "binary-mopso-cd", rank: 1 },
+  ];
+
+  const selected = comparatorSelectedFrontPointsWithEditable([], frontPoints, new Set(), new Set(), "bmopso-points");
+
+  assert.deepEqual(selected, []);
 });
 
 test("cost winners are disabled in exploratory mode", () => {

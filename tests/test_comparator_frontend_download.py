@@ -157,6 +157,18 @@ class ComparatorFrontendDownloadTests(unittest.TestCase):
         self.assertIn('exportOptionFactory: () => buildFrontOption({ exportMode: true, publicationMode: true })', app)
         self.assertIn('frontSelect.addEventListener("change"', app)
 
+    def test_internal_bmopso_editable_final_selection_is_wired(self):
+        app = (self.root / "LLM" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-bmopso-internal-edit-selection', app)
+        self.assertIn('Selección final editable', app)
+        self.assertIn('const editableSelectedKeysByFront = new Map()', app)
+        self.assertIn('editableSelectedKeys: editableSelectedKeysForActiveFront()', app)
+        self.assertIn('if (editSelectionInput?.checked)', app)
+        self.assertIn('toggleComparatorEditableInternalSelection', app)
+        self.assertIn('toggleComparatorInternalFrontExclusion', app)
+        self.assertIn('exportOptionFactory: () => buildFrontOption({ exportMode: true, publicationMode: true })', app)
+
 
 if __name__ == "__main__":
     unittest.main()

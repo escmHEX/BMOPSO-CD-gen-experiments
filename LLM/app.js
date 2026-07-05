@@ -39,6 +39,7 @@ import {
   comparatorPointInteractionKey,
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
+  comparatorSelectedFrontPointsWithEditable,
   comparatorSelectedFrontPointsForIndividuals,
   comparatorChartExportOption,
   comparatorChartAxisTickFormatter,
@@ -9420,6 +9421,10 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
             <span>Iteración</span>
             <select data-bmopso-internal-front-iteration></select>
           </label>
+          <label class="toggle-field bmopso-edit-selection-field">
+            <input type="checkbox" data-bmopso-internal-edit-selection>
+            <strong>Selección final editable</strong>
+          </label>
         </div>
         <div class="chart-surface" data-bmopso-internal-front></div>
       </article>
@@ -9435,6 +9440,7 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
   const frontNode = section.querySelector("[data-bmopso-internal-front]");
   const frontSelect = section.querySelector("[data-bmopso-internal-front-iteration]");
   const frontSelectField = section.querySelector("[data-bmopso-internal-front-iteration-field]");
+  const editSelectionInput = section.querySelector("[data-bmopso-internal-edit-selection]");
   const hvNode = section.querySelector("[data-bmopso-internal-hv]");
   window.queueMicrotask(() => {
     const frontChart = window.echarts.init(frontNode);
@@ -9445,6 +9451,7 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
     let internalFrontDiagnosticSequence = 0;
     const internalScopeKey = `${runId || "run"}::${item.instanceId || item.displayName || index}::bmopso-internal`;
     const frontOptions = comparatorInternalBmopsoFrontOptions(item.analysis);
+    const editableSelectedKeysByFront = new Map();
     let selectedFrontKey = "final";
     if (frontSelect) {
       frontSelect.replaceChildren(
@@ -9456,12 +9463,21 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
     }
     const activeInternalFrontAnalysis = () =>
       frontOptions.find((option) => option.key === selectedFrontKey)?.analysis || frontOptions[0]?.analysis || item.analysis;
+    const editableSelectedKeysForActiveFront = () => {
+      let keys = editableSelectedKeysByFront.get(selectedFrontKey);
+      if (!keys) {
+        keys = new Set();
+        editableSelectedKeysByFront.set(selectedFrontKey, keys);
+      }
+      return keys;
+    };
     const buildFrontOption = (optionOverrides = {}) => internalBmopsoParetoChartOption(
       comparatorChartLabel("internalBmopsoPareto").title,
       activeInternalFrontAnalysis(),
       style.color,
       {
         excludedKeys: frontExcludedKeys,
+        editableSelectedKeys: editableSelectedKeysForActiveFront(),
         diagnosticsByKey,
         showHypervolumeArea: showComparatorHypervolumeAreaByScope(internalScopeKey),
         ...optionOverrides,
@@ -9481,7 +9497,36 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
     });
     const frontOption = buildFrontOption();
     setComparatorChartOption(frontChart, frontNode, frontOption, null, frontControlsFactory());
-    installComparatorPointToggle(frontChart, frontNode, buildFrontOption, frontExcludedKeys, null, frontControlsFactory);
+    const renderInternalFrontChart = () => {
+      const selected = comparatorLegendSelection(frontChart);
+      setComparatorChartOption(frontChart, frontNode, buildFrontOption(), selected, frontControlsFactory());
+    };
+    const toggleComparatorInternalFrontExclusion = (key) => {
+      if (frontExcludedKeys.has(key)) {
+        frontExcludedKeys.delete(key);
+      } else {
+        frontExcludedKeys.add(key);
+      }
+      renderInternalFrontChart();
+    };
+    const toggleComparatorEditableInternalSelection = (key) => {
+      const keys = editableSelectedKeysForActiveFront();
+      if (keys.has(key)) {
+        keys.delete(key);
+      } else {
+        keys.add(key);
+      }
+      renderInternalFrontChart();
+    };
+    frontChart.on("click", (params) => {
+      const key = params?.data?.pointInteractionKey;
+      if (!key) return;
+      if (editSelectionInput?.checked) {
+        toggleComparatorEditableInternalSelection(key);
+      } else {
+        toggleComparatorInternalFrontExclusion(key);
+      }
+    });
     const loadActiveInternalFrontDiagnostics = () => {
       const requestSequence = internalFrontDiagnosticSequence + 1;
       internalFrontDiagnosticSequence = requestSequence;
@@ -11047,10 +11092,17 @@ function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C
     options.diagnosticsByKey,
     pointNamespace,
   );
-  const selectedPoints = (charts.selected || []).map((point) => comparatorChartPointFromRaw(point));
+  const baseSelectedPoints = (charts.selected || []).map((point) => comparatorChartPointFromRaw(point));
   const allPartition = comparatorPartitionInteractivePoints(allPoints, excludedKeys, pointNamespace);
-  const selectedPartition = comparatorPartitionInteractivePoints(selectedPoints, excludedKeys, pointNamespace);
   const activeAllPoints = allPartition.active.map((entry) => entry.point);
+  const selectedPoints = comparatorSelectedFrontPointsWithEditable(
+    baseSelectedPoints,
+    activeAllPoints,
+    options.editableSelectedKeys,
+    excludedKeys,
+    pointNamespace,
+  );
+  const selectedPartition = comparatorPartitionInteractivePoints(selectedPoints, excludedKeys, pointNamespace);
   const activeSelectedPoints = selectedPartition.active.map((entry) => entry.point);
   const inactiveAllPoints = exportMode ? [] : allPartition.inactive.map((entry) =>
     comparatorInactivePoint(entry, frontPointColor, { color: frontPointColor }),
