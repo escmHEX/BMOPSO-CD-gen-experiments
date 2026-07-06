@@ -1431,11 +1431,13 @@ input[type="checkbox"]:disabled {
 
 .chart-panel.is-chart-minimized .chart-surface,
 .chart-panel.is-chart-minimized .chart-help,
-.chart-panel.is-chart-minimized .comparator-iteration-slider {
+.chart-panel.is-chart-minimized .comparator-iteration-slider,
+.chart-panel.is-chart-minimized .comparator-point-radius-slider {
   display: none;
 }
 
-.comparator-iteration-slider {
+.comparator-iteration-slider,
+.comparator-point-radius-slider {
   display: grid;
   gap: 6px;
   margin-top: 8px;
@@ -1444,7 +1446,8 @@ input[type="checkbox"]:disabled {
   font-weight: 800;
 }
 
-.comparator-iteration-slider input {
+.comparator-iteration-slider input,
+.comparator-point-radius-slider input {
   width: 100%;
   accent-color: var(--accent);
 }

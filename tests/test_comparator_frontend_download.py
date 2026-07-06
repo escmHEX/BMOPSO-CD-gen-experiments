@@ -169,6 +169,30 @@ class ComparatorFrontendDownloadTests(unittest.TestCase):
         self.assertIn('toggleComparatorInternalFrontExclusion', app)
         self.assertIn('exportOptionFactory: () => buildFrontOption({ exportMode: true, publicationMode: true })', app)
 
+    def test_pareto_point_radius_slider_is_wired(self):
+        app = (self.root / "LLM" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('Radio visual', app)
+        self.assertIn('installComparatorPointRadiusSlider', app)
+        self.assertIn('COMPARATOR_DEFAULT_POINT_RADIUS_SCALE', app)
+        self.assertIn('comparatorScaledSymbolSize(8, options.pointRadiusScale)', app)
+        self.assertIn('comparatorScaledSymbolSize(18, options.pointRadiusScale)', app)
+        self.assertIn('comparatorScaledSymbolSize(14, pointRadiusScaleValue)', app)
+        self.assertIn('comparatorScaledSymbolSize(13, pointRadiusScaleValue)', app)
+        self.assertIn('pointRadiusScale', app)
+        self.assertIn('pointRadiusScale: pointRadiusScale()', app)
+        self.assertIn('pointRadiusScale: pointRadiusScaleValue', app)
+        self.assertIn('installComparatorPointRadiusSlider(normalizedChartNode', app)
+        self.assertIn('installComparatorPointRadiusSlider(frontNode', app)
+        self.assertIn('installComparatorPointRadiusSlider(dom.comparatorCombinedParetoChart', app)
+        self.assertIn('installComparatorPointRadiusSlider(dom.comparatorContributionChart', app)
+        self.assertIn('paretoChartOption(', app)
+        self.assertIn('internalBmopsoParetoChartOption(', app)
+        self.assertIn('chartKey: "combinedSelected"', app)
+        self.assertIn('chartKey: "contributionScatter"', app)
+        self.assertIn('exportOptionFactory: () => buildOption({ publicationMode: true })', app)
+        self.assertIn('exportOptionFactory: () => buildFrontOption({ exportMode: true, publicationMode: true })', app)
+
 
 if __name__ == "__main__":
     unittest.main()

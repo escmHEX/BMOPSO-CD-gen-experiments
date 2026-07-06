@@ -39,6 +39,7 @@ import {
   comparatorPointInteractionKey,
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
+  comparatorScaledSymbolSize,
   comparatorSelectedFrontPointsWithEditable,
   comparatorSelectedFrontPointsForIndividuals,
   comparatorChartExportOption,
@@ -47,6 +48,7 @@ import {
   comparatorPublicationLegendLayout,
   comparatorPublicationLegendEntries,
   COMPARATOR_TRANSPARENT_BACKGROUND,
+  COMPARATOR_DEFAULT_POINT_RADIUS_SCALE,
   COMPARATOR_SELECTED_STAR_SYMBOL,
   comparatorSeriesWithFinalMetricReplacement,
   comparatorSeriesIterationExtent,
@@ -9452,6 +9454,7 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
     const internalScopeKey = `${runId || "run"}::${item.instanceId || item.displayName || index}::bmopso-internal`;
     const frontOptions = comparatorInternalBmopsoFrontOptions(item.analysis);
     const editableSelectedKeysByFront = new Map();
+    let pointRadiusScaleValue = COMPARATOR_DEFAULT_POINT_RADIUS_SCALE;
     let selectedFrontKey = "final";
     if (frontSelect) {
       frontSelect.replaceChildren(
@@ -9479,6 +9482,7 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
         excludedKeys: frontExcludedKeys,
         editableSelectedKeys: editableSelectedKeysForActiveFront(),
         diagnosticsByKey,
+        pointRadiusScale: pointRadiusScaleValue,
         showHypervolumeArea: showComparatorHypervolumeAreaByScope(internalScopeKey),
         ...optionOverrides,
       },
@@ -9501,6 +9505,10 @@ function comparatorInternalBmopsoSection(item, index, runId = "") {
       const selected = comparatorLegendSelection(frontChart);
       setComparatorChartOption(frontChart, frontNode, buildFrontOption(), selected, frontControlsFactory());
     };
+    installComparatorPointRadiusSlider(frontNode, pointRadiusScaleValue, (value) => {
+      pointRadiusScaleValue = value;
+      renderInternalFrontChart();
+    });
     const toggleComparatorInternalFrontExclusion = (key) => {
       if (frontExcludedKeys.has(key)) {
         frontExcludedKeys.delete(key);
@@ -10480,6 +10488,8 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
         const excludedKeys = comparatorFrontExcludedKeysForScope(scopeKey);
         const diagnosticsByKey = comparatorFrontDiagnosticsForScope(scopeKey);
         const diagnosticLoadToken = comparatorFrontDiagnosticLoadToken;
+        let pointRadiusScaleValue = COMPARATOR_DEFAULT_POINT_RADIUS_SCALE;
+        const pointRadiusScale = () => pointRadiusScaleValue;
         const updateStatusLabel = () => {
           if (!statusNode) return;
           statusNode.textContent = comparatorParetoStatusLabel(
@@ -10496,6 +10506,7 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
             excludedKeys,
             diagnosticsByKey,
             pointNamespace: COMPARATOR_FRONT_POINT_NAMESPACE,
+            pointRadiusScale: pointRadiusScale(),
             showHypervolumeArea: showComparatorHypervolumeAreaByScope(scopeKey),
             ...optionOverrides,
           },
@@ -10519,6 +10530,11 @@ function renderComparatorParetoCharts(proposals, styleMap = comparatorChartStyle
           updateStatusLabel();
           refreshComparatorAdjustedComparatorOutputs();
         }, controlsFactory);
+        installComparatorPointRadiusSlider(normalizedChartNode, pointRadiusScale(), (value) => {
+          pointRadiusScaleValue = value;
+          const selected = comparatorLegendSelection(normalizedChart);
+          setComparatorChartOption(normalizedChart, normalizedChartNode, buildOption(), selected, controlsFactory());
+        });
         const requestPoints = comparatorFrontDiagnosticRequestPoints(
           comparatorVisibleFrontChartPoints(proposal.charts || {}, COMPARATOR_FRONT_POINT_NAMESPACE).individuals
             .map((point) => comparatorChartPointFromRaw(point)),
@@ -10559,14 +10575,15 @@ function renderComparatorDerivedCharts(proposals, styleMap = comparatorChartStyl
 function renderComparatorCombinedSelectedChart(proposals, styleMap = comparatorChartStyles, runId = comparatorFrontRunId()) {
   const frontStates = comparatorActiveFrontStates(proposals, runId);
   const comparisonPool = comparatorGlobalNonDominatedFront(frontStates.flatMap((state) => state.activePoints));
-  const selectedSeries = frontStates.map((state, index) => {
+  let pointRadiusScaleValue = COMPARATOR_DEFAULT_POINT_RADIUS_SCALE;
+  const buildSelectedSeries = () => frontStates.map((state, index) => {
     const proposal = state.proposal;
     const style = comparatorChartStyleForProposal(proposal, index, styleMap);
     const color = style.color;
     return {
       name: proposal.displayName,
       type: "scatter",
-      symbolSize: 14,
+      symbolSize: comparatorScaledSymbolSize(14, pointRadiusScaleValue),
       label: { show: false },
       data: state.activeSelectedPoints.map((point) =>
         comparatorChartPointData(point, color, {
@@ -10577,7 +10594,7 @@ function renderComparatorCombinedSelectedChart(proposals, styleMap = comparatorC
     };
   });
   const chart = initComparatorChart(dom.comparatorCombinedParetoChart);
-  const buildOption = (optionOverrides = {}) => baseScatterOption(comparatorChartLabel("combinedSelected").title, selectedSeries, {
+  const buildOption = (optionOverrides = {}) => baseScatterOption(comparatorChartLabel("combinedSelected").title, buildSelectedSeries(), {
     chartKey: "combinedSelected",
     publicationMode: Boolean(optionOverrides.publicationMode),
     description: "Ejes normalizados comparables. Mayor fidelidad y diversidad es mejor. Borde rojo: no dominada frente a la union de propuestas.",
@@ -10587,6 +10604,14 @@ function renderComparatorCombinedSelectedChart(proposals, styleMap = comparatorC
     chartKey: "combinedSelected",
     exportOptionFactory: () => buildOption({ publicationMode: true }),
   });
+  installComparatorPointRadiusSlider(dom.comparatorCombinedParetoChart, pointRadiusScaleValue, (value) => {
+    pointRadiusScaleValue = value;
+    const selected = comparatorLegendSelection(chart);
+    setComparatorChartOption(chart, dom.comparatorCombinedParetoChart, buildOption(), selected, {
+      chartKey: "combinedSelected",
+      exportOptionFactory: () => buildOption({ publicationMode: true }),
+    });
+  });
 }
 
 function renderComparatorContributionChart(proposals, styleMap = comparatorChartStyles, metricProposals = proposals, runId = comparatorFrontRunId()) {
@@ -10594,7 +10619,8 @@ function renderComparatorContributionChart(proposals, styleMap = comparatorChart
   const globalFront = comparatorGlobalNonDominatedFront(frontStates.flatMap((state) => state.activePoints));
   const countsByProposal = comparatorCountByProposal(globalFront);
   const metricsByEntity = new Map((metricProposals || []).map((proposal) => [comparatorEntityId(proposal), proposal.metrics || {}]));
-  const series = frontStates.map((state, index) => {
+  let pointRadiusScaleValue = COMPARATOR_DEFAULT_POINT_RADIUS_SCALE;
+  const buildSeries = () => frontStates.map((state, index) => {
     const proposal = state.proposal;
     const style = comparatorChartStyleForProposal(proposal, index, styleMap);
     const color = style.color;
@@ -10607,14 +10633,14 @@ function renderComparatorContributionChart(proposals, styleMap = comparatorChart
     return {
       name: `${proposal.displayName} (${contributionLabel}; ${countsByProposal.get(entityId) || 0} pts)`,
       type: "scatter",
-      symbolSize: 13,
+      symbolSize: comparatorScaledSymbolSize(13, pointRadiusScaleValue),
       label: { show: false },
       data: points.map((point) => comparatorChartPointData(point, color)),
       itemStyle: { color },
     };
   });
   const chart = initComparatorChart(dom.comparatorContributionChart);
-  const buildOption = (optionOverrides = {}) => baseScatterOption(comparatorChartLabel("contributionScatter").title, series, {
+  const buildOption = (optionOverrides = {}) => baseScatterOption(comparatorChartLabel("contributionScatter").title, buildSeries(), {
     chartKey: "contributionScatter",
     publicationMode: Boolean(optionOverrides.publicationMode),
     description: `${globalFront.length} puntos en el frente combinado P*. Puntos compartidos reparten credito 1/K.`,
@@ -10623,6 +10649,14 @@ function renderComparatorContributionChart(proposals, styleMap = comparatorChart
   setComparatorChartOption(chart, dom.comparatorContributionChart, option, null, {
     chartKey: "contributionScatter",
     exportOptionFactory: () => buildOption({ publicationMode: true }),
+  });
+  installComparatorPointRadiusSlider(dom.comparatorContributionChart, pointRadiusScaleValue, (value) => {
+    pointRadiusScaleValue = value;
+    const selected = comparatorLegendSelection(chart);
+    setComparatorChartOption(chart, dom.comparatorContributionChart, buildOption(), selected, {
+      chartKey: "contributionScatter",
+      exportOptionFactory: () => buildOption({ publicationMode: true }),
+    });
   });
 }
 
@@ -10800,6 +10834,29 @@ function installComparatorIterationSlider(container, extent, onChange) {
   input.addEventListener("input", () => {
     valueLabel.textContent = input.value;
     onChange(Number(input.value));
+  });
+  container.after(wrapper);
+}
+
+function installComparatorPointRadiusSlider(container, pointRadiusScale, onChange) {
+  const panel = container.closest(".panel") || container.parentElement;
+  if (!panel) return;
+  panel.querySelectorAll(".comparator-point-radius-slider").forEach((node) => node.remove());
+  const initialScale = Number.isFinite(Number(pointRadiusScale)) && Number(pointRadiusScale) > 0
+    ? Number(pointRadiusScale)
+    : COMPARATOR_DEFAULT_POINT_RADIUS_SCALE;
+  const wrapper = document.createElement("label");
+  wrapper.className = "comparator-point-radius-slider";
+  wrapper.innerHTML = `
+    <span>Radio visual <strong>${escapeHtml(String(Math.round(initialScale * 100)))}%</strong></span>
+    <input type="range" min="0.8" max="3" step="0.1" value="${escapeHtml(String(initialScale))}">
+  `;
+  const input = wrapper.querySelector("input");
+  const valueLabel = wrapper.querySelector("strong");
+  input.addEventListener("input", () => {
+    const nextScale = Number(input.value);
+    valueLabel.textContent = `${Math.round(nextScale * 100)}%`;
+    onChange(nextScale);
   });
   container.after(wrapper);
 }
@@ -10990,6 +11047,8 @@ function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa
   const exportMode = Boolean(options.exportMode);
   const publicationMode = Boolean(options.publicationMode);
   const frontPointColor = options.frontPointColor || "#64b5f6";
+  const frontSymbolSize = comparatorScaledSymbolSize(8, options.pointRadiusScale);
+  const selectedSymbolSize = comparatorScaledSymbolSize(18, options.pointRadiusScale);
   const visibleFront = comparatorVisibleFrontChartPoints(charts, pointNamespace);
   const allPoints = comparatorApplyFrontDiagnostics(
     visibleFront.individuals.map((point) => comparatorChartPointFromRaw(point)),
@@ -11019,7 +11078,7 @@ function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa
     {
       name: "Soluciones del frente",
       type: "scatter",
-      symbolSize: 8,
+      symbolSize: frontSymbolSize,
       data: activeAllPoints,
       label: { show: false },
       itemStyle: { color: frontPointColor, opacity: 0.86, borderColor: "#ffffff", borderWidth: 0.8 },
@@ -11027,7 +11086,7 @@ function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa
     ...(!exportMode ? [{
       name: "Soluciones del frente inactivas",
       type: "scatter",
-      symbolSize: 8,
+      symbolSize: frontSymbolSize,
       data: inactiveAllPoints,
       label: { show: false },
       itemStyle: { color: frontPointColor, opacity: COMPARATOR_INACTIVE_POINT_OPACITY },
@@ -11039,7 +11098,7 @@ function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa
       name: "Soluciones seleccionadas",
       type: "scatter",
       symbol: COMPARATOR_SELECTED_STAR_SYMBOL,
-      symbolSize: 18,
+      symbolSize: selectedSymbolSize,
       data: activeSelectedPoints,
       label: { show: false },
       itemStyle: { color: "#e11d48", borderColor: "#111111", borderWidth: 1.5 },
@@ -11049,7 +11108,7 @@ function paretoChartOption(title, charts, metrics = {}, proposalColor = "#60a5fa
       name: "Soluciones seleccionadas inactivas",
       type: "scatter",
       symbol: COMPARATOR_SELECTED_STAR_SYMBOL,
-      symbolSize: 18,
+      symbolSize: selectedSymbolSize,
       data: inactiveSelectedPoints,
       label: { show: false },
       itemStyle: {
@@ -11087,6 +11146,8 @@ function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C
   const exportMode = Boolean(options.exportMode);
   const publicationMode = Boolean(options.publicationMode);
   const frontPointColor = options.frontPointColor || "#64b5f6";
+  const frontSymbolSize = comparatorScaledSymbolSize(8, options.pointRadiusScale);
+  const selectedSymbolSize = comparatorScaledSymbolSize(18, options.pointRadiusScale);
   const allPoints = comparatorApplyFrontDiagnostics(
     (charts.pareto || []).map((point) => comparatorChartPointFromRaw(point)),
     options.diagnosticsByKey,
@@ -11118,7 +11179,7 @@ function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C
     {
       name: "Soluciones del frente",
       type: "scatter",
-      symbolSize: 8,
+      symbolSize: frontSymbolSize,
       data: activeAllPoints,
       label: { show: false },
       itemStyle: { color: frontPointColor, opacity: 0.86, borderColor: "#ffffff", borderWidth: 0.8 },
@@ -11126,7 +11187,7 @@ function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C
     ...(!exportMode ? [{
       name: "Soluciones del frente inactivas",
       type: "scatter",
-      symbolSize: 8,
+      symbolSize: frontSymbolSize,
       data: inactiveAllPoints,
       label: { show: false },
       itemStyle: { color: frontPointColor, opacity: COMPARATOR_INACTIVE_POINT_OPACITY },
@@ -11138,7 +11199,7 @@ function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C
       name: "Soluciones seleccionadas",
       type: "scatter",
       symbol: COMPARATOR_SELECTED_STAR_SYMBOL,
-      symbolSize: 18,
+      symbolSize: selectedSymbolSize,
       data: activeSelectedPoints,
       label: { show: false },
       itemStyle: { color: "#e11d48", borderColor: "#111111", borderWidth: 1.5 },
@@ -11148,7 +11209,7 @@ function internalBmopsoParetoChartOption(title, analysis, proposalColor = "#2A8C
       name: "Soluciones seleccionadas inactivas",
       type: "scatter",
       symbol: COMPARATOR_SELECTED_STAR_SYMBOL,
-      symbolSize: 18,
+      symbolSize: selectedSymbolSize,
       data: inactiveSelectedPoints,
       label: { show: false },
       itemStyle: {

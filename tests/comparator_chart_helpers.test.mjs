@@ -55,6 +55,7 @@ import {
   comparatorProposalChartStyleAssignments,
   comparatorProposalColor,
   comparatorClearPointExclusions,
+  comparatorScaledSymbolSize,
   comparatorSelectedFrontPointsWithEditable,
   comparatorSelectedFrontPointsForIndividuals,
   comparatorSeriesWithFinalMetricReplacement,
@@ -165,6 +166,22 @@ test("metric reference line labels stay inside the chart grid", () => {
   assert.equal(referenceLines.data[1].name, "Peor");
   assert.equal(referenceLines.data[1].label.position, "insideEndBottom");
   assert.equal(referenceLines.data[1].label.distance, 4);
+});
+
+test("Pareto visual radius scale defaults to fifty percent larger", () => {
+  assert.equal(comparatorScaledSymbolSize(8), 12);
+  assert.equal(comparatorScaledSymbolSize(18), 27);
+});
+
+test("Pareto visual radius scale applies the same factor to circles and stars", () => {
+  assert.equal(comparatorScaledSymbolSize(8, 2), 16);
+  assert.equal(comparatorScaledSymbolSize(18, 2), 36);
+});
+
+test("Pareto visual radius scale falls back to default for invalid values", () => {
+  assert.equal(comparatorScaledSymbolSize(8, 0), 12);
+  assert.equal(comparatorScaledSymbolSize(8, Number.NaN), 12);
+  assert.equal(comparatorScaledSymbolSize(8, "bad"), 12);
 });
 
 test("default comparator chart labels are thesis-ready Spanish labels without abbreviations", () => {

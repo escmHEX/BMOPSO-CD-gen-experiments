@@ -571,6 +571,15 @@ const COMPARATOR_LEGACY_CHART_LABELS = Object.freeze({
 });
 
 export const COMPARATOR_SELECTED_STAR_SYMBOL = "path://M12,2L14.9,8.6L22,9.2L16.7,13.8L18.3,20.8L12,17.1L5.7,20.8L7.3,13.8L2,9.2L9.1,8.6Z";
+export const COMPARATOR_DEFAULT_POINT_RADIUS_SCALE = 1.5;
+
+export function comparatorScaledSymbolSize(baseSize, scale = COMPARATOR_DEFAULT_POINT_RADIUS_SCALE) {
+  const size = Number(baseSize);
+  const factor = Number(scale);
+  const safeFactor = Number.isFinite(factor) && factor > 0 ? factor : COMPARATOR_DEFAULT_POINT_RADIUS_SCALE;
+  if (!Number.isFinite(size) || size <= 0) return 0;
+  return size * safeFactor;
+}
 
 function chartLabelValue(value, fallback) {
   const text = String(value ?? "").trim();
